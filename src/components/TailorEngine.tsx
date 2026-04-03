@@ -47,6 +47,7 @@ export default function TailorEngine() {
   const [exporting, setExporting] = useState("");
   const [copied, setCopied] = useState("");
   const [tab, setTab] = useState<"resume" | "cover">("resume");
+  const [mode, setMode] = useState<"pro" | "fast">("pro");
 
   const {
     parsedResume,
@@ -68,7 +69,7 @@ export default function TailorEngine() {
       const res = await fetch("/api/tailor-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parsedResume, parsedJob }),
+        body: JSON.stringify({ parsedResume, parsedJob, mode }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Tailoring failed."); return; }
@@ -124,6 +125,37 @@ export default function TailorEngine() {
             ? "Analyze the job first."
             : "Ready. This takes about 15-30 seconds."}
         </p>
+        {/* Mode selector */}
+        <div className="flex items-center gap-1 p-0.5 bg-neutral-100 rounded-lg mb-4 w-fit">
+          <button
+            onClick={() => setMode("pro")}
+            className={`text-[12px] font-medium px-3 py-1.5 rounded-md transition-all ${
+              mode === "pro"
+                ? "bg-white text-neutral-900 shadow-sm"
+                : "text-neutral-400 hover:text-neutral-600"
+            }`}
+          >
+            Pro
+            <span className="text-[10px] text-neutral-400 ml-1">Sonnet</span>
+          </button>
+          <button
+            onClick={() => setMode("fast")}
+            className={`text-[12px] font-medium px-3 py-1.5 rounded-md transition-all ${
+              mode === "fast"
+                ? "bg-white text-neutral-900 shadow-sm"
+                : "text-neutral-400 hover:text-neutral-600"
+            }`}
+          >
+            Fast
+            <span className="text-[10px] text-neutral-400 ml-1">Haiku</span>
+          </button>
+        </div>
+        <p className="text-[11px] text-neutral-400 mb-3">
+          {mode === "pro"
+            ? "Best quality. Smarter rewriting and scoring. ~$0.04/tailor."
+            : "3x cheaper, 2x faster. Good for bulk applications. ~$0.01/tailor."}
+        </p>
+
         <button
           onClick={handleTailor}
           disabled={!canTailor}

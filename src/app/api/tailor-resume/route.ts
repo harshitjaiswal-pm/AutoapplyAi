@@ -18,7 +18,7 @@ import { RESUME_TAILOR_SYSTEM } from "@/lib/prompts";
 
 export async function POST(request: NextRequest) {
   try {
-    const { parsedResume, parsedJob } = await request.json();
+    const { parsedResume, parsedJob, mode } = await request.json();
 
     if (!parsedResume || !parsedJob) {
       return NextResponse.json(
@@ -35,11 +35,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Model selection: "fast" = Haiku (cheap), "pro" = Sonnet (better quality)
+    const modelId =
+      mode === "fast"
+        ? "claude-haiku-4-5-20251001"
+        : "claude-sonnet-4-20250514";
+
     const anthropic = new Anthropic({ apiKey });
 
     const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 8192, // Larger limit — tailored resumes are long
+      model: modelId,
+      max_tokens: 8192,
       system: RESUME_TAILOR_SYSTEM,
       messages: [
         {

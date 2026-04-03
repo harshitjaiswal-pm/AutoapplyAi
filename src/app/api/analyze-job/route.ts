@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const anthropic = new Anthropic({ apiKey });
 
     const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-haiku-4-5-20251001",  // Haiku — fast & cheap, perfect for extraction
       max_tokens: 4096,
       system: JOB_ANALYZER_SYSTEM,
       messages: [
