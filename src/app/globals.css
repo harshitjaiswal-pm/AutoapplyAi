@@ -1,12 +1,33 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/*
-  These three lines import Tailwind's styles.
-  @tailwind base    = reset/normalize styles
-  @tailwind components = component classes
-  @tailwind utilities  = utility classes like "text-blue-500", "p-4", "flex", etc.
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-  Everything else we style using Tailwind classes directly in our components.
-*/
+  body {
+    @apply font-sans text-neutral-900 bg-white;
+  }
+
+  ::selection {
+    @apply bg-accent/10 text-accent;
+  }
+}
+
+/* Minimal scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4d4d4;
+  border-radius: 2px;
+}

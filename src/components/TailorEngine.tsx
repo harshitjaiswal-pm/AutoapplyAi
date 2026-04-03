@@ -3,31 +3,20 @@
 import { useState } from "react";
 import { useAppStore } from "@/store/useAppStore";
 
-/**
- * Helper: Download a file from the export API.
- * Calls /api/export-resume with the resume data and desired format,
- * then triggers a browser download of the resulting file.
- */
 async function downloadResume(
   resume: any,
   format: "pdf" | "docx",
-  setExporting: (val: string) => void
+  setExporting: (v: string) => void
 ) {
   setExporting(format);
   try {
-    const response = await fetch("/api/export-resume", {
+    const res = await fetch("/api/export-resume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ resume, format }),
     });
-
-    if (!response.ok) {
-      alert("Export failed. Please try again.");
-      return;
-    }
-
-    // Convert the response to a downloadable blob
-    const blob = await response.blob();
+    if (!res.ok) { alert("Export failed."); return; }
+    const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -37,28 +26,17 @@ async function downloadResume(
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
   } catch {
-    alert("Download failed. Make sure the dev server is running.");
+    alert("Download failed.");
   } finally {
     setExporting("");
   }
 }
 
-/**
- * TailorEngine — The "Go" button that triggers the magic.
- *
- * Once the user has:
- * 1. Parsed their resume (Step 1)
- * 2. Analyzed a job description (Step 2)
- *
- * This component sends both to the tailoring API and displays the result:
- * - Match score (how well the resume fits the job)
- * - What the AI changed and why
- * - The full tailored resume
- * - A cover letter
- */
 export default function TailorEngine() {
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState("");
+  const [copied, setCopied] = useState("");
+  const [tab, setTab] = useState<"resume" | "cover">("resume");
 
   const {
     parsedResume,
@@ -70,32 +48,21 @@ export default function TailorEngine() {
     addApplication,
   } = useAppStore();
 
-  // Can't tailor without both pieces
   const canTailor = parsedResume && parsedJob && !isTailoring;
 
   const handleTailor = async () => {
     if (!parsedResume || !parsedJob) return;
-
     setError("");
     setIsTailoring(true);
-
     try {
-      const response = await fetch("/api/tailor-resume", {
+      const res = await fetch("/api/tailor-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ parsedResume, parsedJob }),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setError(data.error || "Tailoring failed.");
-        return;
-      }
-
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Tailoring failed."); return; }
       setTailoredResult(data.tailoredResult);
-
-      // Auto-add to application tracker
       addApplication({
         id: Date.now().toString(),
         jobTitle: parsedJob.title,
@@ -106,112 +73,120 @@ export default function TailorEngine() {
         matchScore: data.tailoredResult.matchScore,
       });
     } catch {
-      setError("Network error. Make sure the dev server is running.");
+      setError("Network error.");
     } finally {
       setIsTailoring(false);
     }
   };
 
+  const copy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(key);
+    setTimeout(() => setCopied(""), 2000);
+  };
+
   return (
     <div className="space-y-6">
-      {/* Tailor button */}
-      <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
-        <h2 className="text-xl font-semibold text-navy mb-2">
-          Step 3: Tailor Your Resume
-        </h2>
-        <p className="text-sm text-gray-500 mb-4">
+      {/* CTA */}
+      <div className="border border-neutral-200 rounded-xl p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-xs font-mono font-semibold text-purple-400">03</span>
+          <h2 className="text-sm font-semibold text-neutral-900">Tailor</h2>
+        </div>
+        <p className="text-[13px] text-neutral-400 mb-4 ml-7">
           {!parsedResume && !parsedJob
-            ? "Complete Steps 1 and 2 first."
+            ? "Complete steps 1 and 2 first."
             : !parsedResume
-            ? "Complete Step 1 first (parse your resume)."
+            ? "Parse your resume first."
             : !parsedJob
-            ? "Complete Step 2 first (analyze the job)."
-            : "Ready! Click below to tailor your resume for this job."}
+            ? "Analyze the job first."
+            : "Ready. This takes about 15-30 seconds."}
         </p>
 
         <button
           onClick={handleTailor}
           disabled={!canTailor}
-          className="bg-navy hover:bg-navy/90 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold px-8 py-4 rounded-lg text-lg transition-colors w-full"
+          className="w-full bg-indigo-600 text-white font-medium py-3 rounded-lg hover:bg-indigo-700 disabled:bg-neutral-100 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors text-sm"
         >
           {isTailoring ? (
-            <span className="flex items-center justify-center gap-3">
-              <span className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
-              AI is tailoring your resume... (15-30 seconds)
+            <span className="flex items-center justify-center gap-2">
+              <span className="animate-spin h-3.5 w-3.5 border-[1.5px] border-white border-t-transparent rounded-full" />
+              Tailoring...
             </span>
           ) : (
-            "Tailor My Resume"
+            "Tailor my resume"
           )}
         </button>
 
         {error && (
-          <p className="mt-3 text-sm text-red-500 bg-red-50 p-3 rounded-lg">
-            {error}
-          </p>
+          <p className="text-[13px] text-red-500 mt-3 animate-fade-in">{error}</p>
         )}
       </div>
 
       {/* Results */}
       {tailoredResult && (
-        <div className="space-y-6">
-          {/* Match Score with Breakdown */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-navy">Match Score</h3>
-              <div
-                className={`text-3xl font-bold ${
-                  tailoredResult.matchScore >= 80
-                    ? "text-green-600"
-                    : tailoredResult.matchScore >= 60
-                    ? "text-yellow-600"
-                    : "text-red-600"
-                }`}
-              >
-                {tailoredResult.matchScore}/100
+        <div className="space-y-6 animate-fade-up">
+
+          {/* Score */}
+          <div className="border border-neutral-200 rounded-xl p-6">
+            <div className="flex items-start justify-between gap-6 mb-5">
+              <div className="flex-1">
+                <p className="text-[11px] font-medium text-neutral-400 uppercase tracking-wider mb-2">
+                  Match analysis
+                </p>
+                <p className="text-sm text-neutral-500 leading-relaxed">
+                  {tailoredResult.matchReasoning}
+                </p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className={`text-3xl font-bold tabular-nums ${
+                  tailoredResult.matchScore >= 70
+                    ? "text-emerald-600"
+                    : tailoredResult.matchScore >= 55
+                    ? "text-amber-500"
+                    : "text-red-500"
+                }`}>
+                  {tailoredResult.matchScore}
+                </p>
+                <p className="text-[11px] text-neutral-400">/ 100</p>
               </div>
             </div>
-            <p className="text-sm text-gray-600 mb-4">
-              {tailoredResult.matchReasoning}
-            </p>
 
-            {/* Score Breakdown — shows exactly how points were calculated */}
+            {/* Breakdown */}
             {tailoredResult.matchBreakdown && (
-              <div className="border-t border-gray-100 pt-4 space-y-2">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                  Score Breakdown
-                </p>
+              <div className="border-t border-neutral-100 pt-4 space-y-2.5">
                 {Object.entries(tailoredResult.matchBreakdown).map(
                   ([key, val]: [string, any]) => (
-                    <div key={key} className="flex items-center gap-3 text-sm">
-                      <div className="w-36 text-gray-500 capitalize text-xs">
-                        {key.replace(/([A-Z])/g, " $1").trim()}
+                    <div key={key}>
+                      <div className="flex items-center gap-3 text-[13px]">
+                        <span className="w-28 text-neutral-400 capitalize shrink-0 truncate">
+                          {key.replace(/([A-Z])/g, " $1").trim()}
+                        </span>
+                        <div className="flex-1 bg-neutral-100 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-700 ${
+                              val.max
+                                ? val.score / val.max >= 0.7
+                                  ? "bg-emerald-500"
+                                  : val.score / val.max >= 0.4
+                                  ? "bg-amber-400"
+                                  : "bg-red-400"
+                                : "bg-neutral-300"
+                            }`}
+                            style={{
+                              width: val.max
+                                ? `${Math.max((val.score / val.max) * 100, 0)}%`
+                                : "0%",
+                            }}
+                          />
+                        </div>
+                        <span className="w-10 text-right font-mono text-[12px] text-neutral-400 shrink-0">
+                          {val.score}/{val.max || 0}
+                        </span>
                       </div>
-                      <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            val.max
-                              ? val.score / val.max >= 0.7
-                                ? "bg-green-500"
-                                : val.score / val.max >= 0.4
-                                ? "bg-yellow-500"
-                                : "bg-red-500"
-                              : val.score < 0
-                              ? "bg-red-500"
-                              : "bg-gray-300"
-                          }`}
-                          style={{
-                            width: val.max
-                              ? `${(val.score / val.max) * 100}%`
-                              : "0%",
-                          }}
-                        />
-                      </div>
-                      <div className="w-16 text-right text-xs font-mono text-gray-600">
-                        {val.score}/{val.max || 0}
-                      </div>
-                      <div className="w-48 text-xs text-gray-400 truncate" title={val.detail}>
+                      <p className="text-[11px] text-neutral-400 ml-[7.5rem] mt-0.5 leading-relaxed">
                         {val.detail}
-                      </div>
+                      </p>
                     </div>
                   )
                 )}
@@ -219,102 +194,90 @@ export default function TailorEngine() {
             )}
           </div>
 
-          {/* Changes Made */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-            <h3 className="text-lg font-semibold text-navy mb-3">
-              What the AI Changed
-            </h3>
-            <ul className="space-y-2">
+          {/* Changes */}
+          <div className="border border-neutral-200 rounded-xl p-6">
+            <p className="text-[11px] font-medium text-neutral-400 uppercase tracking-wider mb-3">
+              Changes made
+            </p>
+            <div className="space-y-2">
               {tailoredResult.changes.map((change, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm">
-                  <span className="text-brand-500 mt-0.5 font-bold">
-                    &rarr;
-                  </span>
-                  <span className="text-gray-700">{change}</span>
-                </li>
+                <div
+                  key={i}
+                  className="flex items-start gap-2.5 text-[13px] text-neutral-600 animate-slide-in"
+                  style={{ animationDelay: `${i * 40}ms` }}
+                >
+                  <span className="text-indigo-400 mt-0.5 shrink-0">&rarr;</span>
+                  {change}
+                </div>
               ))}
-            </ul>
-          </div>
-
-          {/* Tailored Resume Preview + Download */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-navy">
-                Tailored Resume
-              </h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() =>
-                    downloadResume(
-                      tailoredResult.tailoredResume,
-                      "pdf",
-                      setExporting
-                    )
-                  }
-                  disabled={!!exporting}
-                  className="text-sm bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5"
-                >
-                  {exporting === "pdf" ? (
-                    <>
-                      <span className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full" />
-                      Exporting...
-                    </>
-                  ) : (
-                    "Download PDF"
-                  )}
-                </button>
-                <button
-                  onClick={() =>
-                    downloadResume(
-                      tailoredResult.tailoredResume,
-                      "docx",
-                      setExporting
-                    )
-                  }
-                  disabled={!!exporting}
-                  className="text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5"
-                >
-                  {exporting === "docx" ? (
-                    <>
-                      <span className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full" />
-                      Exporting...
-                    </>
-                  ) : (
-                    "Download Word"
-                  )}
-                </button>
-                <button
-                  onClick={() => {
-                    const resume = tailoredResult.tailoredResume;
-                    const text = formatResumeAsText(resume);
-                    navigator.clipboard.writeText(text);
-                    alert("Resume copied to clipboard!");
-                  }}
-                  className="text-sm bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
-                >
-                  Copy Text
-                </button>
-              </div>
             </div>
-            <ResumePreview resume={tailoredResult.tailoredResume} />
           </div>
 
-          {/* Cover Letter */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-navy">Cover Letter</h3>
+          {/* Output tabs */}
+          <div className="border border-neutral-200 rounded-xl overflow-hidden">
+            <div className="flex border-b border-neutral-200">
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(tailoredResult.coverLetter);
-                  alert("Cover letter copied to clipboard!");
-                }}
-                className="text-sm bg-brand-500 hover:bg-brand-600 text-white px-4 py-2 rounded-lg transition-colors"
+                onClick={() => setTab("resume")}
+                className={`flex-1 text-[13px] font-medium py-2.5 text-center transition-colors ${
+                  tab === "resume"
+                    ? "text-indigo-600 bg-indigo-50/50"
+                    : "text-neutral-400 hover:text-neutral-600"
+                }`}
               >
-                Copy to Clipboard
+                Resume
+              </button>
+              <button
+                onClick={() => setTab("cover")}
+                className={`flex-1 text-[13px] font-medium py-2.5 text-center transition-colors border-l border-neutral-200 ${
+                  tab === "cover"
+                    ? "text-indigo-600 bg-indigo-50/50"
+                    : "text-neutral-400 hover:text-neutral-600"
+                }`}
+              >
+                Cover letter
               </button>
             </div>
-            <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-              {tailoredResult.coverLetter}
+
+            <div className="p-6">
+              {tab === "resume" ? (
+                <>
+                  <div className="flex items-center gap-2 mb-5">
+                    <SmallBtn
+                      onClick={() => downloadResume(tailoredResult.tailoredResume, "pdf", setExporting)}
+                      disabled={!!exporting}
+                      loading={exporting === "pdf"}
+                      label="PDF"
+                    />
+                    <SmallBtn
+                      onClick={() => downloadResume(tailoredResult.tailoredResume, "docx", setExporting)}
+                      disabled={!!exporting}
+                      loading={exporting === "docx"}
+                      label="Word"
+                    />
+                    <button
+                      onClick={() => copy(formatResumeAsText(tailoredResult.tailoredResume), "resume")}
+                      className="text-[12px] text-neutral-500 hover:text-neutral-900 px-2.5 py-1.5 rounded-md border border-neutral-200 hover:border-neutral-300 transition-colors"
+                    >
+                      {copied === "resume" ? "Copied" : "Copy text"}
+                    </button>
+                  </div>
+                  <ResumePreview resume={tailoredResult.tailoredResume} />
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-end mb-4">
+                    <button
+                      onClick={() => copy(tailoredResult.coverLetter, "cover")}
+                      className="text-[12px] text-neutral-500 hover:text-neutral-900 px-2.5 py-1.5 rounded-md border border-neutral-200 hover:border-neutral-300 transition-colors"
+                    >
+                      {copied === "cover" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="text-sm text-neutral-600 whitespace-pre-wrap leading-relaxed">
+                    {tailoredResult.coverLetter}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -323,10 +286,35 @@ export default function TailorEngine() {
   );
 }
 
-/**
- * ResumePreview — Displays the tailored resume in a readable format.
- * This renders the structured resume data as formatted text.
- */
+/* ── Small components ── */
+
+function SmallBtn({
+  onClick,
+  disabled,
+  loading,
+  label,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  loading: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="text-[12px] font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-200 disabled:text-neutral-400 px-3 py-1.5 rounded-md transition-colors inline-flex items-center gap-1.5"
+    >
+      {loading ? (
+        <span className="animate-spin h-3 w-3 border-[1.5px] border-white border-t-transparent rounded-full" />
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+      )}
+      {label}
+    </button>
+  );
+}
+
 function ResumePreview({
   resume,
 }: {
@@ -335,195 +323,143 @@ function ResumePreview({
   if (!resume) return null;
 
   return (
-    <div className="text-sm space-y-4">
-      {/* Contact */}
-      <div className="text-center border-b border-gray-200 pb-3">
-        <p className="text-lg font-bold text-navy">
-          {resume.contactInfo.name}
-        </p>
-        <p className="text-gray-600">
-          {[
-            resume.contactInfo.email,
-            resume.contactInfo.phone,
-            resume.contactInfo.location,
-          ]
-            .filter(Boolean)
-            .join(" | ")}
+    <div className="text-[13px] space-y-5 bg-neutral-50 border border-neutral-200 rounded-lg p-6">
+      {/* Header */}
+      <div className="text-center pb-4 border-b border-neutral-200">
+        <p className="text-base font-semibold text-neutral-900">{resume.contactInfo.name}</p>
+        <p className="text-neutral-500 mt-0.5 text-[12px]">
+          {[resume.contactInfo.email, resume.contactInfo.phone, resume.contactInfo.location]
+            .filter(Boolean).join("  ·  ")}
         </p>
         {(resume.contactInfo.linkedin || resume.contactInfo.portfolio) && (
-          <p className="text-gray-500">
+          <p className="text-neutral-400 text-[12px] mt-0.5">
             {[resume.contactInfo.linkedin, resume.contactInfo.portfolio]
-              .filter(Boolean)
-              .join(" | ")}
+              .filter(Boolean).join("  ·  ")}
           </p>
         )}
       </div>
 
-      {/* Summary */}
       {resume.summary && (
-        <div>
-          <p className="font-bold text-navy uppercase text-xs tracking-wider mb-1">
-            Professional Summary
-          </p>
-          <p className="text-gray-700">{resume.summary}</p>
-        </div>
+        <Section title="Summary">
+          <p className="text-neutral-600 leading-relaxed">{resume.summary}</p>
+        </Section>
       )}
 
-      {/* Skills */}
-      <div>
-        <p className="font-bold text-navy uppercase text-xs tracking-wider mb-1">
-          Skills
-        </p>
-        <div className="text-gray-700">
+      <Section title="Skills">
+        <div className="space-y-1 text-neutral-600">
           {resume.skills.technical.length > 0 && (
-            <p>
-              <strong>Technical:</strong>{" "}
-              {resume.skills.technical.join(", ")}
-            </p>
+            <p><span className="text-neutral-900 font-medium">Technical:</span> {resume.skills.technical.join(", ")}</p>
           )}
           {resume.skills.tools.length > 0 && (
-            <p>
-              <strong>Tools:</strong> {resume.skills.tools.join(", ")}
-            </p>
+            <p><span className="text-neutral-900 font-medium">Tools:</span> {resume.skills.tools.join(", ")}</p>
           )}
           {resume.skills.soft.length > 0 && (
-            <p>
-              <strong>Soft Skills:</strong> {resume.skills.soft.join(", ")}
-            </p>
+            <p><span className="text-neutral-900 font-medium">Soft:</span> {resume.skills.soft.join(", ")}</p>
           )}
         </div>
-      </div>
+      </Section>
 
-      {/* Experience */}
       {resume.experience.length > 0 && (
-        <div>
-          <p className="font-bold text-navy uppercase text-xs tracking-wider mb-2">
-            Experience
-          </p>
-          {resume.experience.map((exp, i) => (
-            <div key={i} className="mb-3">
-              <div className="flex justify-between">
-                <p className="font-semibold text-gray-800">{exp.role}</p>
-                <p className="text-gray-500 text-xs">
-                  {exp.startDate} - {exp.endDate}
-                </p>
+        <Section title="Experience">
+          <div className="space-y-4">
+            {resume.experience.map((exp, i) => (
+              <div key={i}>
+                <div className="flex justify-between items-baseline">
+                  <p className="font-medium text-neutral-900">{exp.role}</p>
+                  <p className="text-[11px] text-neutral-400 shrink-0 ml-4">{exp.startDate} – {exp.endDate}</p>
+                </div>
+                <p className="text-[12px] text-neutral-400">{exp.company}</p>
+                <ul className="mt-1.5 space-y-0.5">
+                  {exp.bullets.map((b, j) => (
+                    <li key={j} className="text-neutral-600 pl-3 relative leading-relaxed">
+                      <span className="absolute left-0 top-0 text-neutral-300">·</span>
+                      {b}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <p className="text-gray-600 text-xs">{exp.company}</p>
-              <ul className="mt-1 space-y-0.5">
-                {exp.bullets.map((bullet, j) => (
-                  <li key={j} className="text-gray-700 pl-3 relative">
-                    <span className="absolute left-0 top-0">&#8226;</span>
-                    {bullet}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </Section>
       )}
 
-      {/* Education */}
       {resume.education.length > 0 && (
-        <div>
-          <p className="font-bold text-navy uppercase text-xs tracking-wider mb-1">
-            Education
-          </p>
+        <Section title="Education">
           {resume.education.map((edu, i) => (
-            <div key={i} className="flex justify-between">
+            <div key={i} className="flex justify-between items-baseline">
               <div>
-                <p className="font-semibold text-gray-800">{edu.degree}</p>
-                <p className="text-gray-600 text-xs">{edu.school}</p>
+                <p className="font-medium text-neutral-900">{edu.degree}</p>
+                <p className="text-[12px] text-neutral-400">{edu.school}</p>
               </div>
-              <p className="text-gray-500 text-xs">{edu.year}</p>
+              <p className="text-[11px] text-neutral-400 shrink-0 ml-4">{edu.year}</p>
             </div>
           ))}
-        </div>
+        </Section>
       )}
 
-      {/* Projects */}
       {resume.projects.length > 0 && (
-        <div>
-          <p className="font-bold text-navy uppercase text-xs tracking-wider mb-1">
-            Projects
-          </p>
-          {resume.projects.map((proj, i) => (
-            <div key={i} className="mb-2">
-              <p className="font-semibold text-gray-800">{proj.name}</p>
-              <p className="text-gray-700 text-xs">{proj.description}</p>
-              <p className="text-gray-500 text-xs">
-                Tech: {proj.technologies.join(", ")}
-              </p>
-            </div>
-          ))}
-        </div>
+        <Section title="Projects">
+          <div className="space-y-2">
+            {resume.projects.map((p, i) => (
+              <div key={i}>
+                <p className="font-medium text-neutral-900">{p.name}</p>
+                <p className="text-neutral-500 text-[12px] leading-relaxed">{p.description}</p>
+                {p.technologies.length > 0 && (
+                  <p className="text-[11px] text-neutral-400 mt-0.5">{p.technologies.join(", ")}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
       )}
     </div>
   );
 }
 
-/**
- * Helper: Convert structured resume back to plain text.
- * Used for the "Copy to Clipboard" feature.
- */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold text-indigo-400/70 uppercase tracking-wider mb-2 pb-1 border-b border-indigo-50">
+        {title}
+      </p>
+      {children}
+    </div>
+  );
+}
+
 function formatResumeAsText(
   resume: NonNullable<ReturnType<typeof useAppStore.getState>["parsedResume"]>
 ): string {
-  const lines: string[] = [];
-
-  lines.push(resume.contactInfo.name);
-  lines.push(
-    [
-      resume.contactInfo.email,
-      resume.contactInfo.phone,
-      resume.contactInfo.location,
-    ]
-      .filter(Boolean)
-      .join(" | ")
-  );
-  if (resume.contactInfo.linkedin) lines.push(resume.contactInfo.linkedin);
-  lines.push("");
-
-  if (resume.summary) {
-    lines.push("PROFESSIONAL SUMMARY");
-    lines.push(resume.summary);
-    lines.push("");
-  }
-
-  lines.push("SKILLS");
-  if (resume.skills.technical.length)
-    lines.push(`Technical: ${resume.skills.technical.join(", ")}`);
-  if (resume.skills.tools.length)
-    lines.push(`Tools: ${resume.skills.tools.join(", ")}`);
-  if (resume.skills.soft.length)
-    lines.push(`Soft Skills: ${resume.skills.soft.join(", ")}`);
-  lines.push("");
-
+  const l: string[] = [];
+  l.push(resume.contactInfo.name);
+  l.push([resume.contactInfo.email, resume.contactInfo.phone, resume.contactInfo.location].filter(Boolean).join(" | "));
+  if (resume.contactInfo.linkedin) l.push(resume.contactInfo.linkedin);
+  l.push("");
+  if (resume.summary) { l.push("PROFESSIONAL SUMMARY"); l.push(resume.summary); l.push(""); }
+  l.push("SKILLS");
+  if (resume.skills.technical.length) l.push(`Technical: ${resume.skills.technical.join(", ")}`);
+  if (resume.skills.tools.length) l.push(`Tools: ${resume.skills.tools.join(", ")}`);
+  if (resume.skills.soft.length) l.push(`Soft Skills: ${resume.skills.soft.join(", ")}`);
+  l.push("");
   if (resume.experience.length) {
-    lines.push("EXPERIENCE");
-    for (const exp of resume.experience) {
-      lines.push(`${exp.role} | ${exp.company} | ${exp.startDate} - ${exp.endDate}`);
-      for (const bullet of exp.bullets) {
-        lines.push(`  - ${bullet}`);
-      }
-      lines.push("");
+    l.push("EXPERIENCE");
+    for (const e of resume.experience) {
+      l.push(`${e.role} | ${e.company} | ${e.startDate} - ${e.endDate}`);
+      for (const b of e.bullets) l.push(`  - ${b}`);
+      l.push("");
     }
   }
-
   if (resume.education.length) {
-    lines.push("EDUCATION");
-    for (const edu of resume.education) {
-      lines.push(`${edu.degree} - ${edu.school} (${edu.year})`);
-    }
-    lines.push("");
+    l.push("EDUCATION");
+    for (const e of resume.education) l.push(`${e.degree} - ${e.school} (${e.year})`);
+    l.push("");
   }
-
   if (resume.projects.length) {
-    lines.push("PROJECTS");
-    for (const proj of resume.projects) {
-      lines.push(`${proj.name}: ${proj.description}`);
-      lines.push(`  Technologies: ${proj.technologies.join(", ")}`);
+    l.push("PROJECTS");
+    for (const p of resume.projects) {
+      l.push(`${p.name}: ${p.description}`);
+      l.push(`  Technologies: ${p.technologies.join(", ")}`);
     }
   }
-
-  return lines.join("\n");
+  return l.join("\n");
 }

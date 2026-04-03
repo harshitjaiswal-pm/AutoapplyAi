@@ -2,19 +2,9 @@
 
 import { useAppStore, Application } from "@/store/useAppStore";
 
-/**
- * DASHBOARD PAGE — Application tracker at "/dashboard"
- *
- * Shows all jobs you've tailored resumes for, with their match scores
- * and current status in the application funnel.
- *
- * For MVP, data is stored in memory (Zustand store).
- * In Phase 2, this connects to Supabase for persistence.
- */
 export default function DashboardPage() {
   const { applications, updateApplicationStatus } = useAppStore();
 
-  // Stats for the overview cards
   const stats = {
     total: applications.length,
     applied: applications.filter((a) => a.status === "applied").length,
@@ -29,71 +19,62 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto py-12 space-y-8 animate-fade-in">
       <div>
-        <h1 className="text-3xl font-bold text-navy">Application Dashboard</h1>
-        <p className="mt-2 text-gray-600">
-          Track every job you&apos;ve applied to in one place.
+        <h1 className="text-2xl font-bold text-neutral-900 tracking-tight">
+          Dashboard
+        </h1>
+        <p className="mt-1 text-sm text-neutral-400">
+          Track your applications in one place.
         </p>
       </div>
 
-      {/* Stats Overview */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Jobs" value={stats.total} color="blue" />
-        <StatCard label="Applied" value={stats.applied} color="green" />
-        <StatCard label="Interviewing" value={stats.interviewing} color="purple" />
-        <StatCard label="Avg Match" value={`${stats.avgScore}%`} color="orange" />
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-4">
+        <Stat label="Total" value={stats.total} color="bg-indigo-50 border-indigo-100 text-indigo-600" />
+        <Stat label="Applied" value={stats.applied} color="bg-emerald-50 border-emerald-100 text-emerald-600" />
+        <Stat label="Interviewing" value={stats.interviewing} color="bg-violet-50 border-violet-100 text-violet-600" />
+        <Stat label="Avg match" value={`${stats.avgScore}%`} color="bg-amber-50 border-amber-100 text-amber-600" />
       </div>
 
-      {/* Applications Table */}
+      {/* Table */}
       {applications.length === 0 ? (
-        <div className="bg-white rounded-xl p-12 text-center border border-gray-100">
-          <p className="text-gray-500 text-lg">No applications yet.</p>
-          <p className="text-gray-400 text-sm mt-2">
-            Go to the Tailor page and create your first tailored resume!
+        <div className="border border-neutral-200 rounded-xl py-20 text-center">
+          <p className="text-sm text-neutral-400">No applications yet.</p>
+          <p className="text-[13px] text-neutral-300 mt-1">
+            Tailor a resume to see it here.
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden shadow-sm">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left">
-              <tr>
-                <th className="px-4 py-3 font-medium text-gray-600">Job</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Company</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Score</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Status</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Date</th>
+        <div className="border border-neutral-200 rounded-xl overflow-hidden">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-neutral-200 bg-neutral-50">
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-400 uppercase tracking-wider">Job</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-400 uppercase tracking-wider">Company</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-400 uppercase tracking-wider">Score</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-400 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-400 uppercase tracking-wider">Date</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-neutral-100">
               {applications.map((app) => (
-                <tr key={app.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">
-                    {app.jobTitle}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{app.company}</td>
+                <tr key={app.id} className="hover:bg-neutral-50 transition-colors">
+                  <td className="px-4 py-3 font-medium text-neutral-900">{app.jobTitle}</td>
+                  <td className="px-4 py-3 text-neutral-500">{app.company}</td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`font-semibold ${
-                        app.matchScore >= 80
-                          ? "text-green-600"
-                          : app.matchScore >= 60
-                          ? "text-yellow-600"
-                          : "text-red-600"
-                      }`}
-                    >
-                      {app.matchScore}%
+                    <span className={`font-medium tabular-nums ${
+                      app.matchScore >= 70 ? "text-emerald-600"
+                        : app.matchScore >= 55 ? "text-amber-500"
+                        : "text-red-500"
+                    }`}>
+                      {app.matchScore}
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusSelector
-                      application={app}
-                      onChange={(status) =>
-                        updateApplicationStatus(app.id, status)
-                      }
-                    />
+                    <StatusSelect app={app} onChange={(s) => updateApplicationStatus(app.id, s)} />
                   </td>
-                  <td className="px-4 py-3 text-gray-500">
+                  <td className="px-4 py-3 text-neutral-400">
                     {new Date(app.appliedAt).toLocaleDateString()}
                   </td>
                 </tr>
@@ -106,56 +87,37 @@ export default function DashboardPage() {
   );
 }
 
-/** Stat card for the overview section */
-function StatCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number | string;
-  color: string;
-}) {
-  const colorMap: Record<string, string> = {
-    blue: "bg-blue-50 text-blue-700 border-blue-200",
-    green: "bg-green-50 text-green-700 border-green-200",
-    purple: "bg-purple-50 text-purple-700 border-purple-200",
-    orange: "bg-orange-50 text-orange-700 border-orange-200",
-  };
-
+function Stat({ label, value, color }: { label: string; value: number | string; color: string }) {
   return (
-    <div className={`rounded-xl p-4 border ${colorMap[color]}`}>
-      <p className="text-2xl font-bold">{value}</p>
-      <p className="text-sm opacity-75">{label}</p>
+    <div className={`rounded-xl p-5 text-center border ${color}`}>
+      <p className="text-xl font-bold tabular-nums">{value}</p>
+      <p className="text-[11px] opacity-60 mt-0.5 uppercase tracking-wider">{label}</p>
     </div>
   );
 }
 
-/** Dropdown to change application status */
-function StatusSelector({
-  application,
+function StatusSelect({
+  app,
   onChange,
 }: {
-  application: Application;
+  app: Application;
   onChange: (status: Application["status"]) => void;
 }) {
-  const statusColors: Record<Application["status"], string> = {
-    matched: "bg-gray-100 text-gray-700",
-    approved: "bg-blue-100 text-blue-700",
-    applied: "bg-green-100 text-green-700",
-    responded: "bg-yellow-100 text-yellow-700",
-    interviewing: "bg-purple-100 text-purple-700",
-    rejected: "bg-red-100 text-red-700",
-    offer: "bg-emerald-100 text-emerald-700",
+  const colors: Record<Application["status"], string> = {
+    matched: "text-neutral-600 bg-neutral-100",
+    approved: "text-blue-600 bg-blue-50",
+    applied: "text-emerald-600 bg-emerald-50",
+    responded: "text-amber-600 bg-amber-50",
+    interviewing: "text-purple-600 bg-purple-50",
+    rejected: "text-red-500 bg-red-50",
+    offer: "text-emerald-700 bg-emerald-50",
   };
 
   return (
     <select
-      value={application.status}
+      value={app.status}
       onChange={(e) => onChange(e.target.value as Application["status"])}
-      className={`text-xs font-medium px-2 py-1 rounded-full border-0 cursor-pointer ${
-        statusColors[application.status]
-      }`}
+      className={`text-[12px] font-medium px-2 py-1 rounded-md border-0 cursor-pointer ${colors[app.status]} focus:outline-none focus:ring-1 focus:ring-neutral-300`}
     >
       <option value="matched">Matched</option>
       <option value="approved">Approved</option>

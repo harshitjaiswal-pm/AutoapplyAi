@@ -3,17 +3,6 @@
 import { useState, useCallback } from "react";
 import { useAppStore } from "@/store/useAppStore";
 
-/**
- * ResumeUploader — Lets users paste, or upload PDF/DOCX/TXT resumes.
- *
- * Three input methods:
- * 1. Paste text directly into a textarea
- * 2. Upload a PDF file (server extracts text)
- * 3. Upload a DOCX file (server extracts text)
- *
- * Files are sent to /api/upload-resume for text extraction,
- * then the extracted text goes to /api/parse-resume for AI parsing.
- */
 export default function ResumeUploader() {
   const [text, setText] = useState("");
   const [error, setError] = useState("");
@@ -28,10 +17,6 @@ export default function ResumeUploader() {
     setIsParsingResume,
   } = useAppStore();
 
-  /**
-   * Handle file upload — sends PDF/DOCX to server for text extraction.
-   * TXT/MD files are read directly in the browser (no server needed).
-   */
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -42,74 +27,52 @@ export default function ResumeUploader() {
       const name = file.name.toLowerCase();
 
       if (name.endsWith(".txt") || name.endsWith(".md")) {
-        // Text files: read directly in the browser
         const reader = new FileReader();
-        reader.onload = (event) => {
-          setText(event.target?.result as string);
-        };
+        reader.onload = (event) => setText(event.target?.result as string);
         reader.readAsText(file);
       } else if (name.endsWith(".pdf") || name.endsWith(".docx")) {
-        // PDF and DOCX: send to server for extraction
         setIsUploading(true);
         try {
           const formData = new FormData();
           formData.append("file", file);
-
-          const response = await fetch("/api/upload-resume", {
+          const res = await fetch("/api/upload-resume", {
             method: "POST",
             body: formData,
           });
-
-          const data = await response.json();
-
-          if (!response.ok) {
-            setError(data.error || "Failed to process file.");
-            return;
-          }
-
+          const data = await res.json();
+          if (!res.ok) { setError(data.error || "Failed to process file."); return; }
           setText(data.text);
         } catch {
-          setError("Failed to upload file. Try pasting your resume instead.");
+          setError("Failed to upload file. Try pasting instead.");
         } finally {
           setIsUploading(false);
         }
       } else {
-        setError("Please upload a PDF, DOCX, or TXT file.");
+        setError("Upload a PDF, DOCX, or TXT file.");
       }
     },
     []
   );
 
-  /**
-   * Parse the resume — sends text to /api/parse-resume which calls Claude.
-   */
   const handleParse = async () => {
     if (text.trim().length < 50) {
-      setError("Please paste your full resume (at least a few paragraphs).");
+      setError("Paste your full resume (at least a few paragraphs).");
       return;
     }
-
     setError("");
     setIsParsingResume(true);
     setRawResumeText(text);
-
     try {
-      const response = await fetch("/api/parse-resume", {
+      const res = await fetch("/api/parse-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resumeText: text }),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setError(data.error || "Something went wrong.");
-        return;
-      }
-
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Something went wrong."); return; }
       setParsedResume(data.parsedResume);
     } catch {
-      setError("Network error. Make sure the dev server is running.");
+      setError("Network error. Is the dev server running?");
     } finally {
       setIsParsingResume(false);
     }
@@ -117,24 +80,32 @@ export default function ResumeUploader() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-navy">Step 1: Your Resume</h2>
-      <p className="text-sm text-gray-500">
-        Upload your resume as PDF, Word (.docx), or plain text — or paste it
-        below. We&apos;ll parse it into structured data that can be tailored for
-        any job.
-      </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono font-semibold text-indigo-400">01</span>
+            <h2 className="text-sm font-semibold text-neutral-900">Your resume</h2>
+          </div>
+          <p className="text-[13px] text-neutral-400 mt-0.5 ml-7">
+            Upload a file or paste text
+          </p>
+        </div>
 
-      {/* File upload — now supports PDF, DOCX, TXT */}
-      <div className="flex items-center gap-4">
-        <label className="cursor-pointer bg-white border border-gray-300 rounded-lg px-4 py-2 text-sm hover:bg-gray-50 transition-colors">
-          {isUploading ? (
-            <span className="flex items-center gap-2">
-              <span className="animate-spin h-3 w-3 border-2 border-gray-500 border-t-transparent rounded-full" />
-              Extracting text...
-            </span>
-          ) : (
-            "Upload PDF, DOCX, or TXT"
-          )}
+        {/* File upload */}
+        <label className="cursor-pointer">
+          <span className="text-[13px] text-neutral-500 hover:text-indigo-600 border border-neutral-200 px-3 py-1.5 rounded-lg hover:border-indigo-200 hover:bg-indigo-50 transition-colors inline-flex items-center gap-1.5">
+            {isUploading ? (
+              <>
+                <Spinner />
+                Extracting...
+              </>
+            ) : (
+              <>
+                <UploadIcon />
+                Upload file
+              </>
+            )}
+          </span>
           <input
             type="file"
             accept=".txt,.md,.pdf,.docx"
@@ -143,83 +114,61 @@ export default function ResumeUploader() {
             disabled={isUploading}
           />
         </label>
-        {fileName && (
-          <span className="text-sm text-gray-500">Loaded: {fileName}</span>
-        )}
       </div>
 
-      {/* Text area */}
+      {fileName && (
+        <div className="flex items-center gap-1.5 text-[13px] text-emerald-600 ml-7">
+          <CheckIcon /> {fileName}
+        </div>
+      )}
+
       <textarea
-        className="w-full h-64 p-4 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-y"
-        placeholder={`Paste your resume here, or upload a file above...
-
-Example:
-John Doe
-john@email.com | (555) 123-4567 | San Francisco, CA
-
-PROFESSIONAL SUMMARY
-Product manager with 5 years of experience in B2B SaaS...
-
-EXPERIENCE
-Senior Product Manager | Acme Corp | Jan 2022 - Present
-- Led cross-functional team of 12 to launch new analytics platform
-- Increased user retention by 25% through data-driven feature prioritization
-...`}
+        className="w-full h-48 p-4 bg-neutral-50 border border-neutral-200 rounded-lg text-sm font-mono text-neutral-700 placeholder:text-neutral-300 focus:outline-none focus:ring-1 focus:ring-indigo-200 focus:border-indigo-200 resize-y transition-all"
+        placeholder="Paste your resume text here..."
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
 
-      {/* Error message */}
       {error && (
-        <p className="text-sm text-red-500 bg-red-50 p-3 rounded-lg">
-          {error}
-        </p>
+        <p className="text-[13px] text-red-500 animate-fade-in">{error}</p>
       )}
 
-      {/* Parse button */}
       <button
         onClick={handleParse}
         disabled={isParsingResume || isUploading || text.trim().length < 50}
-        className="bg-brand-500 hover:bg-brand-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium px-6 py-3 rounded-lg transition-colors"
+        className="text-sm font-medium bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors"
       >
         {isParsingResume ? (
           <span className="flex items-center gap-2">
-            <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-            Parsing with AI...
+            <Spinner /> Parsing...
           </span>
         ) : (
-          "Parse Resume"
+          "Parse resume"
         )}
       </button>
 
-      {/* Show parsed result */}
       {parsedResume && (
-        <div className="mt-6 bg-green-50 border border-green-200 rounded-lg p-4">
-          <h3 className="font-semibold text-green-800 mb-2">
-            Resume Parsed Successfully!
-          </h3>
-          <div className="text-sm text-green-700 space-y-1">
-            <p>
-              <strong>Name:</strong> {parsedResume.contactInfo.name}
-            </p>
-            <p>
-              <strong>Skills found:</strong>{" "}
-              {[
-                ...parsedResume.skills.technical,
-                ...parsedResume.skills.tools,
-              ].join(", ")}
-            </p>
-            <p>
-              <strong>Experience:</strong> {parsedResume.experience.length}{" "}
-              positions
-            </p>
-            <p>
-              <strong>Education:</strong> {parsedResume.education.length}{" "}
-              entries
-            </p>
+        <div className="border border-emerald-200 bg-emerald-50/50 rounded-lg p-4 animate-fade-up">
+          <p className="text-sm font-medium text-emerald-700 flex items-center gap-1.5 mb-2">
+            <CheckIcon /> Parsed successfully
+          </p>
+          <div className="text-[13px] text-emerald-600/80 space-y-0.5 ml-5">
+            <p>{parsedResume.contactInfo.name}</p>
+            <p>{[...parsedResume.skills.technical, ...parsedResume.skills.tools].slice(0, 5).join(", ")}{[...parsedResume.skills.technical, ...parsedResume.skills.tools].length > 5 && " ..."}</p>
+            <p>{parsedResume.experience.length} roles, {parsedResume.education.length} education</p>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+function Spinner() {
+  return <span className="animate-spin h-3 w-3 border-[1.5px] border-current border-t-transparent rounded-full inline-block" />;
+}
+function UploadIcon() {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>;
+}
+function CheckIcon() {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 5 5L20 7"/></svg>;
 }

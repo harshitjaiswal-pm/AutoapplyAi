@@ -9,14 +9,39 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Our brand colors - navy + blue, matching the PRD
-        navy: "#1B2A4A",
-        brand: {
-          50: "#EBF2FF",
-          100: "#D5E8F0",
-          500: "#2E75B6",
-          600: "#245F96",
-          700: "#1B4A77",
+        navy: "#0A0F1E",
+        accent: "#6366F1",    // indigo — the single pop of color
+        surface: "#FAFAFA",
+        border: "#E5E5E5",
+        muted: "#737373",
+      },
+      fontFamily: {
+        sans: [
+          "Inter",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "sans-serif",
+        ],
+        mono: ["JetBrains Mono", "Fira Code", "monospace"],
+      },
+      animation: {
+        "fade-in": "fadeIn 0.4s ease-out",
+        "fade-up": "fadeUp 0.5s ease-out",
+        "slide-in": "slideIn 0.3s ease-out",
+      },
+      keyframes: {
+        fadeIn: {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        fadeUp: {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        slideIn: {
+          "0%": { opacity: "0", transform: "translateX(-4px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
         },
       },
     },
