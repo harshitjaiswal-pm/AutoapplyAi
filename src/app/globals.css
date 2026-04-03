@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  These three lines import Tailwind's styles.
+  @tailwind base    = reset/normalize styles
+  @tailwind components = component classes
+  @tailwind utilities  = utility classes like "text-blue-500", "p-4", "flex", etc.
+
+  Everything else we style using Tailwind classes directly in our components.
+*/
