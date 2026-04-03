@@ -318,7 +318,7 @@ async function generateDocx(resume: any) {
 
   const buffer = await Packer.toBuffer(doc);
 
-  return new NextResponse(buffer, {
+  return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "Content-Disposition": "attachment; filename=tailored_resume.docx",
@@ -505,7 +505,7 @@ async function generatePdf(resume: any) {
     }
   }
 
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  const pdfBuffer = new Uint8Array(doc.output("arraybuffer"));
 
   return new NextResponse(pdfBuffer, {
     headers: {
