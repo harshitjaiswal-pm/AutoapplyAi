@@ -17,7 +17,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-white">
         {/* Nav */}
         <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-xl border-b border-neutral-100">
-          <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+          <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2">
               <div className="w-6 h-6 bg-indigo-600 rounded-md flex items-center justify-center">
                 <span className="text-white text-xs font-bold">A</span>
@@ -38,7 +38,7 @@ export default function RootLayout({
         {/* Spacer for fixed nav */}
         <div className="h-14" />
 
-        <main className="max-w-5xl mx-auto px-6">{children}</main>
+        <main className="max-w-6xl mx-auto px-6">{children}</main>
       </body>
     </html>
   );

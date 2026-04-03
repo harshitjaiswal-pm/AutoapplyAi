@@ -28,7 +28,8 @@ Return VALID JSON matching this exact structure:
     "phone": "string",
     "location": "string",
     "linkedin": "string or empty",
-    "portfolio": "string or empty"
+    "portfolio": "string or empty",
+    "authorization": "work authorization status if mentioned (e.g., 'Canadian Permanent Resident', 'US Citizen', 'H-1B'), or empty string"
   },
   "summary": "the professional summary or objective, if any",
   "skills": {
@@ -40,6 +41,7 @@ Return VALID JSON matching this exact structure:
     {
       "company": "Company Name",
       "role": "Job Title",
+      "location": "City, State/Province if mentioned, or empty string",
       "startDate": "Month Year",
       "endDate": "Month Year or Present",
       "bullets": ["bullet 1", "bullet 2"]
@@ -132,6 +134,12 @@ WHAT YOU MUST NEVER ADD:
 - Specific metrics that are clearly fabricated (don't say "increased revenue by 300%" unless the original resume supports it)
 - Skills from a completely different domain (don't add "machine learning" to a marketing manager's resume unless there's some basis for it)
 
+CRITICAL — PRESERVE THIS INFORMATION:
+- Immigration/work authorization status (e.g., "Canadian Permanent Resident", "US Citizen", "H-1B", "Open Work Permit"). If present in the original resume, it MUST appear in the tailored resume — in the contact info or summary. This is often a dealbreaker for recruiters.
+- Location for EACH role (city, state/province). If the original resume has "Amazon, Seattle, WA" or "Amazon, Vancouver, BC", the tailored resume must keep the location for each position. Never strip location from experience entries.
+- LinkedIn URL, portfolio URL, GitHub URL — preserve all links from the original.
+- Any certifications, awards, or volunteer work — carry these over even if not directly relevant.
+
 MATCH SCORE RUBRIC — Score using this EXACT formula. Show your math.
 
 1. Required Skills Match (0-30 points):
@@ -191,12 +199,17 @@ Return VALID JSON with this structure:
     "redFlags": { "score": <int>, "detail": "[specific deductions or 'None']" }
   },
   "matchReasoning": "2-3 sentence honest assessment of the RAW fit (before optimization). Start with the biggest gap, then the biggest strength. Then add one sentence about what you did to optimize the resume.",
-  "tailoredResume": { /* same structure as the input resume, with aggressively optimized content following ALL rules above — ATS keywords saturated, implicit skills added, new bullets added, tools filled in */ },
+  "tailoredResume": { /* same structure as the input resume, with aggressively optimized content. IMPORTANT: each experience entry must include a "location" field (e.g., "Vancouver, BC" or "Seattle, WA") preserved from the original. contactInfo must include "authorization" field if work authorization was in the original (e.g., "Canadian Permanent Resident"). */ },
   "coverLetter": "A compelling 3-paragraph cover letter optimized for THIS specific role: (1) Open with a hook — why this specific company/role excites the candidate, referencing something concrete about them (product, mission, recent news). Use the job title and company name. (2) Map the candidate's 2-3 strongest achievements DIRECTLY to the JD's top requirements — use the JD's exact language. Include a specific metric or result for each. (3) Forward-looking closer about what the candidate would accomplish in the first 90 days, showing understanding of the role's priorities. End with a confident call to action. Tone: confident, specific, NOT generic. No 'I am writing to apply for...' openings.",
   "changes": [
-    "Specific change 1 with reason",
-    "Specific change 2 with reason"
+    { "category": "requiredSkills", "text": "What you changed and why" },
+    { "category": "experienceLevel", "text": "What you changed and why" },
+    { "category": "industryMatch", "text": "What you changed and why" },
+    { "category": "preferredSkills", "text": "What you changed and why" },
+    { "category": "education", "text": "What you changed and why" },
+    { "category": "redFlags", "text": "What you changed and why" }
   ]
+  // Each change MUST have a "category" that matches one of the matchBreakdown keys (requiredSkills, experienceLevel, industryMatch, preferredSkills, education, redFlags). This shows the user exactly which gap each change addresses. Include 1-3 changes per category where you made improvements. Skip categories where no changes were needed.
 }
 
 Return ONLY the JSON. No markdown, no explanation, no code fences.`;

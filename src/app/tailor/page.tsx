@@ -4,7 +4,7 @@ import TailorEngine from "@/components/TailorEngine";
 
 export default function TailorPage() {
   return (
-    <div className="max-w-3xl mx-auto py-12 space-y-10 animate-fade-in">
+    <div className="max-w-6xl mx-auto py-12 space-y-10 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-neutral-900 tracking-tight">
           Tailor your resume

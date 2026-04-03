@@ -17,6 +17,7 @@ export interface ParsedResume {
     location: string;
     linkedin?: string;
     portfolio?: string;
+    authorization?: string; // e.g., "Canadian Permanent Resident"
   };
   summary: string;
   skills: {
@@ -27,6 +28,7 @@ export interface ParsedResume {
   experience: {
     company: string;
     role: string;
+    location?: string; // e.g., "Vancouver, BC"
     startDate: string;
     endDate: string;
     bullets: string[];
@@ -71,7 +73,7 @@ export interface TailoredResult {
   matchReasoning: string;
   tailoredResume: ParsedResume;
   coverLetter: string;
-  changes: string[];  // Human-readable list of what changed
+  changes: { category: string; text: string }[];  // Each change tagged with which gap it addresses
 }
 
 // A tracked application
