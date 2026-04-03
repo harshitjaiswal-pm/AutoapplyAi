@@ -56,11 +56,14 @@ export async function POST(request: NextRequest) {
       ],
     });
 
-    // Step 4: Extract the text response
-    const responseText =
+    // Step 4: Extract the text response and clean it
+    let responseText =
       message.content[0].type === "text" ? message.content[0].text : "";
 
-    // Step 5: Parse the JSON (Claude should return valid JSON per our prompt)
+    // Strip markdown code fences if present (Haiku sometimes adds these)
+    responseText = responseText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+
+    // Step 5: Parse the JSON
     const parsedResume = JSON.parse(responseText);
 
     return NextResponse.json({ parsedResume });
