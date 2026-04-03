@@ -62,22 +62,32 @@ async function generateDocx(resume: any) {
   // Build experience paragraphs
   const experienceChildren: Paragraph[] = [];
   for (const exp of resume.experience || []) {
-    // Role + dates on same line
+    // Line 1: Role (left) + Location (right)
     experienceChildren.push(
       new Paragraph({
         spacing: { before: 160, after: 40 },
         tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
         children: [
           new TextRun({ text: exp.role, bold: true, font: "Arial", size: 22, color: NAVY }),
-          new TextRun({ text: `\t${exp.startDate} – ${exp.endDate}`, font: "Arial", size: 20, color: GRAY }),
+          ...(exp.location
+            ? [new TextRun({ text: `\t${exp.location}`, font: "Arial", size: 20, color: GRAY })]
+            : []),
         ],
       })
     );
-    // Company
+    // Line 2: Company | Dates (italic)
     experienceChildren.push(
       new Paragraph({
         spacing: { after: 60 },
-        children: [new TextRun({ text: exp.company, italics: true, font: "Arial", size: 20, color: GRAY })],
+        children: [
+          new TextRun({
+            text: `${exp.company} | ${exp.startDate} – ${exp.endDate}`,
+            italics: true,
+            font: "Arial",
+            size: 20,
+            color: GRAY,
+          }),
+        ],
       })
     );
     // Bullets
@@ -218,7 +228,7 @@ async function generateDocx(resume: any) {
             ? [
                 new Paragraph({
                   alignment: AlignmentType.CENTER,
-                  spacing: { after: 120 },
+                  spacing: { after: 40 },
                   children: [
                     new TextRun({
                       text: [resume.contactInfo.linkedin, resume.contactInfo.portfolio]
@@ -227,6 +237,24 @@ async function generateDocx(resume: any) {
                       font: "Arial",
                       size: 18,
                       color: GRAY,
+                    }),
+                  ],
+                }),
+              ]
+            : []),
+          // Work authorization (e.g., "Canadian Permanent Resident")
+          ...(resume.contactInfo?.authorization
+            ? [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  spacing: { after: 120 },
+                  children: [
+                    new TextRun({
+                      text: resume.contactInfo.authorization,
+                      bold: true,
+                      font: "Arial",
+                      size: 20,
+                      color: NAVY,
                     }),
                   ],
                 }),
@@ -370,6 +398,14 @@ async function generatePdf(resume: any) {
     y += 14;
   }
 
+  if (resume.contactInfo?.authorization) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(27, 42, 74);
+    doc.text(resume.contactInfo.authorization, pageWidth / 2, y, { align: "center" });
+    y += 14;
+  }
+
   y += 8;
 
   // Helper: section heading
@@ -430,21 +466,23 @@ async function generatePdf(resume: any) {
     heading("Experience");
     for (const exp of resume.experience) {
       checkPage(40);
-      // Role + dates
+      // Line 1: Role (left) + Location (right)
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.setTextColor(27, 42, 74);
       doc.text(exp.role, margin, y);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(100, 100, 100);
-      const dateStr = `${exp.startDate} – ${exp.endDate}`;
-      doc.text(dateStr, pageWidth - margin, y, { align: "right" });
+      if (exp.location) {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(100, 100, 100);
+        doc.text(exp.location, pageWidth - margin, y, { align: "right" });
+      }
       y += 14;
-      // Company
+      // Line 2: Company | Dates
       doc.setFont("helvetica", "italic");
       doc.setFontSize(9);
-      doc.text(exp.company, margin, y);
+      doc.setTextColor(100, 100, 100);
+      doc.text(`${exp.company} | ${exp.startDate} – ${exp.endDate}`, margin, y);
       y += 12;
       // Bullets
       for (const bullet of exp.bullets || []) {

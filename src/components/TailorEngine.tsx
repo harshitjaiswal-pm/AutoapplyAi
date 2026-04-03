@@ -150,8 +150,38 @@ export default function TailorEngine() {
           <div className="border border-neutral-200 rounded-xl p-6 mb-6">
             <div className="flex items-start justify-between gap-6">
               <div className="flex-1">
-                <p className="text-[11px] font-medium text-neutral-400 uppercase tracking-wider mb-2">Match analysis</p>
-                <p className="text-sm text-neutral-500 leading-relaxed">{tailoredResult.matchReasoning}</p>
+                <p className="text-[11px] font-medium text-neutral-400 uppercase tracking-wider mb-3">Match analysis</p>
+                {typeof tailoredResult.matchReasoning === "object" ? (
+                  <div className="space-y-2.5">
+                    {tailoredResult.matchReasoning.strengths?.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider mb-1">What works</p>
+                        {tailoredResult.matchReasoning.strengths.map((s, i) => (
+                          <p key={i} className="text-[13px] text-neutral-600 flex items-start gap-1.5">
+                            <span className="text-emerald-500 mt-0.5 shrink-0">+</span> {s}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {tailoredResult.matchReasoning.gaps?.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-semibold text-red-500 uppercase tracking-wider mb-1">Gaps</p>
+                        {tailoredResult.matchReasoning.gaps.map((g, i) => (
+                          <p key={i} className="text-[13px] text-neutral-600 flex items-start gap-1.5">
+                            <span className="text-red-400 mt-0.5 shrink-0">&minus;</span> {g}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {tailoredResult.matchReasoning.optimization && (
+                      <p className="text-[12px] text-neutral-400 italic">
+                        {tailoredResult.matchReasoning.optimization}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-neutral-500 leading-relaxed">{tailoredResult.matchReasoning}</p>
+                )}
               </div>
               <div className="text-right shrink-0">
                 <p className={`text-3xl font-bold tabular-nums ${
@@ -402,11 +432,10 @@ function ResumePreview({
               <div key={i}>
                 <div className="flex justify-between items-baseline">
                   <p className="font-medium text-neutral-900">{exp.role}</p>
-                  <p className="text-[11px] text-neutral-400 shrink-0 ml-4">{exp.startDate} – {exp.endDate}</p>
+                  {exp.location && <p className="text-[11px] text-neutral-400 shrink-0 ml-4">{exp.location}</p>}
                 </div>
-                <p className="text-[12px] text-neutral-400">
-                  {exp.company}
-                  {exp.location && <span> · {exp.location}</span>}
+                <p className="text-[12px] text-neutral-400 italic">
+                  {exp.company} | {exp.startDate} – {exp.endDate}
                 </p>
                 <ul className="mt-1.5 space-y-0.5">
                   {exp.bullets.map((b, j) => (

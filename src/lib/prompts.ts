@@ -198,7 +198,11 @@ Return VALID JSON with this structure:
     "education": { "score": <int>, "max": 10, "detail": "[specific education comparison]" },
     "redFlags": { "score": <int>, "detail": "[specific deductions or 'None']" }
   },
-  "matchReasoning": "2-3 sentence honest assessment of the RAW fit (before optimization). Start with the biggest gap, then the biggest strength. Then add one sentence about what you did to optimize the resume.",
+  "matchReasoning": {
+    "strengths": ["Short strength 1 (5-10 words)", "Short strength 2"],
+    "gaps": ["Short gap 1 (5-10 words)", "Short gap 2"],
+    "optimization": "One sentence on what you did to optimize"
+  },
   "tailoredResume": { /* same structure as the input resume, with aggressively optimized content. IMPORTANT: each experience entry must include a "location" field (e.g., "Vancouver, BC" or "Seattle, WA") preserved from the original. contactInfo must include "authorization" field if work authorization was in the original (e.g., "Canadian Permanent Resident"). */ },
   "coverLetter": "A compelling 3-paragraph cover letter optimized for THIS specific role: (1) Open with a hook — why this specific company/role excites the candidate, referencing something concrete about them (product, mission, recent news). Use the job title and company name. (2) Map the candidate's 2-3 strongest achievements DIRECTLY to the JD's top requirements — use the JD's exact language. Include a specific metric or result for each. (3) Forward-looking closer about what the candidate would accomplish in the first 90 days, showing understanding of the role's priorities. End with a confident call to action. Tone: confident, specific, NOT generic. No 'I am writing to apply for...' openings.",
   "changes": [

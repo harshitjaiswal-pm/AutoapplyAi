@@ -70,7 +70,11 @@ export interface TailoredResult {
     education: { score: number; max: number; detail: string };
     redFlags: { score: number; detail: string };
   };
-  matchReasoning: string;
+  matchReasoning: string | {
+    strengths: string[];
+    gaps: string[];
+    optimization: string;
+  };
   tailoredResume: ParsedResume;
   coverLetter: string;
   changes: { category: string; text: string }[];  // Each change tagged with which gap it addresses
