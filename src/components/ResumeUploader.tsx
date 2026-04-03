@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
 
 export default function ResumeUploader() {
@@ -8,6 +8,7 @@ export default function ResumeUploader() {
   const [error, setError] = useState("");
   const [fileName, setFileName] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
     parsedResume,
@@ -17,19 +18,57 @@ export default function ResumeUploader() {
     setIsParsingResume,
   } = useAppStore();
 
+  // Shared parse logic so file upload can auto-trigger it
+  const parseResume = useCallback(
+    async (resumeText: string) => {
+      if (resumeText.trim().length < 50) {
+        setError("Paste your full resume (at least a few paragraphs).");
+        return;
+      }
+      setError("");
+      setIsParsingResume(true);
+      setRawResumeText(resumeText);
+      try {
+        const res = await fetch("/api/parse-resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resumeText }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || "Something went wrong.");
+          return;
+        }
+        setParsedResume(data.parsedResume);
+      } catch {
+        setError("Network error. Is the dev server running?");
+      } finally {
+        setIsParsingResume(false);
+      }
+    },
+    [setIsParsingResume, setRawResumeText, setParsedResume]
+  );
+
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
 
+      // Reset input so the same file can be re-uploaded
+      if (fileInputRef.current) fileInputRef.current.value = "";
+
       setFileName(file.name);
       setError("");
       const name = file.name.toLowerCase();
 
+      let extractedText = "";
+
       if (name.endsWith(".txt") || name.endsWith(".md")) {
-        const reader = new FileReader();
-        reader.onload = (event) => setText(event.target?.result as string);
-        reader.readAsText(file);
+        extractedText = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (event) => resolve(event.target?.result as string);
+          reader.readAsText(file);
+        });
       } else if (name.endsWith(".pdf") || name.endsWith(".docx")) {
         setIsUploading(true);
         try {
@@ -40,43 +79,32 @@ export default function ResumeUploader() {
             body: formData,
           });
           const data = await res.json();
-          if (!res.ok) { setError(data.error || "Failed to process file."); return; }
-          setText(data.text);
+          if (!res.ok) {
+            setError(data.error || "Failed to process file.");
+            setIsUploading(false);
+            return;
+          }
+          extractedText = data.text;
         } catch {
           setError("Failed to upload file. Try pasting instead.");
+          setIsUploading(false);
+          return;
         } finally {
           setIsUploading(false);
         }
       } else {
         setError("Upload a PDF, DOCX, or TXT file.");
+        return;
+      }
+
+      // Set text in textarea and auto-parse
+      setText(extractedText);
+      if (extractedText.trim().length >= 50) {
+        parseResume(extractedText);
       }
     },
-    []
+    [parseResume]
   );
-
-  const handleParse = async () => {
-    if (text.trim().length < 50) {
-      setError("Paste your full resume (at least a few paragraphs).");
-      return;
-    }
-    setError("");
-    setIsParsingResume(true);
-    setRawResumeText(text);
-    try {
-      const res = await fetch("/api/parse-resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resumeText: text }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "Something went wrong."); return; }
-      setParsedResume(data.parsedResume);
-    } catch {
-      setError("Network error. Is the dev server running?");
-    } finally {
-      setIsParsingResume(false);
-    }
-  };
 
   return (
     <div className="space-y-4">
@@ -107,6 +135,7 @@ export default function ResumeUploader() {
             )}
           </span>
           <input
+            ref={fileInputRef}
             type="file"
             accept=".txt,.md,.pdf,.docx"
             className="hidden"
@@ -127,6 +156,7 @@ export default function ResumeUploader() {
         placeholder="Paste your resume text here..."
         value={text}
         onChange={(e) => setText(e.target.value)}
+        autoComplete="off"
       />
 
       {error && (
@@ -134,7 +164,7 @@ export default function ResumeUploader() {
       )}
 
       <button
-        onClick={handleParse}
+        onClick={() => parseResume(text)}
         disabled={isParsingResume || isUploading || text.trim().length < 50}
         className="text-sm font-medium bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors"
       >

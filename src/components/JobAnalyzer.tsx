@@ -1,14 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "@/store/useAppStore";
 
 export default function JobAnalyzer() {
   const [jobText, setJobText] = useState("");
   const [error, setError] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { parsedJob, isAnalyzingJob, setParsedJob, setIsAnalyzingJob } =
     useAppStore();
+
+  // Sync browser-restored textarea value with React state on mount
+  useEffect(() => {
+    if (textareaRef.current && textareaRef.current.value && !jobText) {
+      setJobText(textareaRef.current.value);
+    }
+  }, []);
 
   const handleAnalyze = async () => {
     if (jobText.trim().length < 50) {
@@ -46,10 +54,12 @@ export default function JobAnalyzer() {
       </div>
 
       <textarea
+        ref={textareaRef}
         className="w-full h-48 p-4 bg-neutral-50 border border-neutral-200 rounded-lg text-sm font-mono text-neutral-700 placeholder:text-neutral-300 focus:outline-none focus:ring-1 focus:ring-indigo-200 focus:border-indigo-200 resize-y transition-all"
         placeholder="Paste the job description here..."
         value={jobText}
         onChange={(e) => setJobText(e.target.value)}
+        autoComplete="off"
       />
 
       {error && (

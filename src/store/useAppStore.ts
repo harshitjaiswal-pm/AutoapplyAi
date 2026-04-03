@@ -61,6 +61,7 @@ export interface ParsedJob {
 
 // A tailored resume result
 export interface TailoredResult {
+  originalMatchScore?: number; // Score before optimization
   matchScore: number;
   matchBreakdown?: {
     requiredSkills: { score: number; max: number; detail: string };

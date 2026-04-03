@@ -47,7 +47,7 @@ export default function TailorEngine() {
   const [exporting, setExporting] = useState("");
   const [copied, setCopied] = useState("");
   const [tab, setTab] = useState<"resume" | "cover">("resume");
-  const [mode, setMode] = useState<"pro" | "fast">("pro");
+  const [mode, setMode] = useState<"pro" | "fast">("fast");
 
   const {
     parsedResume,
@@ -215,13 +215,43 @@ export default function TailorEngine() {
                   <p className="text-sm text-neutral-500 leading-relaxed">{tailoredResult.matchReasoning}</p>
                 )}
               </div>
-              <div className="text-right shrink-0">
-                <p className={`text-3xl font-bold tabular-nums ${
-                  tailoredResult.matchScore >= 70 ? "text-emerald-600"
-                    : tailoredResult.matchScore >= 55 ? "text-amber-500"
-                    : "text-red-500"
-                }`}>{tailoredResult.matchScore}</p>
-                <p className="text-[11px] text-neutral-400">/ 100</p>
+              <div className="shrink-0 flex items-center gap-3">
+                {/* Before score */}
+                {tailoredResult.originalMatchScore != null && (
+                  <>
+                    <div className="text-center">
+                      <p className="text-[10px] font-medium text-neutral-400 uppercase tracking-wider mb-1">Before</p>
+                      <p className={`text-2xl font-bold tabular-nums ${
+                        tailoredResult.originalMatchScore >= 70 ? "text-emerald-600"
+                          : tailoredResult.originalMatchScore >= 55 ? "text-amber-500"
+                          : "text-red-500"
+                      }`}>{tailoredResult.originalMatchScore}</p>
+                    </div>
+                    <div className="flex flex-col items-center gap-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-neutral-300"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                      {tailoredResult.originalMatchScore != null && (
+                        <span className={`text-[10px] font-bold ${
+                          tailoredResult.matchScore - tailoredResult.originalMatchScore > 0
+                            ? "text-emerald-500" : "text-neutral-400"
+                        }`}>
+                          +{tailoredResult.matchScore - tailoredResult.originalMatchScore}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+                {/* After score */}
+                <div className="text-center">
+                  {tailoredResult.originalMatchScore != null && (
+                    <p className="text-[10px] font-medium text-neutral-400 uppercase tracking-wider mb-1">After</p>
+                  )}
+                  <p className={`text-3xl font-bold tabular-nums ${
+                    tailoredResult.matchScore >= 70 ? "text-emerald-600"
+                      : tailoredResult.matchScore >= 55 ? "text-amber-500"
+                      : "text-red-500"
+                  }`}>{tailoredResult.matchScore}</p>
+                  <p className="text-[11px] text-neutral-400">/ 100</p>
+                </div>
               </div>
             </div>
           </div>
@@ -443,28 +473,32 @@ function ResumePreview({
         </Section>
       )}
 
+      {resume.skills && (
       <Section title="Skills">
         <div className="space-y-1 text-neutral-600">
-          {resume.skills.technical.length > 0 && (
+          {resume.skills.technical?.length > 0 && (
             <p><span className="text-neutral-900 font-medium">Technical:</span> {resume.skills.technical.join(", ")}</p>
           )}
-          {resume.skills.tools.length > 0 && (
+          {resume.skills.tools?.length > 0 && (
             <p><span className="text-neutral-900 font-medium">Tools:</span> {resume.skills.tools.join(", ")}</p>
           )}
-          {resume.skills.soft.length > 0 && (
+          {resume.skills.soft?.length > 0 && (
             <p><span className="text-neutral-900 font-medium">Soft:</span> {resume.skills.soft.join(", ")}</p>
           )}
         </div>
       </Section>
+      )}
 
-      {resume.experience.length > 0 && (
+      {resume.experience?.length > 0 && (
         <Section title="Experience">
           <div className="space-y-4">
             {resume.experience.map((exp, i) => (
               <div key={i}>
-                <div className="flex justify-between items-baseline">
-                  <p className="font-medium text-neutral-900">{exp.role}</p>
-                  {exp.location && <p className="text-[11px] text-neutral-400 shrink-0 ml-4">{exp.location}</p>}
+                <div className="flex justify-between items-baseline gap-4">
+                  <p className="font-semibold text-neutral-900">{exp.role}</p>
+                  {exp.location && (
+                    <p className="text-[12px] font-medium text-neutral-500 shrink-0 text-right">{exp.location}</p>
+                  )}
                 </div>
                 <p className="text-[12px] text-neutral-400 italic">
                   {exp.company} | {exp.startDate} – {exp.endDate}
@@ -483,7 +517,7 @@ function ResumePreview({
         </Section>
       )}
 
-      {resume.education.length > 0 && (
+      {resume.education?.length > 0 && (
         <Section title="Education">
           {resume.education.map((edu, i) => (
             <div key={i} className="flex justify-between items-baseline">
@@ -497,7 +531,7 @@ function ResumePreview({
         </Section>
       )}
 
-      {resume.projects.length > 0 && (
+      {resume.projects?.length > 0 && (
         <Section title="Projects">
           <div className="space-y-2">
             {resume.projects.map((p, i) => (
@@ -544,11 +578,11 @@ function formatResumeAsText(
   l.push("");
   if (resume.summary) { l.push("PROFESSIONAL SUMMARY"); l.push(resume.summary); l.push(""); }
   l.push("SKILLS");
-  if (resume.skills.technical.length) l.push(`Technical: ${resume.skills.technical.join(", ")}`);
-  if (resume.skills.tools.length) l.push(`Tools: ${resume.skills.tools.join(", ")}`);
-  if (resume.skills.soft.length) l.push(`Soft Skills: ${resume.skills.soft.join(", ")}`);
+  if (resume.skills?.technical?.length) l.push(`Technical: ${resume.skills.technical.join(", ")}`);
+  if (resume.skills?.tools?.length) l.push(`Tools: ${resume.skills.tools.join(", ")}`);
+  if (resume.skills?.soft?.length) l.push(`Soft Skills: ${resume.skills.soft.join(", ")}`);
   l.push("");
-  if (resume.experience.length) {
+  if (resume.experience?.length) {
     l.push("EXPERIENCE");
     for (const e of resume.experience) {
       const loc = e.location ? ` | ${e.location}` : "";
@@ -557,12 +591,12 @@ function formatResumeAsText(
       l.push("");
     }
   }
-  if (resume.education.length) {
+  if (resume.education?.length) {
     l.push("EDUCATION");
     for (const e of resume.education) l.push(`${e.degree} - ${e.school} (${e.year})`);
     l.push("");
   }
-  if (resume.projects.length) {
+  if (resume.projects?.length) {
     l.push("PROJECTS");
     for (const p of resume.projects) {
       l.push(`${p.name}: ${p.description}`);
