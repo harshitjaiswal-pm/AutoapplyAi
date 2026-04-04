@@ -248,7 +248,8 @@ async function handleTailorAndFill(job) {
       });
       console.log("AutoApply BG: Step 3 done. PDF generated.");
     } else {
-      console.warn("AutoApply BG: PDF export failed:", pdfRes.status, "— continuing without PDF");
+      const errBody = await pdfRes.text().catch(() => "");
+      console.warn(`AutoApply BG: PDF export failed: ${pdfRes.status} — ${errBody.substring(0, 200)}`);
     }
   } catch (pdfErr) {
     console.warn("AutoApply BG: PDF export error:", pdfErr, "— continuing without PDF");

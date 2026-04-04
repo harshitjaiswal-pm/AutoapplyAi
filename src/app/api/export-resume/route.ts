@@ -465,24 +465,32 @@ async function generatePdf(resume: any) {
   if (resume.experience?.length) {
     heading("Experience");
     for (const exp of resume.experience) {
+      if (!exp) continue;
       checkPage(40);
+      const role = String(exp.role || "");
+      const company = String(exp.company || "");
+      const startDate = String(exp.startDate || "");
+      const endDate = String(exp.endDate || "Present");
+      const location = String(exp.location || "");
+      if (!role && !company) continue;
       // Line 1: Role (left) + Location (right)
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.setTextColor(27, 42, 74);
-      doc.text(exp.role, margin, y);
-      if (exp.location) {
+      if (role) doc.text(role, margin, y);
+      if (location) {
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
         doc.setTextColor(100, 100, 100);
-        doc.text(exp.location, pageWidth - margin, y, { align: "right" });
+        doc.text(location, pageWidth - margin, y, { align: "right" });
       }
       y += 14;
       // Line 2: Company | Dates
       doc.setFont("helvetica", "italic");
       doc.setFontSize(9);
       doc.setTextColor(100, 100, 100);
-      doc.text(`${exp.company} | ${exp.startDate} – ${exp.endDate}`, margin, y);
+      const dateLine = [company, startDate && endDate ? `${startDate} – ${endDate}` : ""].filter(Boolean).join(" | ");
+      if (dateLine) doc.text(dateLine, margin, y);
       y += 12;
       // Bullets
       for (const bullet of exp.bullets || []) {
@@ -505,18 +513,23 @@ async function generatePdf(resume: any) {
   if (resume.education?.length) {
     heading("Education");
     for (const edu of resume.education) {
+      if (!edu) continue;
       checkPage(28);
+      const degree = String(edu.degree || "");
+      const year = String(edu.year || "");
+      const school = String(edu.school || "");
+      if (!degree && !school) continue;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.setTextColor(27, 42, 74);
-      doc.text(edu.degree, margin, y);
+      if (degree) doc.text(degree, margin, y);
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
       doc.setTextColor(100, 100, 100);
-      doc.text(edu.year, pageWidth - margin, y, { align: "right" });
+      if (year) doc.text(year, pageWidth - margin, y, { align: "right" });
       y += 14;
       doc.setFont("helvetica", "italic");
-      doc.text(edu.school, margin, y);
+      if (school) doc.text(school, margin, y);
       y += 14;
     }
   }
@@ -525,18 +538,22 @@ async function generatePdf(resume: any) {
   if (resume.projects?.length) {
     heading("Projects");
     for (const proj of resume.projects) {
+      if (!proj) continue;
       checkPage(28);
+      const projName = String(proj.name || "");
+      const projDesc = String(proj.description || "");
+      if (!projName) continue;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.setTextColor(27, 42, 74);
-      doc.text(proj.name, margin, y);
+      doc.text(projName, margin, y);
       y += 13;
-      wrappedText(proj.description, 9, false, 0);
+      if (projDesc) wrappedText(projDesc, 9, false, 0);
       if (proj.technologies?.length) {
         doc.setFont("helvetica", "italic");
         doc.setFontSize(8);
         doc.setTextColor(100, 100, 100);
-        doc.text(`Tech: ${proj.technologies.join(", ")}`, margin, y);
+        doc.text(`Tech: ${proj.technologies.filter(Boolean).join(", ")}`, margin, y);
         y += 12;
       }
       y += 4;

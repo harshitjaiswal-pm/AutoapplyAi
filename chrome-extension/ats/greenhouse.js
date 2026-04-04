@@ -164,22 +164,27 @@
       if (value && fillByLabel(labels, value)) filled++;
     }
 
-    // ── Select / dropdown fields ──
+    // ── Select / dropdown fields (handled async after text fields) ──
+    // Greenhouse uses React Select — needs click simulation, not native select API
     const dropdownFields = [
-      { labels: ["state", "province", "reside in"],       value: user.province },
-      { labels: ["how did you", "hear about", "learn about", "find out"], value: user.howDidYouHear || "LinkedIn" },
-      { labels: ["pronouns"],                              value: user.pronouns },
-      { labels: ["sponsorship", "immigration", "work authorization", "visa"], value: user.requireSponsorship === "No" ? "No" : user.requireSponsorship },
-      { labels: ["gender"],                                value: user.gender },
-      { labels: ["race", "ethnicity"],                     value: user.ethnicity },
-      { labels: ["veteran"],                               value: user.veteranStatus },
-      { labels: ["disability"],                            value: user.disabilityStatus },
-      { labels: ["previously been employed", "worked here before"], value: "No" },
+      { labels: ["pronouns"],                                                  value: user.pronouns },
+      { labels: ["sponsorship", "immigration", "require immigration"],         value: user.requireSponsorship === "No" ? "No" : user.requireSponsorship },
+      { labels: ["state", "province", "reside in"],                           value: user.province },
+      { labels: ["how did you", "hear about", "learn about", "first learn"],  value: user.howDidYouHear || "LinkedIn" },
+      { labels: ["gender"],                                                    value: user.gender },
+      { labels: ["race", "ethnicity"],                                         value: user.ethnicity },
+      { labels: ["veteran"],                                                   value: user.veteranStatus },
+      { labels: ["disability"],                                                value: user.disabilityStatus },
+      { labels: ["previously been employed", "worked here", "employed at"],   value: "No" },
     ];
 
-    for (const { labels, value } of dropdownFields) {
-      if (value) fillSelect(labels, value);
-    }
+    // Fill dropdowns sequentially with delays (React Select needs time to open/close)
+    (async () => {
+      for (const { labels, value } of dropdownFields) {
+        if (value) await fillReactSelect(labels, value);
+      }
+      console.log("AutoApply: Finished filling dropdowns");
+    })();
 
     // ── Cover letter ──
     // Only fill textareas explicitly labeled as cover letter — NOT "Other Links" or generic fields
@@ -312,53 +317,110 @@
     return false;
   }
 
-  function fillSelect(labelTexts, value) {
+  /**
+   * Fill a Greenhouse React Select dropdown by clicking it open and selecting the option.
+   * Greenhouse uses React Select which renders as custom divs, not native <select>.
+   */
+  async function fillReactSelect(labelTexts, value) {
     if (!value) return false;
     const valueLower = value.toLowerCase();
 
-    // Strategy 1: native <select> elements matched by label text
+    // First try native <select> (some Greenhouse forms use them)
     const selects = document.querySelectorAll("select");
     for (const select of selects) {
       const label = getFieldLabel(select).toLowerCase();
       if (!labelTexts.some((t) => label.includes(t))) continue;
-
       const options = Array.from(select.options);
-      // Exact match first, then partial
       const match =
         options.find((o) => o.text.toLowerCase() === valueLower) ||
         options.find((o) => o.text.toLowerCase().includes(valueLower)) ||
         options.find((o) => valueLower.includes(o.text.toLowerCase()) && o.text.length > 3);
-
       if (match) {
         select.value = match.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
-        console.log(`AutoApply: Set select "${label}" → "${match.text}"`);
+        console.log(`AutoApply: Set native select "${label}" → "${match.text}"`);
         return true;
-      } else {
-        console.log(`AutoApply: No match for "${value}" in select "${label}". Options:`,
-          options.map((o) => o.text).join(", "));
       }
     }
 
-    // Strategy 2: Greenhouse custom select (li-based dropdown)
-    // Greenhouse renders selects as styled <ul><li> lists
-    const allLabels = document.querySelectorAll("label");
+    // Find the React Select control matching our label
+    // Greenhouse wraps each field in a div: label → select control
+    const allLabels = document.querySelectorAll("label, span, div");
     for (const labelEl of allLabels) {
-      const text = labelEl.textContent?.trim().toLowerCase() || "";
+      const text = labelEl.textContent?.trim().toLowerCase().replace(/\*$/, "") || "";
+      if (text.length > 100) continue;
       if (!labelTexts.some((t) => text.includes(t))) continue;
 
-      // Find the associated custom select container
-      const container = labelEl.closest("div, fieldset, section, li") ||
-                        labelEl.parentElement?.parentElement;
+      // Find the React Select control nearby
+      const container = labelEl.closest("div[class], fieldset, li, section") ||
+                        labelEl.parentElement;
       if (!container) continue;
 
-      // Look for a clickable trigger
-      const trigger = container.querySelector(
-        '[class*="select"], [role="combobox"], [data-react-select], button'
+      // React Select control: has "select__control" class or role="combobox"
+      const control = container.querySelector(
+        '[class*="select__control"], [class*="Select__control"], ' +
+        '[role="combobox"], [class*="dropdown__control"], ' +
+        '[class*="react-select__control"]'
+      ) || container.nextElementSibling?.querySelector(
+        '[class*="select__control"], [role="combobox"]'
       );
-      if (trigger) {
-        console.log(`AutoApply: Found custom dropdown for "${text}" — needs manual selection: "${value}"`);
+
+      if (!control) {
+        // Try looking up two levels for wider search
+        const parent = container.parentElement;
+        const widerControl = parent?.querySelector(
+          '[class*="select__control"], [role="combobox"]'
+        );
+        if (!widerControl) continue;
       }
+
+      const target = control || container.querySelector('[class*="select"]');
+      if (!target) continue;
+
+      console.log(`AutoApply: Clicking React Select for "${text}"`);
+      target.click();
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+
+      // Wait for the dropdown menu to appear
+      await new Promise((r) => setTimeout(r, 400));
+
+      // Find the option menu — React Select appends it to the container or body
+      const menu =
+        container.querySelector('[class*="select__menu"], [class*="Select__menu"]') ||
+        container.parentElement?.querySelector('[class*="select__menu"]') ||
+        document.querySelector('[class*="select__menu"]:not([style*="display: none"])');
+
+      if (!menu) {
+        console.log(`AutoApply: Dropdown menu didn't appear for "${text}"`);
+        // Press Escape to close any partial state
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        continue;
+      }
+
+      // Find matching option
+      const optionEls = menu.querySelectorAll('[class*="select__option"], [class*="Select__option"], li, [role="option"]');
+      let matched = false;
+      for (const opt of optionEls) {
+        const optText = opt.textContent?.trim().toLowerCase() || "";
+        if (optText === valueLower || optText.includes(valueLower) || valueLower.includes(optText) && optText.length > 3) {
+          console.log(`AutoApply: Selecting option "${opt.textContent?.trim()}" for "${text}"`);
+          opt.click();
+          opt.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          matched = true;
+          await new Promise((r) => setTimeout(r, 300));
+          break;
+        }
+      }
+
+      if (!matched) {
+        console.log(`AutoApply: No matching option for "${value}" in "${text}". Available:`,
+          Array.from(optionEls).map((o) => o.textContent?.trim()).join(", "));
+        // Close dropdown
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      }
+
+      await new Promise((r) => setTimeout(r, 200));
+      return matched;
     }
 
     return false;
