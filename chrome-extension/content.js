@@ -24,6 +24,28 @@
   let appliedCount = 0;
   let skippedCount = 0;
 
+  /** Persist scrapedJobs & selectedJobIds to chrome.storage so they survive re-renders */
+  function persistState() {
+    chrome.storage.local.set({
+      _aa_scrapedJobs: scrapedJobs,
+      _aa_selectedIds: [...selectedJobIds],
+    });
+  }
+
+  /** Restore state from chrome.storage on init */
+  function restoreState() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(["_aa_scrapedJobs", "_aa_selectedIds"], (result) => {
+        if (result._aa_scrapedJobs && Array.isArray(result._aa_scrapedJobs) && result._aa_scrapedJobs.length > 0) {
+          scrapedJobs = result._aa_scrapedJobs;
+          selectedJobIds = new Set(result._aa_selectedIds || []);
+          console.log(`AutoApply: Restored ${scrapedJobs.length} jobs from storage`);
+        }
+        resolve();
+      });
+    });
+  }
+
   /* ─────────────────────── SCRAPING ─────────────────────── */
 
   /**
@@ -372,6 +394,8 @@
     if (!stored.parsedResume) {
       updateStatus("No resume found. Upload your resume on the AutoApply pipeline page first.", "error");
       isApplying = false;
+      renderJobList();
+      updateStartButton();
       return;
     }
 
@@ -555,6 +579,7 @@
     scan.addEventListener("click", () => {
       scrapedJobs = scrapeJobCards();
       selectedJobIds.clear();
+      persistState();
       renderJobList();
       updateStatus(`Found ${scrapedJobs.length} jobs on this page`);
     });
@@ -565,6 +590,7 @@
       } else {
         scrapedJobs.forEach((j) => selectedJobIds.add(j.id));
       }
+      persistState();
       renderJobList();
       updateStartButton();
     });
@@ -669,6 +695,7 @@
           const id = item.getAttribute("data-job-id");
           if (selectedJobIds.has(id)) selectedJobIds.delete(id);
           else selectedJobIds.add(id);
+          persistState();
           renderJobList();
           updateStartButton();
         });
@@ -691,4 +718,13 @@
 
   // Initialize
   createFloatingUI();
+
+  // Restore previously scanned jobs from chrome.storage (survives SPA navigation & re-injection)
+  restoreState().then(() => {
+    if (scrapedJobs.length > 0) {
+      renderJobList();
+      updateStartButton();
+      updateStatus(`Restored ${scrapedJobs.length} jobs from previous scan`);
+    }
+  });
 })();

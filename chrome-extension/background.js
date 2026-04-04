@@ -57,7 +57,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "CLEAR_SCRAPED_JOBS") {
-    chrome.storage.local.remove(["scrapedJobs", "pendingJobs", "pendingApplication"], () => {
+    chrome.storage.local.remove(["scrapedJobs", "pendingJobs", "pendingApplication", "_aa_scrapedJobs", "_aa_selectedIds"], () => {
       sendResponse({ success: true });
     });
     return true;
