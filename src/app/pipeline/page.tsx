@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   useAppStore,
@@ -11,7 +11,15 @@ import {
 } from "@/store/useAppStore";
 import { runBatch, generateJobId } from "@/lib/batchProcessor";
 
-export default function PipelinePage() {
+export default function PipelinePageWrapper() {
+  return (
+    <Suspense fallback={<div className="max-w-5xl mx-auto py-10 text-center text-neutral-400">Loading pipeline...</div>}>
+      <PipelinePage />
+    </Suspense>
+  );
+}
+
+function PipelinePage() {
   const {
     pipelineJobs,
     pipelineResumeText,
