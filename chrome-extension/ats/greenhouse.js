@@ -318,14 +318,15 @@
   }
 
   /**
-   * Fill a Greenhouse React Select dropdown by clicking it open and selecting the option.
-   * Greenhouse uses React Select which renders as custom divs, not native <select>.
+   * Fill a Greenhouse React Select dropdown.
+   * Strategy: find all "Select..." placeholder elements, match to our field by
+   * scanning up to the nearest label, then click to open and pick the option.
    */
   async function fillReactSelect(labelTexts, value) {
     if (!value) return false;
     const valueLower = value.toLowerCase();
 
-    // First try native <select> (some Greenhouse forms use them)
+    // Strategy 1: native <select> first
     const selects = document.querySelectorAll("select");
     for (const select of selects) {
       const label = getFieldLabel(select).toLowerCase();
@@ -338,91 +339,91 @@
       if (match) {
         select.value = match.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
-        console.log(`AutoApply: Set native select "${label}" → "${match.text}"`);
+        console.log(`AutoApply: Set native select for "${label}" -> "${match.text}"`);
         return true;
       }
     }
 
-    // Find the React Select control matching our label
-    // Greenhouse wraps each field in a div: label → select control
-    const allLabels = document.querySelectorAll("label, span, div");
-    for (const labelEl of allLabels) {
-      const text = labelEl.textContent?.trim().toLowerCase().replace(/\*$/, "") || "";
-      if (text.length > 100) continue;
-      if (!labelTexts.some((t) => text.includes(t))) continue;
+    // Strategy 2: React Select — find by matching label text anywhere on page,
+    // then find the select control inside the same field wrapper
+    const allPageLabels = document.querySelectorAll("label");
+    for (const labelEl of allPageLabels) {
+      const labelText = (labelEl.textContent || "").trim().toLowerCase().replace(/\s*\*\s*$/, "");
+      if (!labelTexts.some((t) => labelText.includes(t))) continue;
 
-      // Find the React Select control nearby
-      const container = labelEl.closest("div[class], fieldset, li, section") ||
-                        labelEl.parentElement;
-      if (!container) continue;
+      // The field wrapper is usually the label's parent or grandparent
+      const wrapper = labelEl.parentElement?.parentElement || labelEl.parentElement;
+      if (!wrapper) continue;
 
-      // React Select control: has "select__control" class or role="combobox"
-      const control = container.querySelector(
-        '[class*="select__control"], [class*="Select__control"], ' +
-        '[role="combobox"], [class*="dropdown__control"], ' +
-        '[class*="react-select__control"]'
-      ) || container.nextElementSibling?.querySelector(
-        '[class*="select__control"], [role="combobox"]'
-      );
+      // Find the clickable React Select control — Greenhouse uses a div with
+      // the dropdown arrow as a child
+      const control =
+        wrapper.querySelector('[class*="select__control"]') ||
+        wrapper.querySelector('[class*="Select__control"]') ||
+        wrapper.querySelector('[class*="dropdown-indicator"]')?.closest('[class*="select"]') ||
+        // Sometimes it's a sibling of the label's parent
+        labelEl.parentElement?.nextElementSibling?.querySelector('[class*="select__control"]');
 
       if (!control) {
-        // Try looking up two levels for wider search
-        const parent = container.parentElement;
-        const widerControl = parent?.querySelector(
-          '[class*="select__control"], [role="combobox"]'
-        );
-        if (!widerControl) continue;
+        console.log(`AutoApply: No React Select control found near label "${labelText}"`);
+        continue;
       }
 
-      const target = control || container.querySelector('[class*="select"]');
-      if (!target) continue;
+      console.log(`AutoApply: Opening dropdown for "${labelText}"`);
 
-      console.log(`AutoApply: Clicking React Select for "${text}"`);
-      target.click();
-      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      // Click to open
+      control.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      control.click();
 
-      // Wait for the dropdown menu to appear
-      await new Promise((r) => setTimeout(r, 400));
+      // Wait for options to render
+      await new Promise((r) => setTimeout(r, 600));
 
-      // Find the option menu — React Select appends it to the container or body
+      // The menu is usually appended to document.body or inside the wrapper
       const menu =
-        container.querySelector('[class*="select__menu"], [class*="Select__menu"]') ||
-        container.parentElement?.querySelector('[class*="select__menu"]') ||
-        document.querySelector('[class*="select__menu"]:not([style*="display: none"])');
+        document.querySelector('[class*="select__menu-list"]') ||
+        document.querySelector('[class*="select__menu"]') ||
+        document.querySelector('[class*="Select__menu"]');
 
       if (!menu) {
-        console.log(`AutoApply: Dropdown menu didn't appear for "${text}"`);
-        // Press Escape to close any partial state
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        console.log(`AutoApply: Menu did not open for "${labelText}"`);
+        document.body.click(); // close any partial state
+        await new Promise((r) => setTimeout(r, 200));
         continue;
       }
 
       // Find matching option
-      const optionEls = menu.querySelectorAll('[class*="select__option"], [class*="Select__option"], li, [role="option"]');
-      let matched = false;
-      for (const opt of optionEls) {
-        const optText = opt.textContent?.trim().toLowerCase() || "";
-        if (optText === valueLower || optText.includes(valueLower) || valueLower.includes(optText) && optText.length > 3) {
-          console.log(`AutoApply: Selecting option "${opt.textContent?.trim()}" for "${text}"`);
-          opt.click();
+      const opts = menu.querySelectorAll('[class*="select__option"], [class*="Select__option"], [role="option"]');
+      console.log(`AutoApply: "${labelText}" has ${opts.length} options`);
+
+      let picked = false;
+      for (const opt of opts) {
+        const optText = (opt.textContent || "").trim().toLowerCase();
+        if (
+          optText === valueLower ||
+          optText.includes(valueLower) ||
+          (valueLower.includes(optText) && optText.length > 3)
+        ) {
+          console.log(`AutoApply: Picking "${opt.textContent?.trim()}" for "${labelText}"`);
           opt.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          matched = true;
-          await new Promise((r) => setTimeout(r, 300));
+          opt.click();
+          picked = true;
+          await new Promise((r) => setTimeout(r, 400));
           break;
         }
       }
 
-      if (!matched) {
-        console.log(`AutoApply: No matching option for "${value}" in "${text}". Available:`,
-          Array.from(optionEls).map((o) => o.textContent?.trim()).join(", "));
-        // Close dropdown
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      if (!picked) {
+        console.log(`AutoApply: No match for "${value}" in "${labelText}". Options: ` +
+          Array.from(opts).map((o) => o.textContent?.trim()).join(" | "));
+        // Close menu
+        document.body.click();
+        await new Promise((r) => setTimeout(r, 200));
       }
 
-      await new Promise((r) => setTimeout(r, 200));
-      return matched;
+      return picked;
     }
 
+    console.log(`AutoApply: Label not found for`, labelTexts);
     return false;
   }
 

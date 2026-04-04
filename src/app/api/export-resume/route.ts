@@ -358,6 +358,26 @@ async function generateDocx(resume: any) {
  * Generate a PDF resume using jsPDF.
  * Clean, single-column, ATS-friendly format.
  */
+/**
+ * Sanitize text for jsPDF — Helvetica only supports Latin-1 (ISO-8859-1).
+ * Replace common special characters with ASCII equivalents.
+ */
+function sanitizeForPdf(text: string): string {
+  if (!text) return "";
+  return String(text)
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")   // Smart single quotes
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')   // Smart double quotes
+    .replace(/\u2013/g, "-")                        // En dash
+    .replace(/\u2014/g, "--")                       // Em dash
+    .replace(/\u2022/g, "*")                        // Bullet (we draw our own)
+    .replace(/\u2026/g, "...")                      // Ellipsis
+    .replace(/\u2192/g, "->")                       // Right arrow
+    .replace(/\u2190/g, "<-")                       // Left arrow
+    .replace(/\u00B7/g, "-")                        // Middle dot
+    .replace(/\u00A0/g, " ")                        // Non-breaking space
+    .replace(/[^\x00-\xFF]/g, "");                  // Strip any remaining non-Latin-1
+}
+
 async function generatePdf(resume: any) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "letter" });
@@ -378,7 +398,7 @@ async function generatePdf(resume: any) {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
   doc.setTextColor(27, 42, 74); // Navy
-  const name = resume.contactInfo?.name || "Your Name";
+  const name = sanitizeForPdf(resume.contactInfo?.name || "Your Name");
   doc.text(name, pageWidth / 2, y, { align: "center" });
   y += 22;
 
@@ -387,13 +407,12 @@ async function generatePdf(resume: any) {
   doc.setFontSize(9);
   doc.setTextColor(100, 100, 100);
   const contact = [resume.contactInfo?.email, resume.contactInfo?.phone, resume.contactInfo?.location]
-    .filter(Boolean)
-    .join("  |  ");
-  doc.text(contact, pageWidth / 2, y, { align: "center" });
-  y += 14;
+    .filter(Boolean).map(sanitizeForPdf).join("  |  ");
+  if (contact) { doc.text(contact, pageWidth / 2, y, { align: "center" }); y += 14; }
 
   if (resume.contactInfo?.linkedin || resume.contactInfo?.portfolio) {
-    const links = [resume.contactInfo.linkedin, resume.contactInfo.portfolio].filter(Boolean).join("  |  ");
+    const links = [resume.contactInfo.linkedin, resume.contactInfo.portfolio]
+      .filter(Boolean).map(sanitizeForPdf).join("  |  ");
     doc.text(links, pageWidth / 2, y, { align: "center" });
     y += 14;
   }
@@ -402,7 +421,7 @@ async function generatePdf(resume: any) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     doc.setTextColor(27, 42, 74);
-    doc.text(resume.contactInfo.authorization, pageWidth / 2, y, { align: "center" });
+    doc.text(sanitizeForPdf(resume.contactInfo.authorization), pageWidth / 2, y, { align: "center" });
     y += 14;
   }
 
@@ -418,16 +437,18 @@ async function generatePdf(resume: any) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(27, 42, 74);
-    doc.text(text.toUpperCase(), margin, y);
+    doc.text(sanitizeForPdf(text).toUpperCase(), margin, y);
     y += 16;
   };
 
-  // Helper: wrapped text
+  // Helper: wrapped text (sanitizes automatically)
   const wrappedText = (text: string, fontSize: number, bold = false, indent = 0) => {
+    const clean = sanitizeForPdf(text);
+    if (!clean) return;
     doc.setFont("helvetica", bold ? "bold" : "normal");
     doc.setFontSize(fontSize);
     doc.setTextColor(50, 50, 50);
-    const lines = doc.splitTextToSize(text, contentWidth - indent);
+    const lines = doc.splitTextToSize(clean, contentWidth - indent);
     for (const line of lines) {
       checkPage(14);
       doc.text(line, margin + indent, y);
@@ -450,13 +471,13 @@ async function generatePdf(resume: any) {
   if (allSkills.length) {
     heading("Skills");
     if (resume.skills?.technical?.length) {
-      wrappedText(`Technical: ${resume.skills.technical.join(", ")}`, 10);
+      wrappedText(`Technical: ${resume.skills.technical.filter(Boolean).join(", ")}`, 10);
     }
     if (resume.skills?.tools?.length) {
-      wrappedText(`Tools: ${resume.skills.tools.join(", ")}`, 10);
+      wrappedText(`Tools: ${resume.skills.tools.filter(Boolean).join(", ")}`, 10);
     }
     if (resume.skills?.soft?.length) {
-      wrappedText(`Soft Skills: ${resume.skills.soft.join(", ")}`, 10);
+      wrappedText(`Soft Skills: ${resume.skills.soft.filter(Boolean).join(", ")}`, 10);
     }
     y += 4;
   }
@@ -467,11 +488,11 @@ async function generatePdf(resume: any) {
     for (const exp of resume.experience) {
       if (!exp) continue;
       checkPage(40);
-      const role = String(exp.role || "");
-      const company = String(exp.company || "");
-      const startDate = String(exp.startDate || "");
-      const endDate = String(exp.endDate || "Present");
-      const location = String(exp.location || "");
+      const role = sanitizeForPdf(String(exp.role || ""));
+      const company = sanitizeForPdf(String(exp.company || ""));
+      const startDate = sanitizeForPdf(String(exp.startDate || ""));
+      const endDate = sanitizeForPdf(String(exp.endDate || "Present"));
+      const location = sanitizeForPdf(String(exp.location || ""));
       if (!role && !company) continue;
       // Line 1: Role (left) + Location (right)
       doc.setFont("helvetica", "bold");
@@ -489,17 +510,19 @@ async function generatePdf(resume: any) {
       doc.setFont("helvetica", "italic");
       doc.setFontSize(9);
       doc.setTextColor(100, 100, 100);
-      const dateLine = [company, startDate && endDate ? `${startDate} – ${endDate}` : ""].filter(Boolean).join(" | ");
+      const dateLine = [company, startDate && endDate ? `${startDate} - ${endDate}` : ""].filter(Boolean).join(" | ");
       if (dateLine) doc.text(dateLine, margin, y);
       y += 12;
       // Bullets
       for (const bullet of exp.bullets || []) {
+        if (!bullet) continue;
         checkPage(14);
+        const cleanBullet = sanitizeForPdf(String(bullet));
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
         doc.setTextColor(50, 50, 50);
-        doc.text("\u2022", margin + 8, y);
-        const bulletLines = doc.splitTextToSize(bullet, contentWidth - 24);
+        doc.text("-", margin + 8, y);
+        const bulletLines = doc.splitTextToSize(cleanBullet, contentWidth - 28);
         for (const line of bulletLines) {
           doc.text(line, margin + 20, y);
           y += 12;
@@ -515,9 +538,9 @@ async function generatePdf(resume: any) {
     for (const edu of resume.education) {
       if (!edu) continue;
       checkPage(28);
-      const degree = String(edu.degree || "");
-      const year = String(edu.year || "");
-      const school = String(edu.school || "");
+      const degree = sanitizeForPdf(String(edu.degree || ""));
+      const year = sanitizeForPdf(String(edu.year || ""));
+      const school = sanitizeForPdf(String(edu.school || ""));
       if (!degree && !school) continue;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
@@ -540,8 +563,8 @@ async function generatePdf(resume: any) {
     for (const proj of resume.projects) {
       if (!proj) continue;
       checkPage(28);
-      const projName = String(proj.name || "");
-      const projDesc = String(proj.description || "");
+      const projName = sanitizeForPdf(String(proj.name || ""));
+      const projDesc = sanitizeForPdf(String(proj.description || ""));
       if (!projName) continue;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
