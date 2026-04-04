@@ -24,44 +24,82 @@
 
     const pendingJob = stored.pendingApplication;
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
-    showBanner("AutoApply: Tailoring your resume...");
+    showBanner("AutoApply: Preparing application...");
 
     try {
       // Try to scrape JD from whatever page we're on
       const pageJD = scrapeGenericJD();
       const jobDescription = pageJD || pendingJob.jobDescription;
 
-      const tailoredData = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-          type: "TAILOR_AND_FILL",
-          job: { ...pendingJob, jobDescription },
-        }, (response) => {
-          if (response?.error) reject(new Error(response.error));
-          else resolve(response);
-        });
-      });
+      if (!jobDescription || jobDescription.length < 30) {
+        showBanner("AutoApply: No job description found. Filling basic info only...", "info");
+      }
+
+      showBanner("AutoApply: Tailoring your resume (this may take 15-30s)...");
+
+      // Send to background with a timeout
+      const tailoredData = await sendMessageWithTimeout({
+        type: "TAILOR_AND_FILL",
+        job: { ...pendingJob, jobDescription },
+      }, 60000); // 60 second timeout
+
+      if (tailoredData?.error) {
+        console.error("AutoApply: Tailoring error:", tailoredData.error);
+        showBanner(`AutoApply: ${tailoredData.error}`, "error");
+        // Still try to fill basic profile info
+        await fillBasicProfile();
+        return;
+      }
 
       if (!tailoredData?.tailoredResult) {
-        showBanner("AutoApply: Tailoring failed. Please apply manually.", "error");
+        showBanner("AutoApply: Tailoring returned no data. Filling basic info...", "error");
+        await fillBasicProfile();
         return;
       }
 
       showBanner("AutoApply: Filling form fields...");
+      console.log("AutoApply: Got tailored result, match score:", tailoredData.matchScore);
 
       await fillGenericForm(tailoredData.tailoredResult, pendingJob);
 
+      // Request resume PDF download
       chrome.runtime.sendMessage({
         type: "DOWNLOAD_RESUME",
         job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
       });
 
-      showBanner("AutoApply: Fields filled where possible. Upload the downloaded resume and review.", "success");
+      showBanner(
+        "AutoApply: Fields filled! Upload the downloaded resume PDF and review before submitting.",
+        "success"
+      );
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {
       console.error("AutoApply: Generic ATS error", err);
-      showBanner(`AutoApply: Error — ${err.message}`, "error");
+      showBanner(`AutoApply: Error — ${err.message}. Filling basic info...`, "error");
+      // Still try to fill basic profile info even if tailoring fails
+      await fillBasicProfile();
     }
+  }
+
+  /**
+   * Send a chrome.runtime message with a timeout.
+   */
+  function sendMessageWithTimeout(message, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("API request timed out after " + (timeoutMs / 1000) + "s"));
+      }, timeoutMs);
+
+      chrome.runtime.sendMessage(message, (response) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
+    });
   }
 
   function scrapeGenericJD() {
@@ -70,8 +108,8 @@
       '[class*="description"]',
       '[class*="job-detail"]',
       '[id*="description"]',
-      'article',
-      'main',
+      "article",
+      "main",
     ];
 
     for (const sel of selectors) {
@@ -84,22 +122,62 @@
     return "";
   }
 
+  /**
+   * Fill just the basic profile fields (no tailored data needed).
+   * Used as fallback when tailoring fails.
+   */
+  async function fillBasicProfile() {
+    const profile = await chrome.storage.local.get(["userProfile"]);
+    const user = profile.userProfile || {};
+
+    if (!user.firstName && !user.email) {
+      showBanner("AutoApply: No profile data found. Sync your profile from the pipeline page.", "error");
+      return;
+    }
+
+    const fieldMappings = [
+      { labels: ["first name", "given name", "prénom"], value: user.firstName },
+      { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
+      { labels: ["email", "e-mail", "email address"], value: user.email },
+      { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
+      { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
+    ];
+
+    let filled = 0;
+    for (const mapping of fieldMappings) {
+      if (!mapping.value) continue;
+      if (fillByLabel(mapping.labels, mapping.value)) filled++;
+    }
+
+    // Try full name field
+    if (user.firstName && user.lastName) {
+      if (fillByLabel(["full name", "your name"], `${user.firstName} ${user.lastName}`)) filled++;
+    }
+
+    if (filled > 0) {
+      showBanner(`AutoApply: Filled ${filled} fields with your profile info. Complete the rest manually.`, "success");
+    }
+  }
+
   async function fillGenericForm(tailoredResult, job) {
     const profile = await chrome.storage.local.get(["userProfile"]);
     const user = profile.userProfile || {};
 
-    // Try to find and fill common fields by label text
+    console.log("AutoApply: User profile:", JSON.stringify(user));
+
+    // Field mappings — order matters (specific first)
     const fieldMappings = [
       { labels: ["first name", "given name", "prénom"], value: user.firstName },
       { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
-      { labels: ["email", "e-mail"], value: user.email },
-      { labels: ["phone", "telephone", "mobile"], value: user.phone },
+      { labels: ["email", "e-mail", "email address"], value: user.email },
+      { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
       { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
     ];
 
+    let filled = 0;
     for (const mapping of fieldMappings) {
       if (!mapping.value) continue;
-      fillByLabel(mapping.labels, mapping.value);
+      if (fillByLabel(mapping.labels, mapping.value)) filled++;
     }
 
     // Fill cover letter in any large textarea
@@ -109,44 +187,93 @@
         const label = getFieldLabel(ta).toLowerCase();
         if (label.includes("cover") || label.includes("letter") ||
             label.includes("additional") || label.includes("message") ||
-            label.includes("comments")) {
-          ta.value = tailoredResult.coverLetter;
-          ta.dispatchEvent(new Event("input", { bubbles: true }));
-          ta.dispatchEvent(new Event("change", { bubbles: true }));
+            label.includes("comments") || label.includes("note")) {
+          setNativeValue(ta, tailoredResult.coverLetter);
+          filled++;
           break;
         }
       }
     }
 
-    // Try to fill "full name" field
+    // Try to fill "full name" field (only if we didn't fill first/last separately)
     if (user.firstName && user.lastName) {
-      fillByLabel(["full name", "name", "your name"], `${user.firstName} ${user.lastName}`);
+      fillByLabel(["full name", "your name"], `${user.firstName} ${user.lastName}`);
     }
+
+    console.log(`AutoApply: Filled ${filled} fields`);
+    return filled;
+  }
+
+  /**
+   * Set a form input value in a way that works with React, Vue, Angular, etc.
+   * React overrides the native .value setter, so we need to use the native one
+   * and dispatch proper events.
+   */
+  function setNativeValue(element, value) {
+    // Use the native HTMLInputElement/HTMLTextAreaElement value setter
+    // This bypasses React's synthetic event system
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value"
+    )?.set;
+    const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, "value"
+    )?.set;
+
+    const setter = element.tagName === "TEXTAREA" ? nativeTextareaValueSetter : nativeInputValueSetter;
+
+    if (setter) {
+      setter.call(element, value);
+    } else {
+      element.value = value;
+    }
+
+    // Dispatch events that React and other frameworks listen for
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    // React 17+ also listens for this
+    element.dispatchEvent(new Event("blur", { bubbles: true }));
   }
 
   function fillByLabel(labelTexts, value) {
-    if (!value) return;
+    if (!value) return false;
 
     // Strategy 1: match <label> elements
     const labels = document.querySelectorAll("label");
     for (const label of labels) {
-      const labelText = label.textContent?.trim().toLowerCase() || "";
-      if (labelTexts.some((t) => labelText.includes(t))) {
+      const labelText = label.textContent?.trim().toLowerCase().replace(/\*$/, "").trim() || "";
+      if (labelTexts.some((t) => labelText.includes(t) || labelText === t)) {
         const forId = label.getAttribute("for");
-        const input = forId
-          ? document.getElementById(forId)
-          : label.closest("div, fieldset, li")?.querySelector("input, textarea, select");
-        if (input && !input.value) {
-          input.value = value;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          return;
+        let input = forId ? document.getElementById(forId) : null;
+
+        // If no for attribute, search nearby
+        if (!input) {
+          // Look in same parent container
+          const container = label.closest("div, fieldset, li, section");
+          input = container?.querySelector("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea, select");
+        }
+
+        // Also try the next sibling element
+        if (!input) {
+          let sibling = label.nextElementSibling;
+          if (sibling?.tagName === "DIV") {
+            input = sibling.querySelector("input, textarea");
+          } else if (sibling?.tagName === "INPUT" || sibling?.tagName === "TEXTAREA") {
+            input = sibling;
+          }
+        }
+
+        if (input) {
+          console.log(`AutoApply: Filling "${labelText}" with "${value.substring(0, 20)}..."`);
+          setNativeValue(input, value);
+          return true;
         }
       }
     }
 
-    // Strategy 2: match by placeholder text
-    const inputs = document.querySelectorAll("input, textarea");
+    // Strategy 2: match by placeholder, name, id, or aria-label
+    const inputs = document.querySelectorAll(
+      "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
+    );
     for (const input of inputs) {
       const placeholder = (input.placeholder || "").toLowerCase();
       const name = (input.name || "").toLowerCase();
@@ -157,17 +284,38 @@
         placeholder.includes(t) || name.includes(t) || id.includes(t) || ariaLabel.includes(t)
       )) {
         if (!input.value) {
-          input.value = value;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          return;
+          console.log(`AutoApply: Filling input (${name || id || placeholder}) with "${value.substring(0, 20)}..."`);
+          setNativeValue(input, value);
+          return true;
         }
       }
     }
+
+    // Strategy 3: match by visible text near the input (for React-style forms
+    // where label is rendered as a separate element without 'for' attribute)
+    const allTexts = document.querySelectorAll("span, p, div, h3, h4, h5, h6, strong, b");
+    for (const textEl of allTexts) {
+      const text = textEl.textContent?.trim().toLowerCase().replace(/\*$/, "").trim() || "";
+      if (text.length > 50) continue; // Skip long text blocks
+      if (!labelTexts.some((t) => text === t || text.includes(t))) continue;
+
+      // Found matching text — look for an input nearby
+      const parent = textEl.closest("div, fieldset, section, li");
+      if (!parent) continue;
+      const input = parent.querySelector(
+        "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
+      );
+      if (input && !input.value) {
+        console.log(`AutoApply: Filling near text "${text}" with "${value.substring(0, 20)}..."`);
+        setNativeValue(input, value);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   function getFieldLabel(element) {
-    // Try to find the label for a form element
     const id = element.id;
     if (id) {
       const label = document.querySelector(`label[for="${id}"]`);
@@ -204,6 +352,7 @@
     banner.style.color = c.text;
     banner.style.borderBottom = `1px solid ${c.border}`;
     banner.textContent = message;
-    if (type !== "info") setTimeout(() => { if (banner) banner.remove(); }, 10000);
+    if (type === "success") setTimeout(() => { if (banner) banner.remove(); }, 15000);
+    if (type === "error") setTimeout(() => { if (banner) banner.remove(); }, 20000);
   }
 })();

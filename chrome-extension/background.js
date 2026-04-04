@@ -131,68 +131,97 @@ async function injectATSScript(tabId, url) {
  * Call the AutoApply API to tailor the resume for the given job.
  */
 async function handleTailorAndFill(job) {
-  const stored = await chrome.storage.local.get(["parsedResume", "autoapplyUrl"]);
+  const stored = await chrome.storage.local.get(["parsedResume", "autoapplyUrl", "userProfile"]);
 
   if (!stored.parsedResume) {
     throw new Error("No resume found. Upload your resume on the AutoApply pipeline page first.");
   }
 
   const apiUrl = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+  console.log("AutoApply BG: Using API URL:", apiUrl);
+  console.log("AutoApply BG: Has parsedResume:", !!stored.parsedResume);
+  console.log("AutoApply BG: Has userProfile:", !!stored.userProfile);
+  console.log("AutoApply BG: JD length:", job.jobDescription?.length || 0);
 
   // Step 1: Analyze the job description
-  console.log("AutoApply BG: Analyzing JD for", job.jobTitle);
-  const analyzeRes = await fetch(`${apiUrl}/api/analyze-job`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jobDescription: job.jobDescription }),
-  });
+  console.log("AutoApply BG: Step 1/3 — Analyzing JD for", job.jobTitle);
+  let analyzeRes;
+  try {
+    analyzeRes = await fetch(`${apiUrl}/api/analyze-job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobDescription: job.jobDescription }),
+    });
+  } catch (fetchErr) {
+    console.error("AutoApply BG: Network error on analyze-job:", fetchErr);
+    throw new Error(`Network error calling analyze-job: ${fetchErr.message}`);
+  }
 
   if (!analyzeRes.ok) {
-    throw new Error(`Job analysis failed: ${analyzeRes.status}`);
+    const errBody = await analyzeRes.text().catch(() => "");
+    console.error("AutoApply BG: analyze-job failed:", analyzeRes.status, errBody);
+    throw new Error(`Job analysis failed (${analyzeRes.status}): ${errBody.substring(0, 100)}`);
   }
 
   const parsedJob = await analyzeRes.json();
+  console.log("AutoApply BG: Step 1 done. Parsed job title:", parsedJob.title || parsedJob.jobTitle);
 
   // Step 2: Tailor the resume
-  console.log("AutoApply BG: Tailoring resume for", job.jobTitle);
-  const tailorRes = await fetch(`${apiUrl}/api/tailor-resume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      parsedResume: stored.parsedResume,
-      parsedJob,
-      mode: "fast",
-    }),
-  });
+  console.log("AutoApply BG: Step 2/3 — Tailoring resume for", job.jobTitle);
+  let tailorRes;
+  try {
+    tailorRes = await fetch(`${apiUrl}/api/tailor-resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        parsedResume: stored.parsedResume,
+        parsedJob,
+        mode: "fast",
+      }),
+    });
+  } catch (fetchErr) {
+    console.error("AutoApply BG: Network error on tailor-resume:", fetchErr);
+    throw new Error(`Network error calling tailor-resume: ${fetchErr.message}`);
+  }
 
   if (!tailorRes.ok) {
-    throw new Error(`Resume tailoring failed: ${tailorRes.status}`);
+    const errBody = await tailorRes.text().catch(() => "");
+    console.error("AutoApply BG: tailor-resume failed:", tailorRes.status, errBody);
+    throw new Error(`Resume tailoring failed (${tailorRes.status}): ${errBody.substring(0, 100)}`);
   }
 
   const tailoredResult = await tailorRes.json();
+  console.log("AutoApply BG: Step 2 done. Match score:", tailoredResult.matchScore);
 
   // Step 3: Generate the resume PDF
-  console.log("AutoApply BG: Generating PDF for", job.jobTitle);
-  const pdfRes = await fetch(`${apiUrl}/api/export-resume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      resume: tailoredResult.tailoredResume,
-      format: "pdf",
-    }),
-  });
-
+  console.log("AutoApply BG: Step 3/3 — Generating PDF for", job.jobTitle);
   let resumeBlobUrl = null;
-  if (pdfRes.ok) {
-    const blob = await pdfRes.blob();
-    resumeBlobUrl = URL.createObjectURL(blob);
-
-    const arrayBuffer = await blob.arrayBuffer();
-    const base64 = arrayBufferToBase64(arrayBuffer);
-    await chrome.storage.local.set({
-      tailoredResumePdf: base64,
-      tailoredResumeFilename: `${job.company}_${job.jobTitle}_Resume.pdf`,
+  try {
+    const pdfRes = await fetch(`${apiUrl}/api/export-resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resume: tailoredResult.tailoredResume,
+        format: "pdf",
+      }),
     });
+
+    if (pdfRes.ok) {
+      const blob = await pdfRes.blob();
+      resumeBlobUrl = URL.createObjectURL(blob);
+
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      await chrome.storage.local.set({
+        tailoredResumePdf: base64,
+        tailoredResumeFilename: `${job.company}_${job.jobTitle}_Resume.pdf`,
+      });
+      console.log("AutoApply BG: Step 3 done. PDF generated.");
+    } else {
+      console.warn("AutoApply BG: PDF export failed:", pdfRes.status, "— continuing without PDF");
+    }
+  } catch (pdfErr) {
+    console.warn("AutoApply BG: PDF export error:", pdfErr, "— continuing without PDF");
   }
 
   await chrome.storage.local.set({
@@ -200,7 +229,7 @@ async function handleTailorAndFill(job) {
     lastTailoredJob: job,
   });
 
-  console.log("AutoApply BG: Tailoring complete. Score:", tailoredResult.matchScore);
+  console.log("AutoApply BG: All steps complete for", job.jobTitle);
 
   return {
     tailoredResult,

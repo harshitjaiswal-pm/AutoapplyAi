@@ -203,33 +203,60 @@
    * Returns the type: "external" | "easy_apply" | null
    */
   async function clickApplyButton() {
-    // Look for apply buttons in the detail panel
+    // Look for apply buttons in the detail panel (right side)
     const allButtons = document.querySelectorAll("button, a");
+
+    let bestApplyBtn = null;
+    let bestType = null;
 
     for (const btn of allButtons) {
       const text = (btn.textContent || "").trim().toLowerCase();
       const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+      const href = (btn.getAttribute("href") || "").toLowerCase();
 
       // Skip if it's inside the job list sidebar (has dismiss buttons nearby)
       if (btn.closest && btn.closest('[class*="jobs-search"]')) continue;
+      // Skip tiny or hidden buttons
+      if (btn.offsetWidth < 30 || btn.offsetHeight < 15) continue;
+      // Skip "Save" / "Share" / "Report" buttons
+      if (text.includes("save") || text.includes("share") || text.includes("report")) continue;
 
-      // External Apply button (usually an <a> link or button that opens new tab)
-      if (text === "apply" || ariaLabel.includes("apply to") ||
-          (text.includes("apply") && !text.includes("easy"))) {
+      // Detect Easy Apply first (check both text and aria-label)
+      if (text.includes("easy apply") || ariaLabel.includes("easy apply")) {
+        bestApplyBtn = btn;
+        bestType = "easy_apply";
+        continue; // Keep looking for an external Apply button which takes priority
+      }
 
-        // Check if it's Easy Apply
-        if (text.includes("easy apply") || ariaLabel.includes("easy apply")) {
-          return "easy_apply";
+      // External Apply button — usually has an external link icon or opens new tab
+      if ((text === "apply" || text === "apply now" ||
+           ariaLabel.includes("apply to") || ariaLabel.includes("apply for")) &&
+          !text.includes("easy")) {
+        // Prefer buttons that are links (external apply)
+        if (btn.tagName === "A" || href || btn.querySelector("svg") || ariaLabel.includes("opens")) {
+          bestApplyBtn = btn;
+          bestType = "external";
+          break; // External apply takes priority — stop looking
         }
-
-        // External apply — click it
-        btn.click();
-        await new Promise((r) => setTimeout(r, 1500));
-        return "external";
+        // Regular button with "Apply" text
+        if (!bestApplyBtn || bestType !== "external") {
+          bestApplyBtn = btn;
+          bestType = "external";
+        }
       }
     }
 
-    return null;
+    if (!bestApplyBtn) return null;
+
+    if (bestType === "easy_apply") {
+      // Don't click Easy Apply — just report it
+      return "easy_apply";
+    }
+
+    // External apply — click it
+    bestApplyBtn.click();
+    await new Promise((r) => setTimeout(r, 1500));
+    return "external";
   }
 
   /* ─────────────────────── AUTO-APPLY ENGINE ─────────────────────── */
