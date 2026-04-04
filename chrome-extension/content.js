@@ -1,9 +1,15 @@
 /**
  * CONTENT SCRIPT — Runs on LinkedIn job search pages.
  *
- * LinkedIn uses obfuscated/hashed class names that change frequently,
- * so we use stable anchors: dismiss buttons with aria-labels, innerText parsing,
- * and structural patterns rather than CSS class selectors.
+ * NEW FLOW (Auto-Apply):
+ * 1. User clicks "Scan Page" to find jobs
+ * 2. User selects jobs and clicks "Start Applying"
+ * 3. For each job: click card → scrape JD from detail panel → click Apply →
+ *    LinkedIn opens external site → background.js orchestrates tailoring →
+ *    ATS content script fills the form
+ *
+ * The extension focuses on EXTERNAL apply (not Easy Apply).
+ * LinkedIn uses obfuscated class names, so we use aria-labels and innerText.
  */
 
 (() => {
@@ -13,13 +19,15 @@
   // State
   let scrapedJobs = [];
   let selectedJobIds = new Set();
+  let isApplying = false;
+  let currentJobIndex = 0;
+  let appliedCount = 0;
+  let skippedCount = 0;
+
+  /* ─────────────────────── SCRAPING ─────────────────────── */
 
   /**
-   * Scrape all visible job cards from the search results.
-   *
-   * Strategy: LinkedIn's dismiss buttons have aria-label="Dismiss {Job Title} job"
-   * which is a stable, semantic anchor. We walk up the DOM from each dismiss button
-   * to find the card container, then parse innerText lines for title/company/location.
+   * Scrape all visible job cards using dismiss button aria-labels as anchors.
    */
   function scrapeJobCards() {
     const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
@@ -27,19 +35,13 @@
 
     dismissBtns.forEach((btn, index) => {
       try {
-        // Get reliable title from aria-label (e.g. "Dismiss Senior Product Manager job")
         const ariaLabel = btn.getAttribute("aria-label") || "";
-        const ariaTitle = ariaLabel
-          .replace(/^Dismiss\s+/i, "")
-          .replace(/\s+job$/i, "")
-          .trim();
+        const ariaTitle = ariaLabel.replace(/^Dismiss\s+/i, "").replace(/\s+job$/i, "").trim();
         if (!ariaTitle) return;
 
-        // Walk up to find the full card container (up to 6 levels)
         let card = btn;
         for (let i = 0; i < 6; i++) {
           if (card.parentElement) card = card.parentElement;
-          // Stop when we find the <li> or a container with enough text
           if (card.tagName === "LI" || card.getAttribute("data-occludable-job-id")) break;
         }
 
@@ -47,31 +49,22 @@
         if (!text || text.length < 10) return;
 
         const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-
-        // Smart company extraction:
-        // The title from aria-label is reliable. Find the title line in text,
-        // then the NEXT non-title, non-noise line is the company.
-        let company = "";
-        let location = "";
         const titleLower = ariaTitle.toLowerCase();
         const noiseWords = ["easy apply", "promoted", "verified", "actively recruiting", "viewed", "applied", "new", "dismiss"];
 
+        let company = "";
+        let location = "";
         let foundTitle = false;
         let companySet = false;
+
         for (const line of lines) {
           const lineLower = line.toLowerCase().replace(/\(verified job\)/i, "").trim();
-
-          // Skip the title line itself
           if (!foundTitle && (lineLower === titleLower || lineLower.includes(titleLower) || titleLower.includes(lineLower))) {
             foundTitle = true;
             continue;
           }
-
-          // Skip noise lines
-          if (noiseWords.some(n => lineLower === n || lineLower.startsWith(n))) continue;
-          // Skip very short lines (like "·" or numbers)
+          if (noiseWords.some((n) => lineLower === n || lineLower.startsWith(n))) continue;
           if (line.length < 2) continue;
-          // Skip lines that look like timestamps ("2 days ago", "Just now")
           if (/^\d+\s+(day|hour|minute|week|month)s?\s+ago$/i.test(line)) continue;
           if (/^just now$/i.test(line)) continue;
 
@@ -80,33 +73,26 @@
             companySet = true;
             continue;
           }
-
           if (!location) {
-            // Location often has format "City, State" or "City, Country" or has "(Remote)"
             location = line;
             break;
           }
         }
 
-        // Fallback: use line-based parsing if smart extraction failed
-        if (!company && lines.length >= 2) {
-          company = lines[1]?.replace(/\s*\(Verified job\)/i, "") || "";
-        }
-        if (!location && lines.length >= 3) {
-          location = lines[2] || "";
-        }
+        if (!company && lines.length >= 2) company = lines[1]?.replace(/\s*\(Verified job\)/i, "") || "";
+        if (!location && lines.length >= 3) location = lines[2] || "";
 
-        // Check for Easy Apply
         const easyApply = text.toLowerCase().includes("easy apply");
 
         jobs.push({
           id: `li_${Date.now()}_${index}`,
+          index, // original dismiss button index for clicking
           title: ariaTitle.replace(/\s*\(Verified job\)/i, ""),
           company,
           location,
-          url: "",
           easyApply,
           selected: false,
+          status: "pending", // pending | applying | applied | skipped | failed
         });
       } catch (e) {
         console.warn("AutoApply: Failed to parse job card", e);
@@ -117,86 +103,52 @@
   }
 
   /**
-   * Scrape the full job description from the right-side detail panel.
-   * LinkedIn uses hashed/obfuscated CSS classes, so we rely on semantic
-   * anchors like headings and aria-labels instead.
+   * Scrape JD from the right-side detail panel after clicking a job card.
    */
   function scrapeJobDescription() {
-    // Strategy 1: Find "About the job" heading and get its parent container's text
-    // LinkedIn always shows this heading above the actual JD content
-    const allHeadings = document.querySelectorAll("h2, h3, h4, span, div");
-    for (const el of allHeadings) {
+    // Strategy 1: "About the job" heading
+    const allElements = document.querySelectorAll("h2, h3, h4, span, div");
+    for (const el of allElements) {
       const text = el.textContent?.trim();
       if (text === "About the job" || text === "About this job") {
-        // Walk up to find a container that has the full description
         let container = el.parentElement;
         for (let i = 0; i < 5; i++) {
           if (!container) break;
           const containerText = container.innerText?.trim() || "";
-          // The description container should have substantial text (not just the heading)
           if (containerText.length > 200) {
-            // Remove the "About the job" heading itself from the text
-            return containerText
-              .replace(/^About the job\s*/i, "")
-              .replace(/^About this job\s*/i, "")
-              .trim();
+            return containerText.replace(/^About the job\s*/i, "").replace(/^About this job\s*/i, "").trim();
           }
           container = container.parentElement;
         }
       }
     }
 
-    // Strategy 2: Look for aria-label based containers
-    const ariaSelectors = [
-      '[aria-label*="job description"]',
-      '[aria-label*="Job description"]',
-      '[aria-label*="description"]',
-    ];
-    for (const sel of ariaSelectors) {
+    // Strategy 2: aria-label containers
+    for (const sel of ['[aria-label*="job description"]', '[aria-label*="Job description"]']) {
       const el = document.querySelector(sel);
-      if (el && el.innerText?.trim().length > 100) {
-        return el.innerText.trim();
-      }
+      if (el && el.innerText?.trim().length > 100) return el.innerText.trim();
     }
 
-    // Strategy 3: Find the right-side detail panel by structure
-    // LinkedIn's job detail is typically in the second column of a 2-column layout
-    // Look for a scrollable container on the right side that has long-form text
+    // Strategy 3: sections with JD keywords
     const allSections = document.querySelectorAll("section, [role='region']");
     for (const section of allSections) {
       const text = section.innerText?.trim() || "";
-      // Must have substantial text, and should NOT contain the job list sidebar markers
-      if (
-        text.length > 300 &&
-        !text.includes("Dismiss") && // job cards have dismiss buttons
-        (text.includes("Responsibilities") ||
-          text.includes("Qualifications") ||
-          text.includes("Requirements") ||
-          text.includes("What you'll do") ||
-          text.includes("About the role") ||
-          text.includes("experience"))
-      ) {
+      if (text.length > 300 && !text.includes("Dismiss") &&
+        (text.includes("Responsibilities") || text.includes("Qualifications") ||
+          text.includes("Requirements") || text.includes("What you'll do") ||
+          text.includes("About the role"))) {
         return text;
       }
     }
 
-    // Strategy 4: Last resort — find the detail panel by looking for the longest
-    // text block that doesn't contain the job list
+    // Strategy 4: longest non-list text block
     const mainContent = document.querySelector("main");
     if (mainContent) {
       let bestText = "";
-      const divs = mainContent.querySelectorAll("div");
-      for (const div of divs) {
-        // Skip if this div is a parent of many dismiss buttons (it's the job list)
+      for (const div of mainContent.querySelectorAll("div")) {
         if (div.querySelectorAll('button[aria-label*="Dismiss"]').length > 2) continue;
-
         const text = div.innerText?.trim() || "";
-        if (
-          text.length > bestText.length &&
-          text.length > 300 &&
-          text.length < 10000 &&
-          !text.includes("Easy Apply\n") // job list sidebar noise
-        ) {
+        if (text.length > bestText.length && text.length > 300 && text.length < 10000) {
           bestText = text;
         }
       }
@@ -207,27 +159,194 @@
   }
 
   /**
-   * Click on a job card to load its full description in the detail panel.
+   * Click a job card by its dismiss button index and wait for detail panel.
    */
-  async function clickJobCard(index) {
+  async function clickJobCard(dismissIndex) {
     const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
-    const btn = dismissBtns[index];
+    const btn = dismissBtns[dismissIndex];
     if (!btn) return false;
 
-    // Click the card area (not the dismiss button itself!)
+    // Click the card area, not the dismiss button
     const card = btn.parentElement?.parentElement || btn.parentElement;
     if (card) {
       card.click();
-      // Wait for detail panel to load
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2500));
       return true;
     }
     return false;
   }
 
   /**
-   * Create the floating AutoApply UI on the page.
+   * Find and click the Apply button in the detail panel.
+   * Returns the type: "external" | "easy_apply" | null
    */
+  async function clickApplyButton() {
+    // Look for apply buttons in the detail panel
+    const allButtons = document.querySelectorAll("button, a");
+
+    for (const btn of allButtons) {
+      const text = (btn.textContent || "").trim().toLowerCase();
+      const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+
+      // Skip if it's inside the job list sidebar (has dismiss buttons nearby)
+      if (btn.closest && btn.closest('[class*="jobs-search"]')) continue;
+
+      // External Apply button (usually an <a> link or button that opens new tab)
+      if (text === "apply" || ariaLabel.includes("apply to") ||
+          (text.includes("apply") && !text.includes("easy"))) {
+
+        // Check if it's Easy Apply
+        if (text.includes("easy apply") || ariaLabel.includes("easy apply")) {
+          return "easy_apply";
+        }
+
+        // External apply — click it
+        btn.click();
+        await new Promise((r) => setTimeout(r, 1500));
+        return "external";
+      }
+    }
+
+    return null;
+  }
+
+  /* ─────────────────────── AUTO-APPLY ENGINE ─────────────────────── */
+
+  /**
+   * Process a single job: click card → scrape JD → click Apply → notify background
+   */
+  async function processJob(job) {
+    updateJobStatus(job.id, "applying");
+    updateStatus(`Applying: ${job.title} at ${job.company}...`);
+
+    try {
+      // Step 1: Click the job card to load detail panel
+      updateStatus(`Loading: ${job.title}...`);
+      const clicked = await clickJobCard(job.index);
+      if (!clicked) {
+        updateJobStatus(job.id, "failed");
+        return { success: false, reason: "Could not click job card" };
+      }
+
+      // Step 2: Scrape the JD from the detail panel
+      updateStatus(`Scraping JD: ${job.title}...`);
+      const jobDescription = scrapeJobDescription();
+      if (!jobDescription || jobDescription.length < 50) {
+        updateJobStatus(job.id, "failed");
+        return { success: false, reason: "Could not scrape job description" };
+      }
+
+      // Step 3: Send job data to background for processing BEFORE clicking Apply
+      // Background will store it and the ATS content script will pick it up
+      const jobData = {
+        jobTitle: job.title,
+        company: job.company,
+        location: job.location,
+        jobDescription,
+        easyApply: job.easyApply,
+        source: "linkedin",
+      };
+
+      // Store in chrome.storage so ATS scripts can access it
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage({
+          type: "PREPARE_APPLICATION",
+          job: jobData,
+        }, resolve);
+      });
+
+      // Step 4: Click the Apply button
+      updateStatus(`Clicking Apply: ${job.title}...`);
+      const applyType = await clickApplyButton();
+
+      if (applyType === "external") {
+        // External site opened in new tab — ATS content script will handle it
+        updateJobStatus(job.id, "applied");
+        appliedCount++;
+        updateStatus(`Applied externally: ${job.title}. Waiting for form fill...`);
+        // Give time for the external tab to open and process
+        await new Promise((r) => setTimeout(r, 3000));
+        return { success: true, type: "external" };
+      } else if (applyType === "easy_apply") {
+        // Skip Easy Apply for now — we're focused on external
+        updateJobStatus(job.id, "skipped");
+        skippedCount++;
+        updateStatus(`Skipped (Easy Apply): ${job.title}`);
+        return { success: false, reason: "Easy Apply — skipped" };
+      } else {
+        updateJobStatus(job.id, "failed");
+        return { success: false, reason: "No Apply button found" };
+      }
+    } catch (e) {
+      console.error("AutoApply: Error processing job", job.title, e);
+      updateJobStatus(job.id, "failed");
+      return { success: false, reason: e.message };
+    }
+  }
+
+  /**
+   * Run the auto-apply loop for all selected jobs.
+   */
+  async function startApplying() {
+    const selectedJobs = scrapedJobs.filter((j) => selectedJobIds.has(j.id));
+    if (selectedJobs.length === 0) return;
+
+    isApplying = true;
+    appliedCount = 0;
+    skippedCount = 0;
+    currentJobIndex = 0;
+    renderJobList();
+
+    // Get resume from storage (user should have uploaded it via the pipeline page)
+    const stored = await new Promise((resolve) => {
+      chrome.storage.local.get(["resumeText", "parsedResume", "autoapplyUrl"], resolve);
+    });
+
+    if (!stored.parsedResume) {
+      updateStatus("No resume found. Upload your resume on the AutoApply pipeline page first.");
+      isApplying = false;
+      return;
+    }
+
+    for (let i = 0; i < selectedJobs.length; i++) {
+      if (!isApplying) break; // User stopped
+
+      currentJobIndex = i;
+      const job = selectedJobs[i];
+      updateStatus(`Processing ${i + 1}/${selectedJobs.length}: ${job.title}`);
+
+      await processJob(job);
+
+      // Brief pause between jobs to avoid rate limiting
+      if (i < selectedJobs.length - 1) {
+        updateStatus(`Waiting before next job... (${i + 1}/${selectedJobs.length} done)`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+
+    isApplying = false;
+    updateStatus(`Done! ${appliedCount} applied, ${skippedCount} skipped.`);
+    renderJobList();
+  }
+
+  function stopApplying() {
+    isApplying = false;
+    updateStatus("Stopped by user.");
+  }
+
+  /* ─────────────────────── UI ─────────────────────── */
+
+  function updateStatus(msg) {
+    const el = document.getElementById("autoapply-status");
+    if (el) el.textContent = msg;
+  }
+
+  function updateJobStatus(jobId, status) {
+    const job = scrapedJobs.find((j) => j.id === jobId);
+    if (job) job.status = status;
+    renderJobList();
+  }
+
   function createFloatingUI() {
     const existing = document.getElementById("autoapply-float");
     if (existing) existing.remove();
@@ -272,8 +391,8 @@
           background: white;
           border-radius: 16px;
           box-shadow: 0 8px 40px rgba(0,0,0,0.15);
-          width: 380px;
-          max-height: 500px;
+          width: 400px;
+          max-height: 550px;
           overflow: hidden;
         ">
           <div style="
@@ -288,43 +407,23 @@
               <p style="margin: 2px 0 0; font-size: 11px; color: #999;" id="autoapply-status">Scan jobs to get started</p>
             </div>
             <button id="autoapply-close" style="
-              background: none;
-              border: none;
-              font-size: 18px;
-              cursor: pointer;
-              color: #999;
-              padding: 4px;
+              background: none; border: none; font-size: 18px; cursor: pointer; color: #999; padding: 4px;
             ">&times;</button>
           </div>
 
           <div style="padding: 12px 16px; border-bottom: 1px solid #E5E5E5; display: flex; gap: 8px;">
             <button id="autoapply-scan" style="
-              flex: 1;
-              background: #F5F5F5;
-              border: 1px solid #E5E5E5;
-              border-radius: 8px;
-              padding: 8px;
-              font-size: 12px;
-              font-weight: 500;
-              cursor: pointer;
-              color: #333;
+              flex: 1; background: #F5F5F5; border: 1px solid #E5E5E5; border-radius: 8px;
+              padding: 8px; font-size: 12px; font-weight: 500; cursor: pointer; color: #333;
             ">Scan Page</button>
             <button id="autoapply-select-all" style="
-              background: #F5F5F5;
-              border: 1px solid #E5E5E5;
-              border-radius: 8px;
-              padding: 8px 12px;
-              font-size: 12px;
-              font-weight: 500;
-              cursor: pointer;
-              color: #333;
+              background: #F5F5F5; border: 1px solid #E5E5E5; border-radius: 8px;
+              padding: 8px 12px; font-size: 12px; font-weight: 500; cursor: pointer; color: #333;
             ">Select All</button>
           </div>
 
           <div id="autoapply-jobs-list" style="
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 8px;
+            max-height: 300px; overflow-y: auto; padding: 8px;
           ">
             <p style="text-align: center; color: #CCC; font-size: 12px; padding: 20px;">
               Click "Scan Page" to find jobs
@@ -332,27 +431,20 @@
           </div>
 
           <div style="padding: 12px 16px; border-top: 1px solid #E5E5E5;">
-            <button id="autoapply-send" style="
-              width: 100%;
-              background: #4F46E5;
-              color: white;
-              border: none;
-              border-radius: 8px;
-              padding: 10px;
-              font-size: 13px;
-              font-weight: 600;
-              cursor: pointer;
-              opacity: 0.5;
-            " disabled>Send to AutoApply (0)</button>
+            <button id="autoapply-start" style="
+              width: 100%; background: #4F46E5; color: white; border: none; border-radius: 8px;
+              padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; opacity: 0.5;
+            " disabled>Start Applying (0)</button>
+
+            <button id="autoapply-stop" style="
+              display: none; width: 100%; background: #EF4444; color: white; border: none;
+              border-radius: 8px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer;
+            ">Stop</button>
 
             <div style="margin-top: 8px; display: flex; gap: 8px;">
               <input id="autoapply-url" type="text" placeholder="AutoApply URL" style="
-                flex: 1;
-                padding: 6px 10px;
-                font-size: 11px;
-                border: 1px solid #E5E5E5;
-                border-radius: 6px;
-                color: #666;
+                flex: 1; padding: 6px 10px; font-size: 11px; border: 1px solid #E5E5E5;
+                border-radius: 6px; color: #666;
               " />
             </div>
           </div>
@@ -371,7 +463,8 @@
     const close = document.getElementById("autoapply-close");
     const scan = document.getElementById("autoapply-scan");
     const selectAll = document.getElementById("autoapply-select-all");
-    const send = document.getElementById("autoapply-send");
+    const start = document.getElementById("autoapply-start");
+    const stop = document.getElementById("autoapply-stop");
     const urlInput = document.getElementById("autoapply-url");
 
     let panelOpen = false;
@@ -392,8 +485,7 @@
       scrapedJobs = scrapeJobCards();
       selectedJobIds.clear();
       renderJobList();
-      document.getElementById("autoapply-status").textContent =
-        `Found ${scrapedJobs.length} jobs on this page`;
+      updateStatus(`Found ${scrapedJobs.length} jobs on this page`);
     });
 
     selectAll.addEventListener("click", () => {
@@ -403,85 +495,33 @@
         scrapedJobs.forEach((j) => selectedJobIds.add(j.id));
       }
       renderJobList();
-      updateSendButton();
+      updateStartButton();
     });
 
-    send.addEventListener("click", async () => {
+    start.addEventListener("click", async () => {
       const url = urlInput.value.trim();
       if (!url) {
-        alert("Please enter your AutoApply AI URL");
+        alert("Please enter your AutoApply AI URL (e.g., https://your-app.vercel.app)");
         return;
       }
-
       chrome.storage.local.set({ autoapplyUrl: url });
 
-      const selectedJobs = scrapedJobs.filter((j) => selectedJobIds.has(j.id));
-      if (selectedJobs.length === 0) return;
+      // Show stop button, hide start
+      start.style.display = "none";
+      stop.style.display = "block";
 
-      send.textContent = "Scraping descriptions...";
-      send.disabled = true;
+      await startApplying();
 
-      // For each selected job, click the card to load its description
-      const jobsWithDescriptions = [];
-      const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
+      // Restore buttons
+      start.style.display = "block";
+      stop.style.display = "none";
+      updateStartButton();
+    });
 
-      for (const job of selectedJobs) {
-        const jobIndex = scrapedJobs.indexOf(job);
-        let description = "";
-
-        try {
-          // Click the card to load description
-          const card = dismissBtns[jobIndex]?.parentElement?.parentElement || dismissBtns[jobIndex]?.parentElement;
-          if (card) {
-            card.click();
-            await new Promise((r) => setTimeout(r, 2000));
-            description = scrapeJobDescription();
-          }
-        } catch (e) {
-          console.warn("AutoApply: Failed to scrape description for", job.title, e);
-        }
-
-        jobsWithDescriptions.push({
-          ...job,
-          description: description || `${job.title} at ${job.company} - ${job.location}`,
-        });
-
-        send.textContent = `Scraping... (${jobsWithDescriptions.length}/${selectedJobs.length})`;
-      }
-
-      send.textContent = "Sending to AutoApply...";
-
-      try {
-        const payload = jobsWithDescriptions.map((j) => ({
-          jobTitle: j.title,
-          company: j.company,
-          location: j.location,
-          jobUrl: j.url || window.location.href,
-          jobDescription: j.description,
-          easyApply: j.easyApply,
-          source: "linkedin",
-        }));
-
-        // Send via background script — it opens the tab and injects data into localStorage
-        chrome.runtime.sendMessage({
-          type: "SEND_JOBS_TO_PIPELINE",
-          jobs: payload,
-          url: url,
-        });
-
-        send.textContent = `Sent ${selectedJobs.length} jobs!`;
-        setTimeout(() => {
-          send.textContent = `Send to AutoApply (${selectedJobIds.size})`;
-          send.disabled = selectedJobIds.size === 0;
-        }, 3000);
-      } catch (err) {
-        console.error("AutoApply: Send error", err);
-        send.textContent = "Error — try again";
-        setTimeout(() => {
-          send.textContent = `Send to AutoApply (${selectedJobIds.size})`;
-          send.disabled = selectedJobIds.size === 0;
-        }, 3000);
-      }
+    stop.addEventListener("click", () => {
+      stopApplying();
+      start.style.display = "block";
+      stop.style.display = "none";
     });
 
     urlInput.addEventListener("change", () => {
@@ -495,6 +535,16 @@
         document.getElementById("autoapply-url").value = result.autoapplyUrl;
       }
     });
+  }
+
+  function getStatusIcon(status) {
+    switch (status) {
+      case "applying": return '<span style="color: #F59E0B;">●</span>';
+      case "applied": return '<span style="color: #10B981;">✓</span>';
+      case "skipped": return '<span style="color: #9CA3AF;">○</span>';
+      case "failed": return '<span style="color: #EF4444;">✗</span>';
+      default: return '<span style="color: #D1D5DB;">·</span>';
+    }
   }
 
   function renderJobList() {
@@ -512,59 +562,60 @@
       .map(
         (job) => `
       <div style="
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: background 0.15s;
+        display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+        border-radius: 8px; cursor: pointer; transition: background 0.15s;
         ${selectedJobIds.has(job.id) ? "background: #EEF2FF;" : ""}
+        ${job.status === "applying" ? "background: #FFF7ED;" : ""}
+        ${job.status === "applied" ? "background: #F0FDF4;" : ""}
+        ${job.status === "failed" ? "background: #FEF2F2;" : ""}
       " data-job-id="${job.id}" class="autoapply-job-item">
-        <input type="checkbox" ${selectedJobIds.has(job.id) ? "checked" : ""} style="
-          width: 16px;
-          height: 16px;
-          accent-color: #4F46E5;
-          cursor: pointer;
-          flex-shrink: 0;
-        " />
+        ${isApplying
+          ? `<span style="font-size: 14px; flex-shrink: 0;">${getStatusIcon(job.status)}</span>`
+          : `<input type="checkbox" ${selectedJobIds.has(job.id) ? "checked" : ""} style="
+              width: 16px; height: 16px; accent-color: #4F46E5; cursor: pointer; flex-shrink: 0;
+            " />`
+        }
         <div style="flex: 1; min-width: 0;">
           <p style="margin: 0; font-size: 12px; font-weight: 500; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
             ${job.title}
           </p>
           <p style="margin: 2px 0 0; font-size: 11px; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
             ${job.company} · ${job.location}
-            ${job.easyApply ? '<span style="color: #4F46E5; font-weight: 500; margin-left: 4px;">Easy Apply</span>' : ""}
+            ${job.easyApply ? '<span style="color: #9CA3AF; font-size: 10px; margin-left: 4px;">(Easy Apply)</span>' : ""}
           </p>
         </div>
+        <span style="font-size: 10px; color: #999; flex-shrink: 0;">
+          ${job.status !== "pending" ? job.status : ""}
+        </span>
       </div>
     `
       )
       .join("");
 
-    list.querySelectorAll(".autoapply-job-item").forEach((item) => {
-      item.addEventListener("click", () => {
-        const id = item.getAttribute("data-job-id");
-        if (selectedJobIds.has(id)) {
-          selectedJobIds.delete(id);
-        } else {
-          selectedJobIds.add(id);
-        }
-        renderJobList();
-        updateSendButton();
+    if (!isApplying) {
+      list.querySelectorAll(".autoapply-job-item").forEach((item) => {
+        item.addEventListener("click", () => {
+          const id = item.getAttribute("data-job-id");
+          if (selectedJobIds.has(id)) selectedJobIds.delete(id);
+          else selectedJobIds.add(id);
+          renderJobList();
+          updateStartButton();
+        });
       });
-    });
+    }
 
-    updateSendButton();
+    updateStartButton();
   }
 
-  function updateSendButton() {
-    const send = document.getElementById("autoapply-send");
+  function updateStartButton() {
+    const start = document.getElementById("autoapply-start");
     const count = document.getElementById("autoapply-count");
-    send.textContent = `Send to AutoApply (${selectedJobIds.size})`;
-    send.disabled = selectedJobIds.size === 0;
-    send.style.opacity = selectedJobIds.size === 0 ? "0.5" : "1";
-    count.textContent = `${scrapedJobs.length}`;
+    if (start) {
+      start.textContent = `Start Applying (${selectedJobIds.size})`;
+      start.disabled = selectedJobIds.size === 0;
+      start.style.opacity = selectedJobIds.size === 0 ? "0.5" : "1";
+    }
+    if (count) count.textContent = `${scrapedJobs.length}`;
   }
 
   // Initialize

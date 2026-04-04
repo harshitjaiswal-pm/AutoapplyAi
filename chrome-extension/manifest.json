@@ -1,10 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "AutoApply AI — LinkedIn Job Scraper",
-  "version": "1.0.1",
-  "description": "Scrape jobs from LinkedIn and send them to AutoApply AI for batch tailoring.",
-  "permissions": ["activeTab", "storage"],
-  "host_permissions": ["https://www.linkedin.com/*", "https://*.vercel.app/*", "http://localhost:3000/*"],
+  "name": "AutoApply AI — Automated Job Applications",
+  "version": "2.0.0",
+  "description": "Automatically apply to jobs from LinkedIn. Scrapes JD, tailors your resume with AI, and fills application forms on external career sites.",
+  "permissions": ["activeTab", "storage", "downloads"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.vercel.app/*",
+    "http://localhost:3000/*",
+    "https://boards.greenhouse.io/*",
+    "https://job-boards.greenhouse.io/*",
+    "https://jobs.lever.co/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.wd1.myworkdayjobs.com/*",
+    "https://*.wd5.myworkdayjobs.com/*",
+    "https://*.wd3.myworkdayjobs.com/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -22,6 +33,26 @@
     {
       "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*"],
       "js": ["pipeline-bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://boards.greenhouse.io/*", "https://job-boards.greenhouse.io/*"],
+      "js": ["ats/greenhouse.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://jobs.lever.co/*"],
+      "js": ["ats/lever.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.myworkdayjobs.com/*",
+        "https://*.wd1.myworkdayjobs.com/*",
+        "https://*.wd3.myworkdayjobs.com/*",
+        "https://*.wd5.myworkdayjobs.com/*"
+      ],
+      "js": ["ats/workday.js"],
       "run_at": "document_idle"
     }
   ],
