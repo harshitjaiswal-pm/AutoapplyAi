@@ -235,6 +235,7 @@ function PipelinePage() {
               console.error("Export error:", err);
             }
           }}
+          onResetAll={clearPipelineJobs}
         />
       )}
     </div>
@@ -835,15 +836,18 @@ function ResultsTab({
   onSkip,
   onMarkApplied,
   onExport,
+  onResetAll,
 }: {
   jobs: PipelineJob[];
   onSkip: (id: string) => void;
   onMarkApplied: (id: string) => void;
   onExport: (job: PipelineJob, format: "pdf" | "docx") => void;
+  onResetAll: () => void;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [jdExpandedId, setJdExpandedId] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   /** Generate a JD PDF blob and trigger download */
   const downloadJdPdf = async (job: PipelineJob) => {
@@ -884,13 +888,37 @@ function ResultsTab({
 
   return (
     <div className="space-y-3">
-      {/* Summary */}
+      {/* Summary + Reset */}
       <div className="flex items-center justify-between text-[12px] text-neutral-400 px-1">
         <span>
           {jobs.filter((j) => j.status === "ready").length} ready ·{" "}
           {jobs.filter((j) => j.status === "applied").length} applied ·{" "}
           {jobs.filter((j) => j.status === "skipped").length} skipped
         </span>
+        {!confirmReset ? (
+          <button
+            onClick={() => setConfirmReset(true)}
+            className="text-[11px] text-red-400 hover:text-red-600 font-medium transition-colors"
+          >
+            Reset All
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-red-500">Clear all pipeline data?</span>
+            <button
+              onClick={() => { onResetAll(); setConfirmReset(false); }}
+              className="px-2 py-0.5 text-[11px] font-medium bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+            >
+              Yes, reset
+            </button>
+            <button
+              onClick={() => setConfirmReset(false)}
+              className="px-2 py-0.5 text-[11px] font-medium text-neutral-400 hover:text-neutral-600 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
 
       {jobs.map((job) => {
