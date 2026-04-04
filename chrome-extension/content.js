@@ -431,24 +431,36 @@
 
       currentJobIndex = i;
       const job = selectedJobs[i];
-      updateStatus(`Processing ${i + 1}/${selectedJobs.length}: ${job.title}`);
+      const jobNumber = i + 1;
+
+      // Show prominent progress overlay
+      showProgressOverlay(jobNumber, selectedJobs.length, job);
+      updateStatus(`Processing ${jobNumber}/${selectedJobs.length}: ${job.title}`);
+
+      // Store the current job number so background.js can use it for resume filename
+      await new Promise((resolve) => {
+        chrome.storage.local.set({ _aa_currentJobNumber: jobNumber, _aa_totalJobs: selectedJobs.length }, resolve);
+      });
 
       await processJob(job);
 
       // Brief pause between jobs to avoid rate limiting
       if (i < selectedJobs.length - 1) {
-        updateStatus(`Waiting before next job... (${i + 1}/${selectedJobs.length} done)`);
+        showProgressOverlay(jobNumber, selectedJobs.length, job);
+        updateStatus(`Waiting before next job... (${jobNumber}/${selectedJobs.length} done)`);
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
 
     isApplying = false;
+    hideProgressOverlay();
     updateStatus(`Done! ${appliedCount} applied, ${skippedCount} skipped.`, "success");
     renderJobList();
   }
 
   function stopApplying() {
     isApplying = false;
+    hideProgressOverlay();
     updateStatus("Stopped by user.", "error");
   }
 
@@ -461,6 +473,68 @@
       el.style.color = type === "error" ? "#EF4444" : type === "success" ? "#10B981" : "#999";
       el.style.fontWeight = type === "error" ? "600" : "400";
     }
+  }
+
+  /* ── Progress Overlay ── */
+
+  function createProgressOverlay() {
+    let overlay = document.getElementById("autoapply-progress-overlay");
+    if (overlay) return overlay;
+
+    overlay = document.createElement("div");
+    overlay.id = "autoapply-progress-overlay";
+    overlay.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0;
+      z-index: 99999; padding: 0;
+      background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+      box-shadow: 0 4px 20px rgba(79, 70, 229, 0.4);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: none; transition: all 0.3s ease;
+    `;
+    overlay.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 24px;">
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <div style="
+            background: rgba(255,255,255,0.2); border-radius: 10px; padding: 6px 14px;
+            font-size: 22px; font-weight: 800; color: white; letter-spacing: -0.5px;
+          " id="progress-counter">Job 0/0</div>
+          <div>
+            <p style="margin: 0; font-size: 13px; font-weight: 600; color: white;" id="progress-job-title">—</p>
+            <p style="margin: 2px 0 0; font-size: 11px; color: rgba(255,255,255,0.75);" id="progress-job-detail">—</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="font-size: 11px; color: rgba(255,255,255,0.8);" id="progress-stats"></span>
+        </div>
+      </div>
+      <div style="height: 4px; background: rgba(255,255,255,0.15);">
+        <div id="progress-bar" style="height: 100%; background: #34D399; width: 0%; transition: width 0.5s ease; border-radius: 0 2px 2px 0;"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function showProgressOverlay(index, total, job) {
+    const overlay = createProgressOverlay();
+    overlay.style.display = "block";
+
+    const counter = document.getElementById("progress-counter");
+    const title = document.getElementById("progress-job-title");
+    const detail = document.getElementById("progress-job-detail");
+    const stats = document.getElementById("progress-stats");
+    const bar = document.getElementById("progress-bar");
+
+    if (counter) counter.textContent = `Job ${index}/${total}`;
+    if (title) title.textContent = job.title;
+    if (detail) detail.textContent = `${job.company} — ${job.location}`;
+    if (stats) stats.textContent = `${appliedCount} applied · ${skippedCount} skipped`;
+    if (bar) bar.style.width = `${Math.round((index / total) * 100)}%`;
+  }
+
+  function hideProgressOverlay() {
+    const overlay = document.getElementById("autoapply-progress-overlay");
+    if (overlay) overlay.style.display = "none";
   }
 
   function updateJobStatus(jobId, status) {
@@ -703,8 +777,11 @@
           <p style="margin: 0; font-size: 12px; font-weight: 500; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
             ${job.title}
           </p>
-          <p style="margin: 2px 0 0; font-size: 11px; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-            ${job.company} · ${job.location}
+          <p style="margin: 2px 0 0; font-size: 12px; font-weight: 600; color: #4F46E5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            ${job.company}
+          </p>
+          <p style="margin: 1px 0 0; font-size: 11px; font-weight: 500; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            📍 ${job.location}
             ${job.easyApply ? '<span style="color: #9CA3AF; font-size: 10px; margin-left: 4px;">(Easy Apply)</span>' : ""}
           </p>
         </div>

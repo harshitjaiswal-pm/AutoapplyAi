@@ -498,9 +498,14 @@ async function handleTailorAndFill(job) {
       const base64 = arrayBufferToBase64(arrayBuffer);
       // Use data URL — URL.createObjectURL is not available in MV3 service workers
       resumeBlobUrl = `data:application/pdf;base64,${base64}`;
+      // Build numbered filename: e.g. "1_Affirm_Calgary_Senior Product Manager_Resume.pdf"
+      const jobNumData = await chrome.storage.local.get(["_aa_currentJobNumber"]);
+      const jobNum = jobNumData._aa_currentJobNumber || "";
+      const locationPart = job.location ? `_${job.location.split(",")[0].trim()}` : "";
+      const prefix = jobNum ? `${jobNum}_` : "";
       await chrome.storage.local.set({
         tailoredResumePdf: base64,
-        tailoredResumeFilename: `${job.company}_${job.jobTitle}_Resume.pdf`,
+        tailoredResumeFilename: `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume.pdf`,
       });
       console.log("AutoApply BG: Step 3 done. PDF generated.");
     } else {
