@@ -337,6 +337,23 @@ async function handleTailorAndFill(job) {
   console.log("AutoApply BG: Has userProfile:", !!stored.userProfile);
   console.log("AutoApply BG: JD length:", job.jobDescription?.length || 0);
 
+  // Merge userProfile contact info into parsedResume so the AI uses
+  // the user's manually-verified data (correct LinkedIn, GitHub, etc.)
+  // instead of whatever the PDF parser extracted (often garbled).
+  const resumeForApi = { ...stored.parsedResume };
+  if (stored.userProfile) {
+    const p = stored.userProfile;
+    if (!resumeForApi.contactInfo) resumeForApi.contactInfo = {};
+    if (p.firstName && p.lastName) resumeForApi.contactInfo.name = `${p.firstName} ${p.lastName}`;
+    if (p.email) resumeForApi.contactInfo.email = p.email;
+    if (p.phone) resumeForApi.contactInfo.phone = p.phone;
+    if (p.linkedin) resumeForApi.contactInfo.linkedin = p.linkedin;
+    if (p.github) resumeForApi.contactInfo.github = p.github;
+    if (p.portfolio) resumeForApi.contactInfo.portfolio = p.portfolio;
+    if (p.workAuthorization) resumeForApi.contactInfo.authorization = p.workAuthorization;
+    console.log("AutoApply BG: Merged userProfile into resume contactInfo");
+  }
+
   // Step 1: Analyze the job description
   console.log("AutoApply BG: Step 1/3 — Analyzing JD for", job.jobTitle);
   let analyzeRes;
@@ -370,7 +387,7 @@ async function handleTailorAndFill(job) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        parsedResume: stored.parsedResume,
+        parsedResume: resumeForApi,
         parsedJob,
         mode: "fast",
       }),
