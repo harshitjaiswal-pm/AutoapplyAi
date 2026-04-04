@@ -13,18 +13,44 @@
 let expectingNewTab = false;
 let expectingTimeout = null;
 
+/* ── Keep-alive mechanism for MV3 service worker ──
+ * MV3 service workers die after ~30s of inactivity.
+ * We use chrome.alarms to keep it alive during long API calls.
+ */
+const KEEPALIVE_ALARM = "autoapply-keepalive";
+
+function startKeepAlive() {
+  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 }); // every 24 seconds
+  console.log("AutoApply BG: Keep-alive started");
+}
+
+function stopKeepAlive() {
+  chrome.alarms.clear(KEEPALIVE_ALARM);
+  console.log("AutoApply BG: Keep-alive stopped");
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEPALIVE_ALARM) {
+    console.log("AutoApply BG: Keep-alive ping at", new Date().toISOString());
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From LinkedIn content.js: Store job data before Apply click ── */
   if (message.type === "PREPARE_APPLICATION") {
+    startKeepAlive(); // Keep alive while waiting for new tab + API calls
     chrome.storage.local.set({ pendingApplication: message.job }, () => {
       console.log("AutoApply BG: Stored pending application for", message.job.jobTitle);
 
       // Start watching for new tabs
       expectingNewTab = true;
-      // Auto-expire after 15 seconds
+      // Auto-expire after 30 seconds (increased from 15 for slow page loads)
       clearTimeout(expectingTimeout);
-      expectingTimeout = setTimeout(() => { expectingNewTab = false; }, 15000);
+      expectingTimeout = setTimeout(() => {
+        expectingNewTab = false;
+        stopKeepAlive();
+      }, 30000);
 
       sendResponse({ success: true });
     });
@@ -33,9 +59,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From ATS content scripts: Tailor resume and return data ── */
   if (message.type === "TAILOR_AND_FILL") {
+    startKeepAlive(); // Keep service worker alive during long API calls
     handleTailorAndFill(message.job)
-      .then((result) => sendResponse(result))
-      .catch((err) => sendResponse({ error: err.message }));
+      .then((result) => { stopKeepAlive(); sendResponse(result); })
+      .catch((err) => { stopKeepAlive(); sendResponse({ error: err.message }); });
     return true;
   }
 
