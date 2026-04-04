@@ -74,7 +74,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   /* ── From ATS scripts: Fill React Select dropdowns via main world ── */
-  // Test push from Cowork
   if (message.type === "FILL_DROPDOWNS_MAIN_WORLD") {
     const tabId = sender.tab?.id;
     if (!tabId) {
