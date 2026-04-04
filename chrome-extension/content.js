@@ -1,64 +1,75 @@
 /**
  * CONTENT SCRIPT — Runs on LinkedIn job search pages.
  *
- * Scrapes job cards from the search results and provides a UI
- * to select which jobs to send to AutoApply AI.
+ * LinkedIn uses obfuscated/hashed class names that change frequently,
+ * so we use stable anchors: dismiss buttons with aria-labels, innerText parsing,
+ * and structural patterns rather than CSS class selectors.
  */
 
 (() => {
-  // Avoid double-injection
   if (window.__autoapply_injected) return;
   window.__autoapply_injected = true;
-
-  const SELECTORS = {
-    // LinkedIn job card selectors (may need updating as LinkedIn changes their DOM)
-    jobCard: ".job-card-container, .jobs-search-results__list-item, .scaffold-layout__list-item",
-    jobTitle: ".job-card-list__title, .job-card-container__link, a.job-card-list__title--link",
-    company: ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle",
-    location: ".job-card-container__metadata-item, .artdeco-entity-lockup__caption",
-    easyApplyBadge: ".job-card-container__footer-job-state, .jobs-apply-button--top-card",
-    jobLink: "a.job-card-list__title--link, a.job-card-container__link",
-    // Job detail panel (right side)
-    detailPanel: ".jobs-search__job-details, .job-view-layout",
-    detailTitle: ".job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title",
-    detailCompany: ".job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name",
-    detailDescription: ".jobs-description__content, .jobs-description-content__text",
-  };
 
   // State
   let scrapedJobs = [];
   let selectedJobIds = new Set();
 
   /**
-   * Scrape all visible job cards from the search results list.
+   * Scrape all visible job cards from the search results.
+   *
+   * Strategy: LinkedIn's dismiss buttons have aria-label="Dismiss {Job Title} job"
+   * which is a stable, semantic anchor. We walk up the DOM from each dismiss button
+   * to find the card container, then parse innerText lines for title/company/location.
    */
   function scrapeJobCards() {
-    const cards = document.querySelectorAll(SELECTORS.jobCard);
+    const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
     const jobs = [];
 
-    cards.forEach((card, index) => {
+    dismissBtns.forEach((btn, index) => {
       try {
-        const titleEl = card.querySelector(SELECTORS.jobTitle);
-        const companyEl = card.querySelector(SELECTORS.company);
-        const locationEl = card.querySelector(SELECTORS.location);
-        const linkEl = card.querySelector(SELECTORS.jobLink);
-        const easyApplyEl = card.querySelector(SELECTORS.easyApplyBadge);
+        // Walk up to the card container (parent of parent typically has the full card text)
+        let card = btn.parentElement?.parentElement;
+        if (!card) card = btn.parentElement;
 
-        const title = titleEl?.textContent?.trim() ?? "";
-        const company = companyEl?.textContent?.trim() ?? "";
-        const location = locationEl?.textContent?.trim() ?? "";
-        const url = linkEl?.href ?? "";
-        const easyApply =
-          easyApplyEl?.textContent?.toLowerCase().includes("easy apply") ??
-          card.innerHTML.toLowerCase().includes("easy apply");
+        const text = card?.innerText?.trim() || "";
+        if (!text || text.length < 10) return;
 
-        if (title) {
+        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) return;
+
+        // Line 0: Job title
+        // Line 1: Company name
+        // Line 2: Location
+        const title = lines[0] || "";
+        const company = (lines[1] || "").replace(/\s*\(Verified job\)/i, "");
+        const location = lines[2] || "";
+
+        // Check for Easy Apply in the full card text (may be further up the DOM)
+        const parentText = card.parentElement?.innerText || text;
+        const easyApply = parentText.toLowerCase().includes("easy apply");
+
+        // Extract job title from aria-label as backup (more reliable)
+        const ariaLabel = btn.getAttribute("aria-label") || "";
+        const ariaTitle = ariaLabel
+          .replace(/^Dismiss\s+/i, "")
+          .replace(/\s+job$/i, "")
+          .trim();
+
+        // Use aria-label title if our parsed title seems wrong
+        const finalTitle = title.length > 5 ? title : ariaTitle;
+
+        // Try to find a job URL - click handler on the card usually navigates
+        // LinkedIn uses data attributes or URL params for job IDs
+        const currentUrl = window.location.href;
+        const jobIdMatch = currentUrl.match(/currentJobId=(\d+)/);
+
+        if (finalTitle) {
           jobs.push({
             id: `li_${Date.now()}_${index}`,
-            title,
+            title: finalTitle.replace(/\s*\(Verified job\)/i, ""),
             company,
             location,
-            url: url.split("?")[0], // Clean URL
+            url: "", // Will be populated when clicking through
             easyApply,
             selected: false,
           });
@@ -72,18 +83,62 @@
   }
 
   /**
-   * Scrape the full job description from the detail panel.
+   * Scrape the full job description from the right-side detail panel.
    */
   function scrapeJobDescription() {
-    const descEl = document.querySelector(SELECTORS.detailDescription);
-    return descEl?.innerText?.trim() ?? "";
+    // Try multiple possible containers for the job description
+    const selectors = [
+      '[class*="jobs-description"]',
+      '[class*="job-details"]',
+      'article',
+    ];
+
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.innerText?.trim().length > 100) {
+        return el.innerText.trim();
+      }
+    }
+
+    // Fallback: find the right panel and get its text
+    const mainContent = document.querySelector('main');
+    if (mainContent) {
+      // The right panel is usually the second major div
+      const sections = mainContent.querySelectorAll(':scope > div > div');
+      for (const section of sections) {
+        const text = section.innerText?.trim();
+        if (text && text.length > 200 && text.includes("About the job")) {
+          return text;
+        }
+      }
+    }
+
+    return "";
   }
 
   /**
-   * Create the floating AutoApply button on the page.
+   * Click on a job card to load its full description in the detail panel.
+   */
+  async function clickJobCard(index) {
+    const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
+    const btn = dismissBtns[index];
+    if (!btn) return false;
+
+    // Click the card area (not the dismiss button itself!)
+    const card = btn.parentElement?.parentElement || btn.parentElement;
+    if (card) {
+      card.click();
+      // Wait for detail panel to load
+      await new Promise((r) => setTimeout(r, 2000));
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Create the floating AutoApply UI on the page.
    */
   function createFloatingUI() {
-    // Remove existing if present
     const existing = document.getElementById("autoapply-float");
     if (existing) existing.remove();
 
@@ -97,7 +152,6 @@
         z-index: 10000;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       ">
-        <!-- Collapsed button -->
         <button id="autoapply-toggle" style="
           background: #4F46E5;
           color: white;
@@ -123,7 +177,6 @@
           ">0</span>
         </button>
 
-        <!-- Expanded panel -->
         <div id="autoapply-expanded" style="
           display: none;
           background: white;
@@ -203,7 +256,7 @@
             " disabled>Send to AutoApply (0)</button>
 
             <div style="margin-top: 8px; display: flex; gap: 8px;">
-              <input id="autoapply-url" type="text" placeholder="AutoApply URL (e.g., https://autoapply-ai-delta.vercel.app)" style="
+              <input id="autoapply-url" type="text" placeholder="AutoApply URL" style="
                 flex: 1;
                 padding: 6px 10px;
                 font-size: 11px;
@@ -270,31 +323,32 @@
         return;
       }
 
-      // Save URL for next time
       chrome.storage.local.set({ autoapplyUrl: url });
 
       const selectedJobs = scrapedJobs.filter((j) => selectedJobIds.has(j.id));
       if (selectedJobs.length === 0) return;
 
-      // For each selected job, try to scrape the full description
       send.textContent = "Scraping descriptions...";
       send.disabled = true;
 
+      // For each selected job, click the card to load its description
       const jobsWithDescriptions = [];
+      const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
+
       for (const job of selectedJobs) {
-        // Click on each job card to load its description
-        const cards = document.querySelectorAll(SELECTORS.jobCard);
+        const jobIndex = scrapedJobs.indexOf(job);
         let description = "";
 
-        for (const card of cards) {
-          const titleEl = card.querySelector(SELECTORS.jobTitle);
-          if (titleEl?.textContent?.trim() === job.title) {
+        try {
+          // Click the card to load description
+          const card = dismissBtns[jobIndex]?.parentElement?.parentElement || dismissBtns[jobIndex]?.parentElement;
+          if (card) {
             card.click();
-            // Wait for the detail panel to load
-            await new Promise((r) => setTimeout(r, 1500));
+            await new Promise((r) => setTimeout(r, 2000));
             description = scrapeJobDescription();
-            break;
           }
+        } catch (e) {
+          console.warn("AutoApply: Failed to scrape description for", job.title, e);
         }
 
         jobsWithDescriptions.push({
@@ -305,45 +359,38 @@
         send.textContent = `Scraping... (${jobsWithDescriptions.length}/${selectedJobs.length})`;
       }
 
-      // Send to AutoApply AI
       send.textContent = "Sending to AutoApply...";
 
       try {
-        // Store jobs in chrome.storage for the AutoApply app to read
-        // AND attempt to open the pipeline page with the jobs
         const payload = jobsWithDescriptions.map((j) => ({
           jobTitle: j.title,
           company: j.company,
           location: j.location,
-          jobUrl: j.url,
+          jobUrl: j.url || window.location.href,
           jobDescription: j.description,
           easyApply: j.easyApply,
           source: "linkedin",
         }));
 
-        // Open AutoApply pipeline page
         const pipelineUrl = `${url}/pipeline?jobs=${encodeURIComponent(
           JSON.stringify(payload)
         )}`;
 
-        // If payload is too large for URL, use clipboard
         if (pipelineUrl.length > 8000) {
-          // Store in chrome.storage and open with a flag
           chrome.storage.local.set({ pendingJobs: payload });
           window.open(`${url}/pipeline?fromExtension=true`, "_blank");
-          send.textContent = `Sent ${selectedJobs.length} jobs!`;
         } else {
           window.open(pipelineUrl, "_blank");
-          send.textContent = `Sent ${selectedJobs.length} jobs!`;
         }
 
+        send.textContent = `Sent ${selectedJobs.length} jobs!`;
         setTimeout(() => {
           send.textContent = `Send to AutoApply (${selectedJobIds.size})`;
           send.disabled = selectedJobIds.size === 0;
         }, 3000);
       } catch (err) {
         console.error("AutoApply: Send error", err);
-        send.textContent = "Error sending — try again";
+        send.textContent = "Error — try again";
         setTimeout(() => {
           send.textContent = `Send to AutoApply (${selectedJobIds.size})`;
           send.disabled = selectedJobIds.size === 0;
@@ -351,7 +398,6 @@
       }
     });
 
-    // Save URL on change
     urlInput.addEventListener("change", () => {
       chrome.storage.local.set({ autoapplyUrl: urlInput.value.trim() });
     });
@@ -394,6 +440,7 @@
           height: 16px;
           accent-color: #4F46E5;
           cursor: pointer;
+          flex-shrink: 0;
         " />
         <div style="flex: 1; min-width: 0;">
           <p style="margin: 0; font-size: 12px; font-weight: 500; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
@@ -409,7 +456,6 @@
       )
       .join("");
 
-    // Attach click listeners
     list.querySelectorAll(".autoapply-job-item").forEach((item) => {
       item.addEventListener("click", () => {
         const id = item.getAttribute("data-job-id");
