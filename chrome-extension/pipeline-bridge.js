@@ -7,7 +7,11 @@
  */
 
 (() => {
-  if (!window.location.pathname.includes("/pipeline")) return;
+  const path = window.location.pathname;
+  const isPipeline = path.includes("/pipeline");
+  const isDashboard = path.includes("/dashboard");
+
+  if (!isPipeline && !isDashboard) return;
 
   /* ── Job Import: Extension → React App ── */
   chrome.storage.local.get(["pendingJobs"], (result) => {
@@ -62,4 +66,18 @@
   } catch (e) {
     console.warn("AutoApply Bridge: Error reading localStorage", e);
   }
+
+  /* ── Completed Applications Sync: Extension → React App ── */
+  // Sync completed applications from the extension to the dashboard
+  chrome.storage.local.get(["completedApplications"], (result) => {
+    const completed = result.completedApplications;
+    if (!completed || !Array.isArray(completed) || completed.length === 0) return;
+
+    console.log(`AutoApply Bridge: Found ${completed.length} completed applications`);
+    localStorage.setItem("autoapply-completed-applications", JSON.stringify(completed));
+
+    window.dispatchEvent(
+      new CustomEvent("autoapply-completed-sync", { detail: { applications: completed } })
+    );
+  });
 })();

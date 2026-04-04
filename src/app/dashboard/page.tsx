@@ -1,11 +1,66 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAppStore, PipelineJob, Application } from "@/store/useAppStore";
 
 export default function DashboardPage() {
-  const { applications, pipelineJobs, updateApplicationStatus, updatePipelineJob } =
+  const { applications, pipelineJobs, updateApplicationStatus, updatePipelineJob, addApplication } =
     useAppStore();
+
+  // Sync completed applications from the Chrome extension (via pipeline-bridge.js)
+  useEffect(() => {
+    function syncCompleted() {
+      try {
+        const stored = localStorage.getItem("autoapply-completed-applications");
+        if (!stored) return;
+        const completed = JSON.parse(stored);
+        if (!Array.isArray(completed)) return;
+
+        for (const app of completed) {
+          // Check if already tracked in applications or pipelineJobs
+          const existsInApps = applications.some(
+            (a) => a.jobTitle === app.jobTitle && a.company === app.company
+          );
+          const existsInPipeline = pipelineJobs.some(
+            (j) => j.jobTitle === app.jobTitle && j.company === app.company
+          );
+
+          if (!existsInApps && !existsInPipeline) {
+            addApplication({
+              id: app.id || `ext_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              jobTitle: app.jobTitle,
+              company: app.company,
+              jobUrl: app.jobUrl,
+              status: "applied",
+              appliedAt: app.completedAt || new Date().toISOString(),
+              resumeVersion: "auto-applied",
+              matchScore: app.matchScore || 0,
+            });
+          } else if (existsInPipeline) {
+            // Update pipeline job status to "applied"
+            const pj = pipelineJobs.find(
+              (j) => j.jobTitle === app.jobTitle && j.company === app.company
+            );
+            if (pj && pj.status !== "applied") {
+              updatePipelineJob(pj.id, {
+                status: "applied",
+                appliedAt: app.completedAt || new Date().toISOString(),
+              });
+            }
+          }
+        }
+        // Clear after syncing
+        localStorage.removeItem("autoapply-completed-applications");
+      } catch (e) {
+        console.warn("Dashboard: Error syncing completed applications", e);
+      }
+    }
+
+    syncCompleted();
+    // Also listen for the custom event from the bridge
+    window.addEventListener("autoapply-completed-sync", syncCompleted);
+    return () => window.removeEventListener("autoapply-completed-sync", syncCompleted);
+  }, [applications, pipelineJobs, addApplication, updatePipelineJob]);
 
   // Merge pipeline jobs (that are applied) with legacy applications
   const allApplied = [

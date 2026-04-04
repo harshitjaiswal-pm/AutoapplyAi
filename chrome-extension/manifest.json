@@ -23,7 +23,7 @@
       "css": ["content.css"]
     },
     {
-      "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*"],
+      "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*", "https://*.vercel.app/dashboard*", "http://localhost:3000/dashboard*"],
       "js": ["pipeline-bridge.js"],
       "run_at": "document_idle"
     },

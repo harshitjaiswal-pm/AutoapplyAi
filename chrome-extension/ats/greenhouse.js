@@ -71,6 +71,19 @@
         "success"
       );
 
+      // Signal that this application was completed (form filled successfully)
+      chrome.runtime.sendMessage({
+        type: "APPLICATION_COMPLETED",
+        job: {
+          id: pendingJob.id,
+          jobTitle: pendingJob.jobTitle,
+          company: pendingJob.company,
+          jobUrl: pendingJob.jobUrl || window.location.href,
+          matchScore: tailoredData.tailoredResult?.matchScore || 0,
+          completedAt: new Date().toISOString(),
+        },
+      });
+
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {

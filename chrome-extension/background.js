@@ -288,6 +288,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* ── From ATS scripts: Application form was filled successfully ── */
+  if (message.type === "APPLICATION_COMPLETED") {
+    const job = message.job;
+    console.log("AutoApply BG: Application completed for", job.jobTitle, "at", job.company);
+
+    // Store completed application in a list for the dashboard to read
+    chrome.storage.local.get(["completedApplications"], (stored) => {
+      const completed = stored.completedApplications || [];
+      completed.push({
+        ...job,
+        status: "applied",
+        completedAt: job.completedAt || new Date().toISOString(),
+      });
+      chrome.storage.local.set({ completedApplications: completed }, () => {
+        console.log("AutoApply BG: Saved completed application. Total:", completed.length);
+        sendResponse({ success: true });
+      });
+    });
+
+    // Also update the scraped job status in LinkedIn content script storage
+    chrome.storage.local.get(["_aa_scrapedJobs"], (stored) => {
+      if (stored._aa_scrapedJobs) {
+        const jobs = stored._aa_scrapedJobs;
+        const match = jobs.find((j) => j.id === job.id || j.title === job.jobTitle);
+        if (match) {
+          match.status = "applied";
+          chrome.storage.local.set({ _aa_scrapedJobs: jobs });
+        }
+      }
+    });
+
+    return true;
+  }
+
   if (message.type === "CLEAR_SCRAPED_JOBS") {
     chrome.storage.local.remove(["scrapedJobs", "pendingJobs", "pendingApplication", "_aa_scrapedJobs", "_aa_selectedIds"], () => {
       sendResponse({ success: true });

@@ -43,6 +43,27 @@ export async function POST(request: NextRequest) {
 
     const anthropic = new Anthropic({ apiKey });
 
+    // Pre-compute candidate and job country to help the AI with location logic.
+    // This prevents the AI from suggesting cross-country relocation.
+    const candidateLocation = (parsedResume?.contactInfo?.location || "").toLowerCase();
+    const jobLocation = (parsedJob?.location || parsedJob?.jobLocation || "").toLowerCase();
+    const jobDescription = (parsedJob?.description || parsedJob?.jobDescription || "").toLowerCase();
+
+    const isCanadaCandidate = /canada|canadian|ontario|british columbia|alberta|quebec|manitoba|saskatchewan|nova scotia|new brunswick|bc|on\b|ab\b|qc\b|vancouver|toronto|montreal|calgary|ottawa|winnipeg|edmonton/i.test(candidateLocation);
+    const isUSCandidate = /united states|usa|\bus\b|california|new york|texas|florida|washington|illinois|georgia|pennsylvania|ohio|sf|nyc|la\b|san francisco|los angeles|chicago|seattle|boston|austin/i.test(candidateLocation);
+
+    const isCanadaJob = /canada|canadian|remote.*canada|toronto|vancouver|montreal|calgary|ottawa|winnipeg|edmonton|ontario|british columbia|alberta|quebec/i.test(jobLocation + " " + jobDescription);
+    const isUSJob = /united states|usa|\bus\b|san francisco|new york|los angeles|chicago|seattle|boston|austin|california|texas|florida/i.test(jobLocation + " " + jobDescription);
+
+    let locationWarning = "";
+    if (isCanadaCandidate && isUSJob && !isCanadaJob) {
+      locationWarning = "\n\nIMPORTANT LOCATION NOTE: The candidate is based in CANADA and the job appears to be in the UNITED STATES. Do NOT suggest relocating to any US city. Keep the candidate's Canadian location as-is.";
+    } else if (isUSCandidate && isCanadaJob && !isUSJob) {
+      locationWarning = "\n\nIMPORTANT LOCATION NOTE: The candidate is based in the UNITED STATES and the job appears to be in CANADA. Do NOT suggest relocating to any Canadian city. Keep the candidate's US location as-is.";
+    } else if (isCanadaCandidate && isCanadaJob) {
+      locationWarning = "\n\nIMPORTANT LOCATION NOTE: Both the candidate and job are in CANADA. You may suggest relocation to Canadian cities mentioned in the JD, but NEVER to any US city (e.g., San Francisco, New York, etc.).";
+    }
+
     const message = await anthropic.messages.create({
       model: modelId,
       max_tokens: 8192,
@@ -50,7 +71,7 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `Here is the candidate's resume:\n${JSON.stringify(parsedResume, null, 2)}\n\nHere is the target job description:\n${JSON.stringify(parsedJob, null, 2)}\n\nTailor the resume for this job.`,
+          content: `Here is the candidate's resume:\n${JSON.stringify(parsedResume, null, 2)}\n\nHere is the target job description:\n${JSON.stringify(parsedJob, null, 2)}${locationWarning}\n\nTailor the resume for this job.`,
         },
       ],
     });
