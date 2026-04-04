@@ -35,6 +35,21 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+/* ── Extension badge: show batch progress on icon ── */
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes._aa_batchProgress) {
+    const bp = changes._aa_batchProgress.newValue;
+    if (bp && bp.active) {
+      chrome.action.setBadgeText({ text: `${bp.current}/${bp.total}` });
+      chrome.action.setBadgeBackgroundColor({ color: "#4F46E5" });
+      chrome.action.setTitle({ title: `AutoApply: Job ${bp.current}/${bp.total} — ${bp.jobTitle} at ${bp.company}` });
+    } else {
+      chrome.action.setBadgeText({ text: "" });
+      chrome.action.setTitle({ title: "AutoApply AI" });
+    }
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From LinkedIn content.js: Store job data before Apply click ── */

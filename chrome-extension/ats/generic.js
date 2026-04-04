@@ -334,24 +334,45 @@
     if (!banner) {
       banner = document.createElement("div");
       banner.id = "autoapply-banner";
-      banner.style.cssText = `
-        position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
-        padding: 12px 20px; font-family: -apple-system, sans-serif;
-        font-size: 13px; font-weight: 500; text-align: center;
-        transition: all 0.3s; box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      `;
       document.body.appendChild(banner);
     }
+    banner.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      transition: all 0.3s; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    `;
     const colors = {
-      info: { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
-      success: { bg: "#F0FDF4", text: "#166534", border: "#BBF7D0" },
-      error: { bg: "#FEF2F2", text: "#991B1B", border: "#FECACA" },
+      info: { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", text: "#fff" },
+      success: { bg: "linear-gradient(135deg, #059669 0%, #10B981 100%)", text: "#fff" },
+      error: { bg: "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)", text: "#fff" },
     };
     const c = colors[type] || colors.info;
-    banner.style.background = c.bg;
-    banner.style.color = c.text;
-    banner.style.borderBottom = `1px solid ${c.border}`;
-    banner.textContent = message;
+
+    chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+      const bp = result._aa_batchProgress;
+      let progressHTML = "";
+      if (bp && bp.active) {
+        progressHTML = `
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="
+              background: rgba(255,255,255,0.2); border-radius: 8px; padding: 4px 12px;
+              font-size: 16px; font-weight: 800; letter-spacing: -0.5px;
+            ">Job ${bp.current}/${bp.total}</span>
+            <span style="font-size: 13px; font-weight: 500;">${message}</span>
+          </div>
+          <div style="height: 3px; background: rgba(255,255,255,0.15); margin-top: 8px;">
+            <div style="height: 100%; background: #34D399; width: ${Math.round((bp.current / bp.total) * 100)}%; border-radius: 0 2px 2px 0;"></div>
+          </div>
+        `;
+      } else {
+        progressHTML = `<div style="font-size: 13px; font-weight: 500;">${message}</div>`;
+      }
+
+      banner.style.background = c.bg;
+      banner.style.color = c.text;
+      banner.innerHTML = `<div style="padding: 10px 20px;">${progressHTML}</div>`;
+    });
+
     if (type === "success") setTimeout(() => { if (banner) banner.remove(); }, 15000);
     if (type === "error") setTimeout(() => { if (banner) banner.remove(); }, 20000);
   }

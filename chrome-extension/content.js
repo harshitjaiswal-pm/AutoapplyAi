@@ -182,10 +182,39 @@
 
   /**
    * Click a job card by its dismiss button index and wait for detail panel.
+   * Falls back to matching by job title if the index has shifted.
    */
-  async function clickJobCard(dismissIndex) {
+  async function clickJobCard(dismissIndex, jobTitle) {
     const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
-    const btn = dismissBtns[dismissIndex];
+
+    // Strategy 1: Try the original index first
+    let btn = dismissBtns[dismissIndex];
+    if (btn) {
+      const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+      const expectedTitle = (jobTitle || "").toLowerCase();
+      // Verify the index still points to the right job
+      if (expectedTitle && !ariaLabel.includes(expectedTitle.substring(0, 20))) {
+        btn = null; // Index shifted — fall through to strategy 2
+      }
+    }
+
+    // Strategy 2: Find by matching the aria-label with the job title
+    if (!btn && jobTitle) {
+      const titleLower = jobTitle.toLowerCase();
+      for (const candidate of dismissBtns) {
+        const ariaLabel = (candidate.getAttribute("aria-label") || "").toLowerCase();
+        if (ariaLabel.includes(titleLower.substring(0, 20)) || ariaLabel.includes(titleLower)) {
+          btn = candidate;
+          break;
+        }
+      }
+    }
+
+    // Strategy 3: Last resort — try original index even if title doesn't match
+    if (!btn) {
+      btn = dismissBtns[dismissIndex];
+    }
+
     if (!btn) return false;
 
     // Click the card area, not the dismiss button
@@ -326,8 +355,9 @@
     try {
       // Step 1: Click the job card to load detail panel
       updateStatus(`Loading: ${job.title}...`);
-      const clicked = await clickJobCard(job.index);
+      const clicked = await clickJobCard(job.index, job.title);
       if (!clicked) {
+        console.warn("AutoApply: Could not click job card for", job.title, "at index", job.index);
         updateJobStatus(job.id, "failed");
         return { success: false, reason: "Could not click job card" };
       }
@@ -379,9 +409,10 @@
         // External site opened in new tab — ATS content script will handle it
         updateJobStatus(job.id, "applied");
         appliedCount++;
-        updateStatus(`Applied externally: ${job.title}. Waiting for form fill...`);
-        // Give time for the external tab to open and process
-        await new Promise((r) => setTimeout(r, 3000));
+        updateStatus(`Applied externally: ${job.title}. Waiting for tab to open...`);
+        // Wait for external tab to open + background to detect it + ATS to inject
+        // Must be long enough for background.js expectingNewTab to be consumed
+        await new Promise((r) => setTimeout(r, 5000));
         return { success: true, type: "external" };
       } else if (applyType === "easy_apply") {
         // Skip Easy Apply for now — we're focused on external
@@ -437,9 +468,22 @@
       showProgressOverlay(jobNumber, selectedJobs.length, job);
       updateStatus(`Processing ${jobNumber}/${selectedJobs.length}: ${job.title}`);
 
-      // Store the current job number so background.js can use it for resume filename
+      // Store batch progress so background.js + ATS tabs can read it
       await new Promise((resolve) => {
-        chrome.storage.local.set({ _aa_currentJobNumber: jobNumber, _aa_totalJobs: selectedJobs.length }, resolve);
+        chrome.storage.local.set({
+          _aa_currentJobNumber: jobNumber,
+          _aa_totalJobs: selectedJobs.length,
+          _aa_batchProgress: {
+            current: jobNumber,
+            total: selectedJobs.length,
+            jobTitle: job.title,
+            company: job.company,
+            location: job.location,
+            applied: appliedCount,
+            skipped: skippedCount,
+            active: true,
+          },
+        }, resolve);
       });
 
       await processJob(job);
@@ -454,6 +498,7 @@
 
     isApplying = false;
     hideProgressOverlay();
+    chrome.storage.local.set({ _aa_batchProgress: { active: false, applied: appliedCount, skipped: skippedCount } });
     updateStatus(`Done! ${appliedCount} applied, ${skippedCount} skipped.`, "success");
     renderJobList();
   }
@@ -461,6 +506,7 @@
   function stopApplying() {
     isApplying = false;
     hideProgressOverlay();
+    chrome.storage.local.set({ _aa_batchProgress: { active: false } });
     updateStatus("Stopped by user.", "error");
   }
 
