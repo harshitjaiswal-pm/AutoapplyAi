@@ -175,13 +175,17 @@
       { labels: ["race", "ethnicity"],                                         value: user.ethnicity },
       { labels: ["veteran"],                                                   value: user.veteranStatus },
       { labels: ["disability"],                                                value: user.disabilityStatus },
-      { labels: ["previously been employed", "worked here", "employed at"],   value: "not previously" },
+      { labels: ["previously been employed", "worked here", "employed at"],   value: "I have not previously" },
     ];
 
     // Fill dropdowns sequentially with delays (React Select needs time to open/close)
     (async () => {
       for (const { labels, value } of dropdownFields) {
-        if (value) await fillReactSelect(labels, value);
+        if (value) {
+          await fillReactSelect(labels, value);
+          // Extra pause between dropdowns to let React settle
+          await new Promise((r) => setTimeout(r, 500));
+        }
       }
       console.log("AutoApply: Finished filling dropdowns");
     })();
@@ -607,14 +611,18 @@
    */
   function getSearchTerm(value) {
     // For short values, use the whole thing
-    if (value.length <= 6) return value;
+    if (value.length <= 8) return value;
     // For "He/Him", "She/Her" etc, use the first part
     if (value.includes("/")) return value.split("/")[0];
-    // For multi-word, use first word unless it's very short
+    // For multi-word, find the longest word that's >= 4 chars (skip articles)
     const words = value.split(/\s+/);
+    const skipWords = ["i", "a", "an", "the", "have", "has", "do", "not", "am", "is", "are", "was", "been"];
+    const meaningful = words.find((w) => w.length >= 4 && !skipWords.includes(w.toLowerCase()));
+    if (meaningful) return meaningful;
+    // For multi-word, use first word unless it's very short
     if (words[0].length >= 3) return words[0];
-    // Return first 8 chars
-    return value.substring(0, 8);
+    // Return first 10 chars
+    return value.substring(0, 10);
   }
 
   function getFieldLabel(element) {
