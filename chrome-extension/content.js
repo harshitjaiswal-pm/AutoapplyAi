@@ -118,33 +118,89 @@
 
   /**
    * Scrape the full job description from the right-side detail panel.
+   * LinkedIn uses hashed/obfuscated CSS classes, so we rely on semantic
+   * anchors like headings and aria-labels instead.
    */
   function scrapeJobDescription() {
-    // Try multiple possible containers for the job description
-    const selectors = [
-      '[class*="jobs-description"]',
-      '[class*="job-details"]',
-      'article',
-    ];
+    // Strategy 1: Find "About the job" heading and get its parent container's text
+    // LinkedIn always shows this heading above the actual JD content
+    const allHeadings = document.querySelectorAll("h2, h3, h4, span, div");
+    for (const el of allHeadings) {
+      const text = el.textContent?.trim();
+      if (text === "About the job" || text === "About this job") {
+        // Walk up to find a container that has the full description
+        let container = el.parentElement;
+        for (let i = 0; i < 5; i++) {
+          if (!container) break;
+          const containerText = container.innerText?.trim() || "";
+          // The description container should have substantial text (not just the heading)
+          if (containerText.length > 200) {
+            // Remove the "About the job" heading itself from the text
+            return containerText
+              .replace(/^About the job\s*/i, "")
+              .replace(/^About this job\s*/i, "")
+              .trim();
+          }
+          container = container.parentElement;
+        }
+      }
+    }
 
-    for (const sel of selectors) {
+    // Strategy 2: Look for aria-label based containers
+    const ariaSelectors = [
+      '[aria-label*="job description"]',
+      '[aria-label*="Job description"]',
+      '[aria-label*="description"]',
+    ];
+    for (const sel of ariaSelectors) {
       const el = document.querySelector(sel);
       if (el && el.innerText?.trim().length > 100) {
         return el.innerText.trim();
       }
     }
 
-    // Fallback: find the right panel and get its text
-    const mainContent = document.querySelector('main');
+    // Strategy 3: Find the right-side detail panel by structure
+    // LinkedIn's job detail is typically in the second column of a 2-column layout
+    // Look for a scrollable container on the right side that has long-form text
+    const allSections = document.querySelectorAll("section, [role='region']");
+    for (const section of allSections) {
+      const text = section.innerText?.trim() || "";
+      // Must have substantial text, and should NOT contain the job list sidebar markers
+      if (
+        text.length > 300 &&
+        !text.includes("Dismiss") && // job cards have dismiss buttons
+        (text.includes("Responsibilities") ||
+          text.includes("Qualifications") ||
+          text.includes("Requirements") ||
+          text.includes("What you'll do") ||
+          text.includes("About the role") ||
+          text.includes("experience"))
+      ) {
+        return text;
+      }
+    }
+
+    // Strategy 4: Last resort — find the detail panel by looking for the longest
+    // text block that doesn't contain the job list
+    const mainContent = document.querySelector("main");
     if (mainContent) {
-      // The right panel is usually the second major div
-      const sections = mainContent.querySelectorAll(':scope > div > div');
-      for (const section of sections) {
-        const text = section.innerText?.trim();
-        if (text && text.length > 200 && text.includes("About the job")) {
-          return text;
+      let bestText = "";
+      const divs = mainContent.querySelectorAll("div");
+      for (const div of divs) {
+        // Skip if this div is a parent of many dismiss buttons (it's the job list)
+        if (div.querySelectorAll('button[aria-label*="Dismiss"]').length > 2) continue;
+
+        const text = div.innerText?.trim() || "";
+        if (
+          text.length > bestText.length &&
+          text.length > 300 &&
+          text.length < 10000 &&
+          !text.includes("Easy Apply\n") // job list sidebar noise
+        ) {
+          bestText = text;
         }
       }
+      if (bestText) return bestText;
     }
 
     return "";
