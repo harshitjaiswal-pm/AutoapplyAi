@@ -183,7 +183,22 @@
 
     // Filter out empty values
     const activeDropdowns = dropdownFields.filter((f) => f.value);
-    fillDropdownsViaMainWorld(activeDropdowns);
+
+    // Fill dropdowns via main world. When done, RE-FILL text fields because
+    // the React re-renders triggered by dropdown onChange can wipe out
+    // DOM values set via setNativeValue (which only sets DOM, not React state).
+    fillDropdownsViaMainWorld(activeDropdowns, function onComplete() {
+      console.log("AutoApply: Re-filling text fields after dropdown render...");
+      setTimeout(() => {
+        for (const { sel, val } of selectorFields) {
+          if (val) fillBySelector(sel, val, true);
+        }
+        for (const { labels, value } of labelFields) {
+          if (value) fillByLabel(labels, value, true);
+        }
+        console.log("AutoApply: Text fields re-filled");
+      }, 1000);
+    });
 
     // ── Cover letter ──
     // Only fill textareas explicitly labeled as cover letter — NOT "Other Links" or generic fields
@@ -230,18 +245,18 @@
 
   /* ─────────────── FIELD MATCHING STRATEGIES ─────────────── */
 
-  function fillBySelector(selector, value) {
+  function fillBySelector(selector, value, force = false) {
     if (!value) return false;
     const el = document.querySelector(selector);
-    if (el && !el.value) {
+    if (el && (force || !el.value)) {
       setNativeValue(el, value);
-      console.log(`AutoApply: Filled by selector "${selector}"`);
+      if (!force) console.log(`AutoApply: Filled by selector "${selector}"`);
       return true;
     }
     return false;
   }
 
-  function fillByLabel(labelTexts, value) {
+  function fillByLabel(labelTexts, value, force = false) {
     if (!value) return false;
 
     // Strategy 1: <label> elements
@@ -265,9 +280,9 @@
           else if (sibling?.tagName === "INPUT" || sibling?.tagName === "TEXTAREA") input = sibling;
         }
 
-        if (input && !input.value) {
+        if (input && (force || !input.value)) {
           setNativeValue(input, value);
-          console.log(`AutoApply: Filled label "${text}" with "${value.substring(0, 30)}..."`);
+          if (!force) console.log(`AutoApply: Filled label "${text}" with "${value.substring(0, 30)}..."`);
           return true;
         }
       }
@@ -286,9 +301,9 @@
       if (labelTexts.some((t) =>
         placeholder.includes(t) || name.includes(t) || id.includes(t) || ariaLabel.includes(t)
       )) {
-        if (!input.value) {
+        if (force || !input.value) {
           setNativeValue(input, value);
-          console.log(`AutoApply: Filled input attr match (${name || id}) with "${value.substring(0, 30)}..."`);
+          if (!force) console.log(`AutoApply: Filled input attr match (${name || id}) with "${value.substring(0, 30)}..."`);
           return true;
         }
       }
@@ -306,9 +321,9 @@
       const input = parent.querySelector(
         "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
       );
-      if (input && !input.value) {
+      if (input && (force || !input.value)) {
         setNativeValue(input, value);
-        console.log(`AutoApply: Filled near text "${text}" with "${value.substring(0, 30)}..."`);
+        if (!force) console.log(`AutoApply: Filled near text "${text}" with "${value.substring(0, 30)}..."`);
         return true;
       }
     }
@@ -332,7 +347,7 @@
    *   2. Background calls chrome.scripting.executeScript with world: 'MAIN'
    *   3. Injected function finds React Select fibers and calls onChange
    */
-  function fillDropdownsViaMainWorld(dropdownFields) {
+  function fillDropdownsViaMainWorld(dropdownFields, onComplete) {
     console.log("AutoApply: Requesting main-world dropdown fill for", dropdownFields.length, "fields");
 
     chrome.runtime.sendMessage({
@@ -344,6 +359,8 @@
       } else {
         console.log("AutoApply: Main-world dropdown fill response:", response);
       }
+      // Re-fill text fields after dropdown React re-renders
+      if (typeof onComplete === "function") onComplete();
     });
   }
 

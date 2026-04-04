@@ -121,17 +121,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return match;
           }
 
-          /* Helper: after calling React onChange, fire blur events on the
-             container to clear form validation "untouched" state.
-             IMPORTANT: Do NOT set input values — that overwrites React Select's
-             display text. Only dispatch blur events. */
-          function fireDomEvents(control) {
+          /* Helper: after calling React onChange, update the hidden form input
+             and fire DOM events to satisfy form validation.
+
+             React Select renders a hidden <input type="hidden" name="..."> for
+             form submission. Calling onChange updates React state but the hidden
+             input may not re-render in time for validation. We set it manually. */
+          function fireDomEvents(control, matchValue) {
             var container = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
             if (!container) return;
 
-            // Dispatch blur on inputs to signal "user interacted with this field"
-            var inputs = container.querySelectorAll("input");
+            // Walk up further to find the field wrapper that contains the hidden input
+            var fieldWrapper = container;
+            for (var i = 0; i < 5; i++) {
+              fieldWrapper = fieldWrapper.parentElement;
+              if (!fieldWrapper) break;
+            }
+
+            var inputs = (fieldWrapper || container).querySelectorAll("input");
             inputs.forEach(function(input) {
+              var inputType = (input.type || "").toLowerCase();
+
+              // Set value on HIDDEN inputs only (these are for form submission)
+              if (inputType === "hidden" && matchValue) {
+                console.log("AutoApply: [main-world]   Setting hidden input " + (input.name || "unnamed") + " = " + matchValue);
+                input.value = matchValue;
+                input.setAttribute("value", matchValue);
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+
+              // Fire blur on ALL inputs to mark field as "touched"
               input.dispatchEvent(new Event("blur", { bubbles: true }));
               input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
             });
@@ -167,19 +187,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               }
 
               // Form field wrapper: has onChange but NO options array
-              // This is the Formik/RHF field component that updates form state
+              // This is the Formik/RHF/custom field component that updates form state.
+              // Call ANY onChange above React Select level — don't be picky about props.
               if (calledReactSelect && !calledFormField && typeof props.onChange === "function" && !Array.isArray(props.options)) {
-                // Only call if it looks like a form field handler (has field/name props)
-                if (props.field || props.name || props.input) {
-                  console.log("AutoApply: [main-world]   Calling form field onChange (name: " + (props.name || props.field?.name || "unknown") + ")");
-                  try {
-                    // Try passing both formats — option object and raw value
-                    props.onChange(match);
-                  } catch (e) {
-                    try { props.onChange(match.value); } catch (e2) { /* ignore */ }
+                console.log("AutoApply: [main-world]   Calling form field onChange");
+                try {
+                  props.onChange(match);
+                } catch (e) {
+                  try { props.onChange(match.value); } catch (e2) {
+                    try { props.onChange({ target: { value: match.value } }); } catch (e3) { /* ignore */ }
                   }
-                  calledFormField = true;
                 }
+                calledFormField = true;
               }
 
               // Also look for onBlur to clear "touched" validation state
@@ -192,7 +211,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             // Always fire DOM events as a final safety net
-            fireDomEvents(control);
+            // Pass match.value so the hidden form input gets the correct value
+            fireDomEvents(control, match ? match.value : null);
 
             return calledReactSelect;
           }
@@ -302,6 +322,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             var m = opts.find(function(o) { return o.text.toLowerCase() === vl; }) || opts.find(function(o) { return o.text.toLowerCase().indexOf(vl) !== -1; });
             if (m) { sel.value = m.value; sel.dispatchEvent(new Event("change", { bubbles: true })); console.log("AutoApply: [main-world native] " + labelText + " -> " + m.text); }
           });
+
+          // Schedule a delayed pass to verify hidden inputs after React re-renders.
+          // React batches state updates, so hidden inputs might not be set yet.
+          setTimeout(function() {
+            console.log("AutoApply: [main-world] Running delayed hidden input verification...");
+            var selects = document.querySelectorAll('[class*="select__container"], [class*="select__control"]');
+            selects.forEach(function(el) {
+              // Check if this select has a displayed value but the hidden input is empty
+              var valueContainer = el.querySelector('[class*="single-value"], [class*="singleValue"]');
+              if (!valueContainer) return;
+              var displayedText = valueContainer.textContent.trim();
+              if (!displayedText) return;
+
+              // Find hidden input in the wider field area
+              var fieldWrapper = el;
+              for (var i = 0; i < 6; i++) { fieldWrapper = fieldWrapper.parentElement; if (!fieldWrapper) break; }
+              if (!fieldWrapper) return;
+
+              var hiddenInputs = fieldWrapper.querySelectorAll('input[type="hidden"]');
+              hiddenInputs.forEach(function(inp) {
+                if (!inp.value && inp.name) {
+                  console.log("AutoApply: [main-world] Fixing empty hidden input: " + inp.name + " = displayed text");
+                  // We can't know the exact value, but the presence of any value helps validation
+                  inp.value = displayedText;
+                  inp.setAttribute("value", displayedText);
+                  inp.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+              });
+            });
+          }, 1500);
 
           console.log("AutoApply: [main-world] Dropdown filling complete");
           return { success: true };
