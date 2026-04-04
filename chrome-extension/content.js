@@ -401,10 +401,11 @@
       const applyType = await clickApplyButton();
 
       if (applyType === "external") {
-        // External site opened in new tab — ATS content script will handle it
-        updateJobStatus(job.id, "applied");
+        // External site opened in new tab — mark as "opened", NOT "applied"
+        // Only the ATS script should mark "applied" after the user actually submits
+        updateJobStatus(job.id, "opened");
         appliedCount++;
-        updateStatus(`Applied externally: ${job.title}. Waiting for tab to open...`);
+        updateStatus(`Tab opened: ${job.title}. ATS will auto-fill the form...`);
         // Wait for external tab to open + background to detect it + ATS to inject
         // Must be long enough for background.js expectingNewTab to be consumed
         await new Promise((r) => setTimeout(r, 5000));
@@ -781,6 +782,7 @@
   function getStatusIcon(status) {
     switch (status) {
       case "applying": return '<span style="color: #F59E0B;">●</span>';
+      case "opened": return '<span style="color: #3B82F6;">↗</span>';
       case "applied": return '<span style="color: #10B981;">✓</span>';
       case "skipped": return '<span style="color: #9CA3AF;">○</span>';
       case "failed": return '<span style="color: #EF4444;">✗</span>';
@@ -807,6 +809,7 @@
         border-radius: 8px; cursor: pointer; transition: background 0.15s;
         ${selectedJobIds.has(job.id) ? "background: #EEF2FF;" : ""}
         ${job.status === "applying" ? "background: #FFF7ED;" : ""}
+        ${job.status === "opened" ? "background: #EFF6FF;" : ""}
         ${job.status === "applied" ? "background: #F0FDF4;" : ""}
         ${job.status === "failed" ? "background: #FEF2F2;" : ""}
       " data-job-id="${job.id}" class="autoapply-job-item">
@@ -830,6 +833,7 @@
         </div>
         ${job.status !== "pending" ? `<span style="
           font-size: 10px; font-weight: 600; flex-shrink: 0; padding: 2px 6px; border-radius: 4px;
+          ${job.status === "opened" ? "background: #DBEAFE; color: #1E40AF;" : ""}
           ${job.status === "applied" ? "background: #D1FAE5; color: #065F46;" : ""}
           ${job.status === "applying" ? "background: #FEF3C7; color: #92400E;" : ""}
           ${job.status === "failed" ? "background: #FEE2E2; color: #991B1B;" : ""}
