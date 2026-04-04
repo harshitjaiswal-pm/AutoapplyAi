@@ -73,6 +73,173 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* ── From ATS scripts: Fill React Select dropdowns via main world ── */
+  if (message.type === "FILL_DROPDOWNS_MAIN_WORLD") {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ error: "No tab ID" });
+      return true;
+    }
+    console.log("AutoApply BG: Filling dropdowns in main world for tab", tabId);
+
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      world: "MAIN",
+      args: [message.fields],
+      func: function(fields) {
+        /* This function runs in the PAGE's main world — full React access */
+        try {
+          var controls = document.querySelectorAll('[class*="select__control"]');
+          console.log("AutoApply: [main-world] Found " + controls.length + " React Select controls");
+
+          var controlMap = [];
+          controls.forEach(function(control, idx) {
+            var labelText = "";
+            var node = control;
+            for (var i = 0; i < 8; i++) {
+              node = node.parentElement;
+              if (!node) break;
+              var label = node.querySelector("label");
+              if (label) {
+                labelText = label.textContent.trim().toLowerCase().replace(/\s*\*\s*$/, "");
+                break;
+              }
+            }
+            if (!labelText) return;
+
+            var matchedField = null;
+            for (var f = 0; f < fields.length; f++) {
+              var field = fields[f];
+              for (var l = 0; l < field.labels.length; l++) {
+                if (labelText.indexOf(field.labels[l]) !== -1) {
+                  matchedField = field;
+                  break;
+                }
+              }
+              if (matchedField) break;
+            }
+            if (!matchedField) return;
+
+            controlMap.push({ control: control, labelText: labelText, value: matchedField.value });
+          });
+
+          console.log("AutoApply: [main-world] Matched " + controlMap.length + " dropdowns to fill");
+
+          controlMap.forEach(function(item) {
+            var control = item.control;
+            var value = item.value.toLowerCase();
+
+            // Find React fiber on the control or its parent/container
+            var fiberEl = control;
+            var fiberKey = Object.keys(fiberEl).find(function(k) {
+              return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
+            });
+            if (!fiberKey) {
+              fiberEl = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
+              if (fiberEl) {
+                fiberKey = Object.keys(fiberEl).find(function(k) {
+                  return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
+                });
+              }
+            }
+            if (!fiberKey) {
+              console.log("AutoApply: [main-world] No fiber for \"" + item.labelText + "\"");
+              return;
+            }
+
+            var fiber = fiberEl[fiberKey];
+            var maxWalk = 30;
+            var found = false;
+
+            while (fiber && maxWalk-- > 0) {
+              var props = fiber.memoizedProps || fiber.pendingProps;
+              if (props && typeof props.onChange === "function" && Array.isArray(props.options) && props.options.length > 0) {
+                var options = props.options;
+                console.log("AutoApply: [main-world] \"" + item.labelText + "\" has " + options.length + " options");
+
+                var match = null;
+                // Exact match
+                for (var i = 0; i < options.length; i++) {
+                  var ol = (options[i].label || "").toLowerCase();
+                  if (ol === value) { match = options[i]; break; }
+                }
+                // Partial match
+                if (!match) {
+                  for (var i = 0; i < options.length; i++) {
+                    var ol = (options[i].label || "").toLowerCase();
+                    if (ol.indexOf(value) !== -1 || (value.indexOf(ol) !== -1 && ol.length > 2)) {
+                      match = options[i];
+                      break;
+                    }
+                  }
+                }
+                // Yes/No pattern matching
+                if (!match && (value === "no" || value === "yes")) {
+                  for (var i = 0; i < options.length; i++) {
+                    var ol = (options[i].label || "").toLowerCase();
+                    if (value === "no" && (ol.indexOf("no") === 0 || ol.indexOf("not") !== -1)) {
+                      match = options[i]; break;
+                    }
+                    if (value === "yes" && ol.indexOf("yes") === 0) {
+                      match = options[i]; break;
+                    }
+                  }
+                }
+
+                if (match) {
+                  console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\"");
+                  try {
+                    props.onChange(match, { action: "select-option", option: match, name: props.name });
+                  } catch (e) {
+                    console.error("AutoApply: [main-world] onChange error:", e);
+                  }
+                } else {
+                  console.log("AutoApply: [main-world] No match for \"" + item.value + "\" in \"" + item.labelText + "\". Available: " +
+                    options.map(function(o) { return o.label; }).join(" | "));
+                }
+                found = true;
+                break;
+              }
+              fiber = fiber.return;
+            }
+            if (!found) {
+              console.log("AutoApply: [main-world] No Select fiber for \"" + item.labelText + "\"");
+            }
+          });
+
+          // Also handle native <select> elements
+          document.querySelectorAll("select").forEach(function(sel) {
+            var labelText = "";
+            var id = sel.id;
+            if (id) { var lbl = document.querySelector('label[for="' + id + '"]'); if (lbl) labelText = lbl.textContent.trim().toLowerCase().replace(/\s*\*\s*$/, ""); }
+            if (!labelText) { var c = sel.closest("div, fieldset, li"); if (c) { var lbl = c.querySelector("label"); if (lbl) labelText = lbl.textContent.trim().toLowerCase().replace(/\s*\*\s*$/, ""); } }
+            if (!labelText) return;
+            var matchedField = null;
+            for (var f = 0; f < fields.length; f++) { for (var l = 0; l < fields[f].labels.length; l++) { if (labelText.indexOf(fields[f].labels[l]) !== -1) { matchedField = fields[f]; break; } } if (matchedField) break; }
+            if (!matchedField) return;
+            var vl = matchedField.value.toLowerCase();
+            var opts = Array.from(sel.options);
+            var m = opts.find(function(o) { return o.text.toLowerCase() === vl; }) || opts.find(function(o) { return o.text.toLowerCase().indexOf(vl) !== -1; });
+            if (m) { sel.value = m.value; sel.dispatchEvent(new Event("change", { bubbles: true })); console.log("AutoApply: [main-world native] " + labelText + " -> " + m.text); }
+          });
+
+          console.log("AutoApply: [main-world] Dropdown filling complete");
+          return { success: true };
+        } catch (err) {
+          console.error("AutoApply: [main-world] Error:", err);
+          return { error: err.message };
+        }
+      }
+    }).then((results) => {
+      console.log("AutoApply BG: Main-world dropdown fill completed", results);
+      sendResponse({ success: true });
+    }).catch((err) => {
+      console.error("AutoApply BG: Main-world dropdown fill failed:", err);
+      sendResponse({ error: err.message });
+    });
+    return true; // async sendResponse
+  }
+
   /* ── Legacy: pipeline bridge support ── */
   if (message.type === "SEND_JOBS_TO_PIPELINE") {
     const { jobs, url } = message;
