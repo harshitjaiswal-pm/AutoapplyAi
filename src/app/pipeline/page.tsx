@@ -448,22 +448,25 @@ function AddJobsTab({
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
-          >
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".pdf,.docx,.txt"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFileUpload(file);
-              }}
-              className="hidden"
-            />
-            Change resume
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+            >
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf,.docx,.txt"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleFileUpload(file);
+                }}
+                className="hidden"
+              />
+              Change resume
+            </button>
+            <SyncToExtension parsedResume={parsedResume} />
+          </div>
         )}
       </div>
 
@@ -569,6 +572,123 @@ function AddJobsTab({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ──────────────────── SYNC TO EXTENSION COMPONENT ──────────────────── */
+
+function SyncToExtension({ parsedResume }: { parsedResume: any }) {
+  const [synced, setSynced] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profile, setProfile] = useState({
+    firstName: parsedResume?.contactInfo?.name?.split(" ")[0] || "",
+    lastName: parsedResume?.contactInfo?.name?.split(" ").slice(1).join(" ") || "",
+    email: parsedResume?.contactInfo?.email || "",
+    phone: parsedResume?.contactInfo?.phone || "",
+    linkedin: parsedResume?.contactInfo?.linkedin || "",
+  });
+
+  const syncToExtension = () => {
+    try {
+      // Write to localStorage where the pipeline-bridge can pick it up
+      // The Chrome Extension reads from chrome.storage.local
+      // We use a CustomEvent to signal the extension's content script
+      localStorage.setItem("autoapply-parsed-resume", JSON.stringify(parsedResume));
+      localStorage.setItem("autoapply-user-profile", JSON.stringify(profile));
+
+      // Dispatch events for the extension bridge to pick up
+      window.dispatchEvent(new CustomEvent("autoapply-sync-resume", {
+        detail: { parsedResume, userProfile: profile },
+      }));
+
+      setSynced(true);
+      setTimeout(() => setSynced(false), 3000);
+    } catch (err) {
+      console.error("Sync error:", err);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={() => setProfileOpen(!profileOpen)}
+        className="text-[12px] text-neutral-400 hover:text-neutral-600 font-medium"
+      >
+        Edit Profile
+      </button>
+      <button
+        onClick={syncToExtension}
+        className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-colors ${
+          synced
+            ? "bg-emerald-100 text-emerald-700"
+            : "bg-indigo-600 text-white hover:bg-indigo-700"
+        }`}
+      >
+        {synced ? "Synced!" : "Sync to Extension"}
+      </button>
+
+      {profileOpen && (
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={() => setProfileOpen(false)}>
+          <div className="bg-white rounded-xl p-6 w-[400px] space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-neutral-900">Auto-Apply Profile</h3>
+            <p className="text-[12px] text-neutral-400">
+              This info will be used to auto-fill application forms on career sites.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="First Name"
+                value={profile.firstName}
+                onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <input
+                type="text"
+                placeholder="Last Name"
+                value={profile.lastName}
+                onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <input
+                type="email"
+                placeholder="Email"
+                value={profile.email}
+                onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+                className="col-span-2 px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <input
+                type="tel"
+                placeholder="Phone"
+                value={profile.phone}
+                onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <input
+                type="url"
+                placeholder="LinkedIn URL"
+                value={profile.linkedin}
+                onChange={(e) => setProfile({ ...profile, linkedin: e.target.value })}
+                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setProfileOpen(false)}
+                className="px-4 py-2 text-[12px] text-neutral-500 hover:text-neutral-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { syncToExtension(); setProfileOpen(false); }}
+                className="px-4 py-2 text-[12px] font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+              >
+                Save & Sync
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
