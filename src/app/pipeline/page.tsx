@@ -581,27 +581,55 @@ function AddJobsTab({
 function SyncToExtension({ parsedResume }: { parsedResume: any }) {
   const [synced, setSynced] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+
+  // Load saved profile from localStorage on mount
+  const savedProfile = (() => {
+    try { return JSON.parse(localStorage.getItem("autoapply-user-profile") || "{}"); } catch { return {}; }
+  })();
+
   const [profile, setProfile] = useState({
-    firstName: parsedResume?.contactInfo?.name?.split(" ")[0] || "",
-    lastName: parsedResume?.contactInfo?.name?.split(" ").slice(1).join(" ") || "",
-    email: parsedResume?.contactInfo?.email || "",
-    phone: parsedResume?.contactInfo?.phone || "",
-    linkedin: parsedResume?.contactInfo?.linkedin || "",
+    // Basic contact
+    firstName: savedProfile.firstName || parsedResume?.contactInfo?.name?.split(" ")[0] || "",
+    lastName: savedProfile.lastName || parsedResume?.contactInfo?.name?.split(" ").slice(1).join(" ") || "",
+    email: savedProfile.email || parsedResume?.contactInfo?.email || "",
+    phone: savedProfile.phone || parsedResume?.contactInfo?.phone || "",
+    linkedin: savedProfile.linkedin || parsedResume?.contactInfo?.linkedin || "",
+    // Additional links
+    github: savedProfile.github || parsedResume?.contactInfo?.github || "",
+    portfolio: savedProfile.portfolio || parsedResume?.contactInfo?.portfolio || "",
+    twitter: savedProfile.twitter || "",
+    // Work details
+    currentCompany: savedProfile.currentCompany || parsedResume?.experience?.[0]?.company || "",
+    preferredName: savedProfile.preferredName || parsedResume?.contactInfo?.name?.split(" ")[0] || "",
+    // Location & authorization
+    province: savedProfile.province || "Ontario",
+    workAuthorization: savedProfile.workAuthorization || "Canadian Permanent Resident",
+    requireSponsorship: savedProfile.requireSponsorship || "No",
+    // Identity (EEOC / self-ID questions)
+    pronouns: savedProfile.pronouns || "He/Him",
+    gender: savedProfile.gender || "Male",
+    ethnicity: savedProfile.ethnicity || "Asian",
+    veteranStatus: savedProfile.veteranStatus || "I am not a veteran",
+    disabilityStatus: savedProfile.disabilityStatus || "No, I do not have a disability",
+    // How did you hear about us
+    howDidYouHear: savedProfile.howDidYouHear || "LinkedIn",
   });
+
+  const p = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setProfile({ ...profile, [field]: e.target.value });
+
+  const inputCls = "w-full px-3 py-2 text-[12px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20";
+  const selectCls = "w-full px-3 py-2 text-[12px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white";
+  const labelCls = "block text-[11px] font-medium text-neutral-500 mb-1";
+  const sectionCls = "text-[11px] font-semibold text-neutral-400 uppercase tracking-wide pt-2 border-t border-neutral-100";
 
   const syncToExtension = () => {
     try {
-      // Write to localStorage where the pipeline-bridge can pick it up
-      // The Chrome Extension reads from chrome.storage.local
-      // We use a CustomEvent to signal the extension's content script
       localStorage.setItem("autoapply-parsed-resume", JSON.stringify(parsedResume));
       localStorage.setItem("autoapply-user-profile", JSON.stringify(profile));
-
-      // Dispatch events for the extension bridge to pick up
       window.dispatchEvent(new CustomEvent("autoapply-sync-resume", {
         detail: { parsedResume, userProfile: profile },
       }));
-
       setSynced(true);
       setTimeout(() => setSynced(false), 3000);
     } catch (err) {
@@ -620,59 +648,193 @@ function SyncToExtension({ parsedResume }: { parsedResume: any }) {
       <button
         onClick={syncToExtension}
         className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-colors ${
-          synced
-            ? "bg-emerald-100 text-emerald-700"
-            : "bg-indigo-600 text-white hover:bg-indigo-700"
+          synced ? "bg-emerald-100 text-emerald-700" : "bg-indigo-600 text-white hover:bg-indigo-700"
         }`}
       >
         {synced ? "Synced!" : "Sync to Extension"}
       </button>
 
       {profileOpen && (
-        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={() => setProfileOpen(false)}>
-          <div className="bg-white rounded-xl p-6 w-[400px] space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-neutral-900">Auto-Apply Profile</h3>
-            <p className="text-[12px] text-neutral-400">
-              This info will be used to auto-fill application forms on career sites.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <input
-                type="text"
-                placeholder="First Name"
-                value={profile.firstName}
-                onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
-                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-              <input
-                type="text"
-                placeholder="Last Name"
-                value={profile.lastName}
-                onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
-                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-              <input
-                type="email"
-                placeholder="Email"
-                value={profile.email}
-                onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                className="col-span-2 px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-              <input
-                type="tel"
-                placeholder="Phone"
-                value={profile.phone}
-                onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-              <input
-                type="url"
-                placeholder="LinkedIn URL"
-                value={profile.linkedin}
-                onChange={(e) => setProfile({ ...profile, linkedin: e.target.value })}
-                className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setProfileOpen(false)}>
+          <div className="bg-white rounded-xl w-[520px] max-h-[85vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="sticky top-0 bg-white px-6 pt-5 pb-3 border-b border-neutral-100 z-10">
+              <h3 className="text-sm font-semibold text-neutral-900">Auto-Apply Profile</h3>
+              <p className="text-[11px] text-neutral-400 mt-0.5">
+                Saved answers to common application questions. Used by the extension to auto-fill forms.
+              </p>
             </div>
-            <div className="flex justify-end gap-2">
+
+            <div className="px-6 py-4 space-y-3">
+              {/* ── Basic Info ── */}
+              <p className={sectionCls}>Basic Info</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>First Name</label>
+                  <input type="text" value={profile.firstName} onChange={p("firstName")} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Last Name</label>
+                  <input type="text" value={profile.lastName} onChange={p("lastName")} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Preferred Name / Nickname</label>
+                  <input type="text" value={profile.preferredName} onChange={p("preferredName")} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Current Company</label>
+                  <input type="text" value={profile.currentCompany} onChange={p("currentCompany")} className={inputCls} placeholder="Current employer" />
+                </div>
+                <div className="col-span-2">
+                  <label className={labelCls}>Email</label>
+                  <input type="email" value={profile.email} onChange={p("email")} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Phone</label>
+                  <input type="tel" value={profile.phone} onChange={p("phone")} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Pronouns</label>
+                  <select value={profile.pronouns} onChange={p("pronouns")} className={selectCls}>
+                    <option>He/Him</option>
+                    <option>She/Her</option>
+                    <option>They/Them</option>
+                    <option>He/They</option>
+                    <option>She/They</option>
+                    <option>Prefer not to say</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* ── Links ── */}
+              <p className={sectionCls}>Links</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className={labelCls}>LinkedIn URL</label>
+                  <input type="url" value={profile.linkedin} onChange={p("linkedin")} className={inputCls} placeholder="linkedin.com/in/..." />
+                </div>
+                <div>
+                  <label className={labelCls}>GitHub URL</label>
+                  <input type="url" value={profile.github} onChange={p("github")} className={inputCls} placeholder="github.com/..." />
+                </div>
+                <div>
+                  <label className={labelCls}>Portfolio / Website</label>
+                  <input type="url" value={profile.portfolio} onChange={p("portfolio")} className={inputCls} placeholder="yoursite.com" />
+                </div>
+                <div>
+                  <label className={labelCls}>Twitter / X</label>
+                  <input type="url" value={profile.twitter} onChange={p("twitter")} className={inputCls} placeholder="twitter.com/..." />
+                </div>
+              </div>
+
+              {/* ── Location & Authorization ── */}
+              <p className={sectionCls}>Location & Work Authorization</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Province / State</label>
+                  <select value={profile.province} onChange={p("province")} className={selectCls}>
+                    <option>Alberta</option>
+                    <option>British Columbia</option>
+                    <option>Manitoba</option>
+                    <option>New Brunswick</option>
+                    <option>Newfoundland and Labrador</option>
+                    <option>Nova Scotia</option>
+                    <option>Ontario</option>
+                    <option>Prince Edward Island</option>
+                    <option>Quebec</option>
+                    <option>Saskatchewan</option>
+                    <option>California</option>
+                    <option>New York</option>
+                    <option>Texas</option>
+                    <option>Washington</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Work Authorization</label>
+                  <select value={profile.workAuthorization} onChange={p("workAuthorization")} className={selectCls}>
+                    <option>Canadian Citizen</option>
+                    <option>Canadian Permanent Resident</option>
+                    <option>Valid Work Permit</option>
+                    <option>Require Sponsorship</option>
+                    <option>US Citizen</option>
+                    <option>US Green Card</option>
+                    <option>H1-B Visa</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Require Sponsorship?</label>
+                  <select value={profile.requireSponsorship} onChange={p("requireSponsorship")} className={selectCls}>
+                    <option>No</option>
+                    <option>Yes</option>
+                    <option>Yes, in the future</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>How did you hear about us?</label>
+                  <select value={profile.howDidYouHear} onChange={p("howDidYouHear")} className={selectCls}>
+                    <option>LinkedIn</option>
+                    <option>Indeed</option>
+                    <option>Glassdoor</option>
+                    <option>Company Website</option>
+                    <option>Referral</option>
+                    <option>Job Board</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* ── Self-ID (EEOC) ── */}
+              <p className={sectionCls}>Self-Identification (EEOC / Voluntary)</p>
+              <p className="text-[11px] text-neutral-400">Used to auto-answer optional diversity questions on applications.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Gender</label>
+                  <select value={profile.gender} onChange={p("gender")} className={selectCls}>
+                    <option>Male</option>
+                    <option>Female</option>
+                    <option>Non-binary</option>
+                    <option>Prefer not to say</option>
+                    <option>Decline to self identify</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Ethnicity / Race</label>
+                  <select value={profile.ethnicity} onChange={p("ethnicity")} className={selectCls}>
+                    <option>Asian</option>
+                    <option>Black or African American</option>
+                    <option>Hispanic or Latino</option>
+                    <option>White</option>
+                    <option>Two or more races</option>
+                    <option>Native American</option>
+                    <option>Prefer not to say</option>
+                    <option>Decline to self identify</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Veteran Status</label>
+                  <select value={profile.veteranStatus} onChange={p("veteranStatus")} className={selectCls}>
+                    <option>I am not a veteran</option>
+                    <option>I am a veteran</option>
+                    <option>I am a protected veteran</option>
+                    <option>Prefer not to say</option>
+                    <option>Decline to self identify</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Disability Status</label>
+                  <select value={profile.disabilityStatus} onChange={p("disabilityStatus")} className={selectCls}>
+                    <option>No, I do not have a disability</option>
+                    <option>Yes, I have a disability</option>
+                    <option>Prefer not to say</option>
+                    <option>Decline to self identify</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="sticky bottom-0 bg-white px-6 py-4 border-t border-neutral-100 flex justify-end gap-2">
               <button
                 onClick={() => setProfileOpen(false)}
                 className="px-4 py-2 text-[12px] text-neutral-500 hover:text-neutral-700"
@@ -683,7 +845,7 @@ function SyncToExtension({ parsedResume }: { parsedResume: any }) {
                 onClick={() => { syncToExtension(); setProfileOpen(false); }}
                 className="px-4 py-2 text-[12px] font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
               >
-                Save & Sync
+                Save & Sync to Extension
               </button>
             </div>
           </div>

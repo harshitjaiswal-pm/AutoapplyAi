@@ -238,11 +238,10 @@ async function handleTailorAndFill(job) {
     });
 
     if (pdfRes.ok) {
-      const blob = await pdfRes.blob();
-      resumeBlobUrl = URL.createObjectURL(blob);
-
-      const arrayBuffer = await blob.arrayBuffer();
+      const arrayBuffer = await pdfRes.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
+      // Use data URL — URL.createObjectURL is not available in MV3 service workers
+      resumeBlobUrl = `data:application/pdf;base64,${base64}`;
       await chrome.storage.local.set({
         tailoredResumePdf: base64,
         tailoredResumeFilename: `${job.company}_${job.jobTitle}_Resume.pdf`,
@@ -280,14 +279,8 @@ async function handleDownloadResume(job) {
     return;
   }
 
-  const byteCharacters = atob(stored.tailoredResumePdf);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
-  const byteArray = new Uint8Array(byteNumbers);
-  const blob = new Blob([byteArray], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
+  // Use data URL directly — URL.createObjectURL is not available in MV3 service workers
+  const url = `data:application/pdf;base64,${stored.tailoredResumePdf}`;
 
   const filename = stored.tailoredResumeFilename ||
     `${job?.company || "Company"}_${job?.jobTitle || "Resume"}_Tailored.pdf`;

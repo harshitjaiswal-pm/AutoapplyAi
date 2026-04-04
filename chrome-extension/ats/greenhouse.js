@@ -149,43 +149,53 @@
       if (val && fillBySelector(sel, val)) filled++;
     }
 
-    // ── Label-based fields (catches Greenhouse custom fields) ──
+    // ── Label-based text fields ──
     const labelFields = [
       { labels: ["linkedin", "linkedin profile", "linkedin url"], value: user.linkedin },
-      { labels: ["current company", "current employer"], value: user.currentCompany || "" },
+      { labels: ["current company", "current employer"], value: user.currentCompany },
       { labels: ["preferred name", "nickname"], value: user.preferredName || user.firstName },
-      { labels: ["portfolio", "website", "personal site"], value: user.portfolio || "" },
-      { labels: ["github", "github url", "github profile"], value: user.github || "" },
-      { labels: ["twitter", "x profile"], value: user.twitter || "" },
+      { labels: ["portfolio", "website", "personal site"], value: user.portfolio },
+      { labels: ["github", "github url", "github profile"], value: user.github },
+      { labels: ["twitter", "x profile", "twitter url"], value: user.twitter },
+      { labels: ["name pronunciation"], value: "" }, // leave blank
     ];
 
     for (const { labels, value } of labelFields) {
       if (value && fillByLabel(labels, value)) filled++;
     }
 
-    // ── Dropdown / select fields ──
-    // "Which U.S. State or Canadian Province do you reside in?"
-    if (user.province || user.state) {
-      fillSelect(["state", "province", "reside"], user.province || user.state);
+    // ── Select / dropdown fields ──
+    const dropdownFields = [
+      { labels: ["state", "province", "reside in"],       value: user.province },
+      { labels: ["how did you", "hear about", "learn about", "find out"], value: user.howDidYouHear || "LinkedIn" },
+      { labels: ["pronouns"],                              value: user.pronouns },
+      { labels: ["sponsorship", "immigration", "work authorization", "visa"], value: user.requireSponsorship === "No" ? "No" : user.requireSponsorship },
+      { labels: ["gender"],                                value: user.gender },
+      { labels: ["race", "ethnicity"],                     value: user.ethnicity },
+      { labels: ["veteran"],                               value: user.veteranStatus },
+      { labels: ["disability"],                            value: user.disabilityStatus },
+      { labels: ["previously been employed", "worked here before"], value: "No" },
+    ];
+
+    for (const { labels, value } of dropdownFields) {
+      if (value) fillSelect(labels, value);
     }
 
-    // "How did you first learn about us?"
-    fillSelect(["how did you", "hear about", "learn about", "source"], "LinkedIn");
-
     // ── Cover letter ──
+    // Only fill textareas explicitly labeled as cover letter — NOT "Other Links" or generic fields
     if (tailoredResult?.coverLetter) {
       const textareas = document.querySelectorAll("textarea");
       for (const ta of textareas) {
         const label = getFieldLabel(ta).toLowerCase();
-        if (label.includes("cover") || label.includes("letter") ||
-            label.includes("additional") || label.includes("other links") ||
-            label.includes("comments") || label.includes("message")) {
+        if (label.includes("cover letter") || label.includes("cover_letter")) {
           setNativeValue(ta, tailoredResult.coverLetter);
           filled++;
           console.log("AutoApply: Filled cover letter textarea");
           break;
         }
       }
+      // Note: Greenhouse cover letter is typically a file upload, not a textarea.
+      // The tailored cover letter will be downloaded as part of the resume PDF.
     }
 
     console.log(`AutoApply: Filled ${filled} fields total`);
@@ -303,33 +313,51 @@
   }
 
   function fillSelect(labelTexts, value) {
-    // Find select elements by nearby label text
+    if (!value) return false;
+    const valueLower = value.toLowerCase();
+
+    // Strategy 1: native <select> elements matched by label text
     const selects = document.querySelectorAll("select");
     for (const select of selects) {
       const label = getFieldLabel(select).toLowerCase();
       if (!labelTexts.some((t) => label.includes(t))) continue;
 
-      // Find the best matching option
       const options = Array.from(select.options);
-      const match = options.find((o) =>
-        o.text.toLowerCase().includes(value.toLowerCase()) ||
-        o.value.toLowerCase().includes(value.toLowerCase())
-      );
+      // Exact match first, then partial
+      const match =
+        options.find((o) => o.text.toLowerCase() === valueLower) ||
+        options.find((o) => o.text.toLowerCase().includes(valueLower)) ||
+        options.find((o) => valueLower.includes(o.text.toLowerCase()) && o.text.length > 3);
 
       if (match) {
         select.value = match.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
-        console.log(`AutoApply: Set select "${label}" to "${match.text}"`);
+        console.log(`AutoApply: Set select "${label}" → "${match.text}"`);
         return true;
+      } else {
+        console.log(`AutoApply: No match for "${value}" in select "${label}". Options:`,
+          options.map((o) => o.text).join(", "));
       }
     }
 
-    // Also try custom dropdown buttons (Greenhouse uses these)
-    const buttons = document.querySelectorAll('[role="listbox"], [role="combobox"], [class*="select"]');
-    for (const btn of buttons) {
-      const label = getFieldLabel(btn).toLowerCase();
-      if (labelTexts.some((t) => label.includes(t))) {
-        console.log(`AutoApply: Found custom dropdown "${label}" — needs manual selection for "${value}"`);
+    // Strategy 2: Greenhouse custom select (li-based dropdown)
+    // Greenhouse renders selects as styled <ul><li> lists
+    const allLabels = document.querySelectorAll("label");
+    for (const labelEl of allLabels) {
+      const text = labelEl.textContent?.trim().toLowerCase() || "";
+      if (!labelTexts.some((t) => text.includes(t))) continue;
+
+      // Find the associated custom select container
+      const container = labelEl.closest("div, fieldset, section, li") ||
+                        labelEl.parentElement?.parentElement;
+      if (!container) continue;
+
+      // Look for a clickable trigger
+      const trigger = container.querySelector(
+        '[class*="select"], [role="combobox"], [data-react-select], button'
+      );
+      if (trigger) {
+        console.log(`AutoApply: Found custom dropdown for "${text}" — needs manual selection: "${value}"`);
       }
     }
 
