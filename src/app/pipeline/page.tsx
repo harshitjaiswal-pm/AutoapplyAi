@@ -893,7 +893,22 @@ function ResultsTab({
         </span>
       </div>
 
-      {jobs.map((job) => (
+      {jobs.map((job) => {
+        // Fix for old scraped data where company got the job title and location got the company
+        const titleLower = (job.jobTitle || "").toLowerCase().trim();
+        const companyLower = (job.company || "").toLowerCase().trim();
+        let displayCompany = job.company || "Unknown";
+        let displayLocation = job.location || "";
+
+        if (companyLower && titleLower && (companyLower === titleLower || titleLower.includes(companyLower) || companyLower.includes(titleLower))) {
+          // Company field has the title — swap: use location as company
+          if (job.location && job.location.toLowerCase() !== titleLower) {
+            displayCompany = job.location;
+            displayLocation = "";
+          }
+        }
+
+        return (
         <div key={job.id} className="border border-neutral-200 rounded-xl overflow-hidden">
           {/* Job header */}
           <div
@@ -914,7 +929,7 @@ function ResultsTab({
               </div>
               <div>
                 <p className="text-[13px] font-medium text-neutral-900">{job.jobTitle}</p>
-                <p className="text-[12px] text-neutral-400">{job.company}{job.location ? ` · ${job.location}` : ""}</p>
+                <p className="text-[12px] text-neutral-400">{displayCompany}{displayLocation ? ` · ${displayLocation}` : ""}</p>
               </div>
             </div>
 
@@ -1058,7 +1073,8 @@ function ResultsTab({
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
