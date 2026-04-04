@@ -121,31 +121,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return match;
           }
 
-          /* Helper: after calling React onChange, also fire DOM events to
-             satisfy form validation (Formik, React Hook Form, etc.) */
+          /* Helper: after calling React onChange, fire blur events on the
+             container to clear form validation "untouched" state.
+             IMPORTANT: Do NOT set input values — that overwrites React Select's
+             display text. Only dispatch blur events. */
           function fireDomEvents(control) {
-            // Find the select container (parent of control)
             var container = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
             if (!container) return;
 
-            // Find ALL inputs inside the select container (hidden + search)
+            // Dispatch blur on inputs to signal "user interacted with this field"
             var inputs = container.querySelectorAll("input");
             inputs.forEach(function(input) {
-              // Set a non-empty value so required validation passes
-              var nativeSetter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, "value"
-              );
-              if (nativeSetter && nativeSetter.set) {
-                nativeSetter.set.call(input, input.value || "filled");
-              }
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.dispatchEvent(new Event("change", { bubbles: true }));
               input.dispatchEvent(new Event("blur", { bubbles: true }));
+              input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
             });
 
-            // Also fire events on the container itself
-            container.dispatchEvent(new Event("change", { bubbles: true }));
+            // Fire blur on the container too
             container.dispatchEvent(new Event("blur", { bubbles: true }));
+            container.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
           }
 
           /* Helper: walk up fiber tree collecting ALL onChange handlers,
