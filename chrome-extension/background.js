@@ -3,11 +3,15 @@
  *
  * Coordinates the auto-apply flow:
  * 1. LinkedIn content.js sends PREPARE_APPLICATION with job data
- * 2. When ATS page loads, its content script sends TAILOR_AND_FILL
- * 3. Background calls AutoApply API to tailor the resume
- * 4. Returns tailored data to the ATS content script for form filling
- * 5. Handles DOWNLOAD_RESUME to save tailored PDF for manual upload
+ * 2. Background watches for new tabs (external career sites)
+ * 3. Injects the generic ATS script into the new tab
+ * 4. ATS script sends TAILOR_AND_FILL → Background calls AutoApply API
+ * 5. Returns tailored data for form filling + downloads resume PDF
  */
+
+// Track whether we're expecting a new tab from an Apply click
+let expectingNewTab = false;
+let expectingTimeout = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
@@ -15,6 +19,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PREPARE_APPLICATION") {
     chrome.storage.local.set({ pendingApplication: message.job }, () => {
       console.log("AutoApply BG: Stored pending application for", message.job.jobTitle);
+
+      // Start watching for new tabs
+      expectingNewTab = true;
+      // Auto-expire after 15 seconds
+      clearTimeout(expectingTimeout);
+      expectingTimeout = setTimeout(() => { expectingNewTab = false; }, 15000);
+
       sendResponse({ success: true });
     });
     return true;
@@ -25,7 +36,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleTailorAndFill(message.job)
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ error: err.message }));
-    return true; // Keep channel open for async
+    return true;
   }
 
   /* ── From ATS scripts: Download the tailored resume as PDF ── */
@@ -53,11 +64,73 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+/* ── Watch for new tabs opened by Apply clicks ── */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!expectingNewTab) return;
+  if (changeInfo.status !== "complete") return;
+  if (!tab.url) return;
+
+  // Skip LinkedIn tabs, extension pages, and chrome:// URLs
+  const url = tab.url.toLowerCase();
+  if (url.includes("linkedin.com") || url.startsWith("chrome") || url.startsWith("about:")) return;
+
+  // Skip if it's our own app
+  if (url.includes("vercel.app") || url.includes("localhost:3000")) return;
+
+  // This is likely the external career site — inject the generic ATS script
+  console.log("AutoApply BG: Detected new tab for external apply:", tab.url);
+  expectingNewTab = false;
+  clearTimeout(expectingTimeout);
+
+  // Wait a moment for the page to fully render, then inject
+  setTimeout(() => {
+    injectATSScript(tabId, tab.url);
+  }, 3000);
+});
+
+/**
+ * Inject the appropriate ATS script into a tab.
+ * Falls back to generic.js if no specific ATS is detected.
+ */
+async function injectATSScript(tabId, url) {
+  const urlLower = url.toLowerCase();
+
+  let scriptFile = "ats/generic.js";
+  if (urlLower.includes("greenhouse.io")) {
+    scriptFile = "ats/greenhouse.js";
+  } else if (urlLower.includes("lever.co")) {
+    scriptFile = "ats/lever.js";
+  } else if (urlLower.includes("myworkdayjobs.com")) {
+    scriptFile = "ats/workday.js";
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [scriptFile],
+    });
+    console.log(`AutoApply BG: Injected ${scriptFile} into tab ${tabId}`);
+  } catch (err) {
+    console.error("AutoApply BG: Failed to inject script:", err);
+    // Try with generic as fallback
+    if (scriptFile !== "ats/generic.js") {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ["ats/generic.js"],
+        });
+        console.log("AutoApply BG: Injected generic.js as fallback");
+      } catch (err2) {
+        console.error("AutoApply BG: Generic fallback also failed:", err2);
+      }
+    }
+  }
+}
+
 /**
  * Call the AutoApply API to tailor the resume for the given job.
  */
 async function handleTailorAndFill(job) {
-  // Get stored resume and API URL
   const stored = await chrome.storage.local.get(["parsedResume", "autoapplyUrl"]);
 
   if (!stored.parsedResume) {
@@ -88,7 +161,7 @@ async function handleTailorAndFill(job) {
     body: JSON.stringify({
       parsedResume: stored.parsedResume,
       parsedJob,
-      mode: "fast", // Use Haiku for speed during auto-apply
+      mode: "fast",
     }),
   });
 
@@ -112,10 +185,8 @@ async function handleTailorAndFill(job) {
   let resumeBlobUrl = null;
   if (pdfRes.ok) {
     const blob = await pdfRes.blob();
-    // Store the PDF blob URL for later download
     resumeBlobUrl = URL.createObjectURL(blob);
 
-    // Store the blob data in chrome.storage for the ATS script
     const arrayBuffer = await blob.arrayBuffer();
     const base64 = arrayBufferToBase64(arrayBuffer);
     await chrome.storage.local.set({
@@ -124,7 +195,6 @@ async function handleTailorAndFill(job) {
     });
   }
 
-  // Store the tailored result for reference
   await chrome.storage.local.set({
     lastTailoredResult: tailoredResult,
     lastTailoredJob: job,
@@ -150,7 +220,6 @@ async function handleDownloadResume(job) {
     return;
   }
 
-  // Convert base64 back to blob URL for download
   const byteCharacters = atob(stored.tailoredResumePdf);
   const byteNumbers = new Array(byteCharacters.length);
   for (let i = 0; i < byteCharacters.length; i++) {
@@ -170,9 +239,6 @@ async function handleDownloadResume(job) {
   });
 }
 
-/**
- * Utility: Convert ArrayBuffer to base64 string.
- */
 function arrayBufferToBase64(buffer) {
   let binary = "";
   const bytes = new Uint8Array(buffer);

@@ -3,18 +3,10 @@
   "name": "AutoApply AI — Automated Job Applications",
   "version": "2.0.0",
   "description": "Automatically apply to jobs from LinkedIn. Scrapes JD, tailors your resume with AI, and fills application forms on external career sites.",
-  "permissions": ["activeTab", "storage", "downloads"],
+  "permissions": ["activeTab", "storage", "downloads", "scripting", "tabs"],
   "host_permissions": [
-    "https://www.linkedin.com/*",
-    "https://*.vercel.app/*",
-    "http://localhost:3000/*",
-    "https://boards.greenhouse.io/*",
-    "https://job-boards.greenhouse.io/*",
-    "https://jobs.lever.co/*",
-    "https://*.myworkdayjobs.com/*",
-    "https://*.wd1.myworkdayjobs.com/*",
-    "https://*.wd5.myworkdayjobs.com/*",
-    "https://*.wd3.myworkdayjobs.com/*"
+    "https://*/*",
+    "http://localhost:3000/*"
   ],
   "action": {
     "default_popup": "popup.html",

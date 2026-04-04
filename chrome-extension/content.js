@@ -213,7 +213,62 @@
   /* ─────────────────────── AUTO-APPLY ENGINE ─────────────────────── */
 
   /**
-   * Process a single job: click card → scrape JD → click Apply → notify background
+   * Scroll the job detail panel to load the full description.
+   * LinkedIn lazy-loads content — we need to scroll down to reveal "About the job".
+   */
+  async function scrollDetailPanel() {
+    // Find the scrollable detail panel (right side of the job search layout)
+    const detailPanels = document.querySelectorAll(
+      '[class*="jobs-search__job-details"], [class*="job-details"], [role="main"], main'
+    );
+
+    // Also try finding a scrollable container that ISN'T the job list
+    const allScrollable = document.querySelectorAll("div, section");
+    let detailPanel = null;
+
+    for (const el of allScrollable) {
+      // Must be scrollable
+      if (el.scrollHeight <= el.clientHeight + 50) continue;
+      // Must not contain the job list (dismiss buttons)
+      if (el.querySelectorAll('button[aria-label*="Dismiss"]').length > 2) continue;
+      // Must have substantial content
+      if (el.innerText?.length > 200) {
+        detailPanel = el;
+        break;
+      }
+    }
+
+    if (!detailPanel) {
+      // Fallback: scroll the whole page
+      detailPanel = document.documentElement;
+    }
+
+    // Scroll down in increments to trigger lazy loading
+    const scrollStep = 500;
+    const maxScrolls = 8;
+    for (let i = 0; i < maxScrolls; i++) {
+      detailPanel.scrollTop += scrollStep;
+      await new Promise((r) => setTimeout(r, 400));
+
+      // Check if "About the job" is now visible
+      const aboutHeading = document.querySelector("h2, h3, h4, span");
+      // Quick check in all elements
+      const allEls = document.querySelectorAll("h2, h3, h4, span");
+      for (const el of allEls) {
+        if (el.textContent?.trim() === "About the job") {
+          // Found it — scroll a bit more to load full content
+          detailPanel.scrollTop += scrollStep;
+          await new Promise((r) => setTimeout(r, 500));
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Process a single job: click card → scroll → scrape JD → click Apply → notify background
    */
   async function processJob(job) {
     updateJobStatus(job.id, "applying");
@@ -228,12 +283,24 @@
         return { success: false, reason: "Could not click job card" };
       }
 
-      // Step 2: Scrape the JD from the detail panel
+      // Step 2: Scroll the detail panel to load the full JD
+      updateStatus(`Scrolling to load JD: ${job.title}...`);
+      await scrollDetailPanel();
+      // Extra wait for content to render
+      await new Promise((r) => setTimeout(r, 1000));
+
+      // Step 3: Scrape the JD from the detail panel
       updateStatus(`Scraping JD: ${job.title}...`);
-      const jobDescription = scrapeJobDescription();
+      let jobDescription = scrapeJobDescription();
       if (!jobDescription || jobDescription.length < 50) {
-        updateJobStatus(job.id, "failed");
-        return { success: false, reason: "Could not scrape job description" };
+        // Try scrolling more and retrying
+        await scrollDetailPanel();
+        await new Promise((r) => setTimeout(r, 1000));
+        jobDescription = scrapeJobDescription();
+        if (!jobDescription || jobDescription.length < 50) {
+          updateJobStatus(job.id, "failed");
+          return { success: false, reason: "Could not scrape job description" };
+        }
       }
 
       // Step 3: Send job data to background for processing BEFORE clicking Apply
