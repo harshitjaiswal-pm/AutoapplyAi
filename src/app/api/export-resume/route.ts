@@ -272,39 +272,22 @@ async function generateDocx(resume: any) {
               ]
             : []),
 
-          // Skills
-          sectionHeading("Skills"),
-          ...(resume.skills?.technical?.length
+          // Skills — handle both fixed keys and arbitrary category names from AI
+          ...(resume.skills && typeof resume.skills === "object"
             ? [
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun({ text: "Technical: ", bold: true, font: "Arial", size: 20 }),
-                    new TextRun({ text: resume.skills.technical.join(", "), font: "Arial", size: 20 }),
-                  ],
-                }),
-              ]
-            : []),
-          ...(resume.skills?.tools?.length
-            ? [
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun({ text: "Tools: ", bold: true, font: "Arial", size: 20 }),
-                    new TextRun({ text: resume.skills.tools.join(", "), font: "Arial", size: 20 }),
-                  ],
-                }),
-              ]
-            : []),
-          ...(resume.skills?.soft?.length
-            ? [
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun({ text: "Soft Skills: ", bold: true, font: "Arial", size: 20 }),
-                    new TextRun({ text: resume.skills.soft.join(", "), font: "Arial", size: 20 }),
-                  ],
-                }),
+                sectionHeading("Skills"),
+                ...Object.entries(resume.skills)
+                  .filter(([, value]) => Array.isArray(value) && (value as string[]).length > 0)
+                  .map(([key, value]) => {
+                    const categoryName = key.charAt(0).toUpperCase() + key.slice(1);
+                    return new Paragraph({
+                      spacing: { after: 40 },
+                      children: [
+                        new TextRun({ text: `${categoryName}: `, bold: true, font: "Arial", size: 20 }),
+                        new TextRun({ text: (value as string[]).filter(Boolean).join(", "), font: "Arial", size: 20 }),
+                      ],
+                    });
+                  }),
               ]
             : []),
 
@@ -463,23 +446,26 @@ async function generatePdf(resume: any) {
     y += 4;
   }
 
-  // Skills
-  const allSkills = [
-    ...(resume.skills?.technical || []),
-    ...(resume.skills?.tools || []),
-  ];
-  if (allSkills.length) {
-    heading("Skills");
-    if (resume.skills?.technical?.length) {
-      wrappedText(`Technical: ${resume.skills.technical.filter(Boolean).join(", ")}`, 10);
+  // Skills — handle both fixed keys (technical/tools/soft) and arbitrary category names
+  // The AI may return { technical: [...], tools: [...] } OR { "Product & Strategy": [...], "Data & Analytics": [...] }
+  if (resume.skills && typeof resume.skills === "object") {
+    const skillEntries: Array<{ category: string; items: string[] }> = [];
+
+    for (const [key, value] of Object.entries(resume.skills)) {
+      if (Array.isArray(value) && value.length > 0) {
+        // Capitalize the category name nicely
+        const categoryName = key.charAt(0).toUpperCase() + key.slice(1);
+        skillEntries.push({ category: categoryName, items: value.filter(Boolean).map(String) });
+      }
     }
-    if (resume.skills?.tools?.length) {
-      wrappedText(`Tools: ${resume.skills.tools.filter(Boolean).join(", ")}`, 10);
+
+    if (skillEntries.length > 0) {
+      heading("Skills");
+      for (const entry of skillEntries) {
+        wrappedText(sanitizeForPdf(`${entry.category}: ${entry.items.join(", ")}`), 10);
+      }
+      y += 4;
     }
-    if (resume.skills?.soft?.length) {
-      wrappedText(`Soft Skills: ${resume.skills.soft.filter(Boolean).join(", ")}`, 10);
-    }
-    y += 4;
   }
 
   // Experience
