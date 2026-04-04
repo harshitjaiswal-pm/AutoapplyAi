@@ -190,7 +190,9 @@ async function handleTailorAndFill(job) {
     throw new Error(`Job analysis failed (${analyzeRes.status}): ${errBody.substring(0, 100)}`);
   }
 
-  const parsedJob = await analyzeRes.json();
+  const analyzeData = await analyzeRes.json();
+  // API returns { parsedJob: { title, company, ... } }
+  const parsedJob = analyzeData.parsedJob || analyzeData;
   console.log("AutoApply BG: Step 1 done. Parsed job title:", parsedJob.title || parsedJob.jobTitle);
 
   // Step 2: Tailor the resume
@@ -217,7 +219,9 @@ async function handleTailorAndFill(job) {
     throw new Error(`Resume tailoring failed (${tailorRes.status}): ${errBody.substring(0, 100)}`);
   }
 
-  const tailoredResult = await tailorRes.json();
+  const tailorData = await tailorRes.json();
+  // API returns { tailoredResult: { matchScore, tailoredResume, coverLetter, ... } }
+  const tailoredResult = tailorData.tailoredResult || tailorData;
   console.log("AutoApply BG: Step 2 done. Match score:", tailoredResult.matchScore);
 
   // Step 3: Generate the resume PDF
