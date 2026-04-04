@@ -843,6 +843,33 @@ function ResultsTab({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [jdExpandedId, setJdExpandedId] = useState<string | null>(null);
+
+  /** Generate a JD PDF blob and trigger download */
+  const downloadJdPdf = async (job: PipelineJob) => {
+    try {
+      const res = await fetch("/api/export-jd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobTitle: job.jobTitle,
+          company: job.company,
+          location: job.location,
+          jobDescription: job.jobDescription,
+        }),
+      });
+      if (!res.ok) throw new Error("JD export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${job.company}_${job.jobTitle}_JD.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("JD PDF export error:", err);
+    }
+  };
 
   if (jobs.length === 0) {
     return (
@@ -887,31 +914,13 @@ function ResultsTab({
               </div>
               <div>
                 <p className="text-[13px] font-medium text-neutral-900">{job.jobTitle}</p>
-                <p className="text-[12px] text-neutral-400">{job.company}</p>
+                <p className="text-[12px] text-neutral-400">{job.company}{job.location ? ` · ${job.location}` : ""}</p>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
               {job.status === "ready" && (
                 <>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExport(job, "docx");
-                    }}
-                    className="px-3 py-1.5 text-[11px] font-medium bg-neutral-100 text-neutral-600 rounded-md hover:bg-neutral-200 transition-colors"
-                  >
-                    DOCX
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExport(job, "pdf");
-                    }}
-                    className="px-3 py-1.5 text-[11px] font-medium bg-neutral-100 text-neutral-600 rounded-md hover:bg-neutral-200 transition-colors"
-                  >
-                    PDF
-                  </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -940,7 +949,7 @@ function ResultsTab({
 
           {/* Expanded content */}
           {expandedId === job.id && job.tailoredResult && (
-            <div className="border-t border-neutral-100 p-5 space-y-4 bg-neutral-50/50">
+            <div className="border-t border-neutral-100 p-5 space-y-5 bg-neutral-50/50">
               {/* Score breakdown */}
               {job.tailoredResult.matchBreakdown && (
                 <div className="grid grid-cols-3 gap-3">
@@ -959,8 +968,57 @@ function ResultsTab({
                 </div>
               )}
 
+              {/* Resume Downloads */}
+              <div className="bg-white rounded-lg border border-neutral-200 p-4">
+                <h4 className="text-[12px] font-semibold text-neutral-700 mb-3">Tailored Resume</h4>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => onExport(job, "pdf")}
+                    className="flex items-center gap-1.5 px-4 py-2 text-[12px] font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                  >
+                    <span>↓</span> Download PDF
+                  </button>
+                  <button
+                    onClick={() => onExport(job, "docx")}
+                    className="flex items-center gap-1.5 px-4 py-2 text-[12px] font-medium bg-white text-neutral-700 border border-neutral-300 rounded-lg hover:bg-neutral-50 transition-colors"
+                  >
+                    <span>↓</span> Download DOCX
+                  </button>
+                </div>
+              </div>
+
+              {/* Job Description */}
+              {job.jobDescription && (
+                <div className="bg-white rounded-lg border border-neutral-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-[12px] font-semibold text-neutral-700">Job Description</h4>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => downloadJdPdf(job)}
+                        className="text-[11px] text-indigo-500 hover:text-indigo-600 font-medium"
+                      >
+                        Download PDF
+                      </button>
+                      <button
+                        onClick={() => setJdExpandedId(jdExpandedId === job.id ? null : job.id)}
+                        className="text-[11px] text-neutral-400 hover:text-neutral-600 font-medium"
+                      >
+                        {jdExpandedId === job.id ? "Collapse" : "View"}
+                      </button>
+                    </div>
+                  </div>
+                  {jdExpandedId === job.id && (
+                    <div className="mt-2 max-h-[300px] overflow-y-auto">
+                      <p className="text-[12px] text-neutral-600 leading-relaxed whitespace-pre-wrap">
+                        {job.jobDescription}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Cover letter */}
-              <div>
+              <div className="bg-white rounded-lg border border-neutral-200 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-[12px] font-semibold text-neutral-700">Cover Letter</h4>
                   <button
@@ -981,7 +1039,7 @@ function ResultsTab({
 
               {/* Changes made */}
               {job.tailoredResult.changes?.length > 0 && (
-                <div>
+                <div className="bg-white rounded-lg border border-neutral-200 p-4">
                   <h4 className="text-[12px] font-semibold text-neutral-700 mb-2">
                     Optimization Changes
                   </h4>

@@ -27,53 +27,87 @@
 
     dismissBtns.forEach((btn, index) => {
       try {
-        // Walk up to the card container (parent of parent typically has the full card text)
-        let card = btn.parentElement?.parentElement;
-        if (!card) card = btn.parentElement;
-
-        const text = card?.innerText?.trim() || "";
-        if (!text || text.length < 10) return;
-
-        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-        if (lines.length < 2) return;
-
-        // Line 0: Job title
-        // Line 1: Company name
-        // Line 2: Location
-        const title = lines[0] || "";
-        const company = (lines[1] || "").replace(/\s*\(Verified job\)/i, "");
-        const location = lines[2] || "";
-
-        // Check for Easy Apply in the full card text (may be further up the DOM)
-        const parentText = card.parentElement?.innerText || text;
-        const easyApply = parentText.toLowerCase().includes("easy apply");
-
-        // Extract job title from aria-label as backup (more reliable)
+        // Get reliable title from aria-label (e.g. "Dismiss Senior Product Manager job")
         const ariaLabel = btn.getAttribute("aria-label") || "";
         const ariaTitle = ariaLabel
           .replace(/^Dismiss\s+/i, "")
           .replace(/\s+job$/i, "")
           .trim();
+        if (!ariaTitle) return;
 
-        // Use aria-label title if our parsed title seems wrong
-        const finalTitle = title.length > 5 ? title : ariaTitle;
-
-        // Try to find a job URL - click handler on the card usually navigates
-        // LinkedIn uses data attributes or URL params for job IDs
-        const currentUrl = window.location.href;
-        const jobIdMatch = currentUrl.match(/currentJobId=(\d+)/);
-
-        if (finalTitle) {
-          jobs.push({
-            id: `li_${Date.now()}_${index}`,
-            title: finalTitle.replace(/\s*\(Verified job\)/i, ""),
-            company,
-            location,
-            url: "", // Will be populated when clicking through
-            easyApply,
-            selected: false,
-          });
+        // Walk up to find the full card container (up to 6 levels)
+        let card = btn;
+        for (let i = 0; i < 6; i++) {
+          if (card.parentElement) card = card.parentElement;
+          // Stop when we find the <li> or a container with enough text
+          if (card.tagName === "LI" || card.getAttribute("data-occludable-job-id")) break;
         }
+
+        const text = card?.innerText?.trim() || "";
+        if (!text || text.length < 10) return;
+
+        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+        // Smart company extraction:
+        // The title from aria-label is reliable. Find the title line in text,
+        // then the NEXT non-title, non-noise line is the company.
+        let company = "";
+        let location = "";
+        const titleLower = ariaTitle.toLowerCase();
+        const noiseWords = ["easy apply", "promoted", "verified", "actively recruiting", "viewed", "applied", "new", "dismiss"];
+
+        let foundTitle = false;
+        let companySet = false;
+        for (const line of lines) {
+          const lineLower = line.toLowerCase().replace(/\(verified job\)/i, "").trim();
+
+          // Skip the title line itself
+          if (!foundTitle && (lineLower === titleLower || lineLower.includes(titleLower) || titleLower.includes(lineLower))) {
+            foundTitle = true;
+            continue;
+          }
+
+          // Skip noise lines
+          if (noiseWords.some(n => lineLower === n || lineLower.startsWith(n))) continue;
+          // Skip very short lines (like "·" or numbers)
+          if (line.length < 2) continue;
+          // Skip lines that look like timestamps ("2 days ago", "Just now")
+          if (/^\d+\s+(day|hour|minute|week|month)s?\s+ago$/i.test(line)) continue;
+          if (/^just now$/i.test(line)) continue;
+
+          if (!companySet) {
+            company = line.replace(/\s*\(Verified job\)/i, "").trim();
+            companySet = true;
+            continue;
+          }
+
+          if (!location) {
+            // Location often has format "City, State" or "City, Country" or has "(Remote)"
+            location = line;
+            break;
+          }
+        }
+
+        // Fallback: use line-based parsing if smart extraction failed
+        if (!company && lines.length >= 2) {
+          company = lines[1]?.replace(/\s*\(Verified job\)/i, "") || "";
+        }
+        if (!location && lines.length >= 3) {
+          location = lines[2] || "";
+        }
+
+        // Check for Easy Apply
+        const easyApply = text.toLowerCase().includes("easy apply");
+
+        jobs.push({
+          id: `li_${Date.now()}_${index}`,
+          title: ariaTitle.replace(/\s*\(Verified job\)/i, ""),
+          company,
+          location,
+          url: "",
+          easyApply,
+          selected: false,
+        });
       } catch (e) {
         console.warn("AutoApply: Failed to parse job card", e);
       }
