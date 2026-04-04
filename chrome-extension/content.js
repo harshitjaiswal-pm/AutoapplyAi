@@ -303,7 +303,7 @@
     });
 
     if (!stored.parsedResume) {
-      updateStatus("No resume found. Upload your resume on the AutoApply pipeline page first.");
+      updateStatus("No resume found. Upload your resume on the AutoApply pipeline page first.", "error");
       isApplying = false;
       return;
     }
@@ -325,20 +325,24 @@
     }
 
     isApplying = false;
-    updateStatus(`Done! ${appliedCount} applied, ${skippedCount} skipped.`);
+    updateStatus(`Done! ${appliedCount} applied, ${skippedCount} skipped.`, "success");
     renderJobList();
   }
 
   function stopApplying() {
     isApplying = false;
-    updateStatus("Stopped by user.");
+    updateStatus("Stopped by user.", "error");
   }
 
   /* ─────────────────────── UI ─────────────────────── */
 
-  function updateStatus(msg) {
+  function updateStatus(msg, type = "info") {
     const el = document.getElementById("autoapply-status");
-    if (el) el.textContent = msg;
+    if (el) {
+      el.textContent = msg;
+      el.style.color = type === "error" ? "#EF4444" : type === "success" ? "#10B981" : "#999";
+      el.style.fontWeight = type === "error" ? "600" : "400";
+    }
   }
 
   function updateJobStatus(jobId, status) {
