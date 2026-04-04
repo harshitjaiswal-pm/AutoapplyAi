@@ -1,0 +1,30 @@
+/* Subtle styling for the AutoApply floating panel on LinkedIn */
+#autoapply-float * {
+  box-sizing: border-box;
+}
+
+#autoapply-float button:hover {
+  filter: brightness(0.95);
+}
+
+#autoapply-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(79, 70, 229, 0.4) !important;
+}
+
+.autoapply-job-item:hover {
+  background: #F9FAFB !important;
+}
+
+#autoapply-jobs-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+#autoapply-jobs-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#autoapply-jobs-list::-webkit-scrollbar-thumb {
+  background: #DDD;
+  border-radius: 4px;
+}

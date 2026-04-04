@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #FAFAFA;
+      color: #111;
+    }
+    .header {
+      background: #4F46E5;
+      color: white;
+      padding: 16px;
+    }
+    .header h1 {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .header p {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 2px;
+    }
+    .content {
+      padding: 16px;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #EEE;
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label {
+      font-size: 12px;
+      color: #666;
+    }
+    .stat-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: #111;
+    }
+    .settings {
+      padding: 16px;
+      border-top: 1px solid #EEE;
+    }
+    .settings label {
+      display: block;
+      font-size: 11px;
+      color: #999;
+      margin-bottom: 4px;
+    }
+    .settings input {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 12px;
+      border: 1px solid #DDD;
+      border-radius: 6px;
+      color: #333;
+    }
+    .settings input:focus {
+      outline: none;
+      border-color: #4F46E5;
+      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      margin-top: 12px;
+      background: #4F46E5;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:hover { background: #4338CA; }
+    .btn-secondary {
+      background: #F5F5F5;
+      color: #333;
+      border: 1px solid #E5E5E5;
+    }
+    .btn-secondary:hover { background: #EEEEEE; }
+    .instructions {
+      padding: 16px;
+      border-top: 1px solid #EEE;
+    }
+    .instructions h3 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+    .instructions ol {
+      font-size: 11px;
+      color: #666;
+      padding-left: 16px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>AutoApply AI</h1>
+    <p>LinkedIn Job Scraper</p>
+  </div>
+
+  <div class="content">
+    <div class="stat-row">
+      <span class="stat-label">Jobs scraped this session</span>
+      <span class="stat-value" id="scraped-count">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Jobs sent to pipeline</span>
+      <span class="stat-value" id="sent-count">0</span>
+    </div>
+  </div>
+
+  <div class="settings">
+    <label for="url-input">AutoApply URL</label>
+    <input id="url-input" type="text" placeholder="https://autoapply-ai-delta.vercel.app" />
+    <button class="btn" id="open-pipeline">Open Pipeline</button>
+    <button class="btn btn-secondary" id="clear-data" style="margin-top: 8px;">Clear Scraped Data</button>
+  </div>
+
+  <div class="instructions">
+    <h3>How to use</h3>
+    <ol>
+      <li>Go to LinkedIn Jobs search</li>
+      <li>Click the floating AutoApply button</li>
+      <li>Click "Scan Page" to find jobs</li>
+      <li>Select jobs and click "Send to AutoApply"</li>
+      <li>Jobs appear in your Pipeline for batch tailoring</li>
+    </ol>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

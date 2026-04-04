@@ -1,14 +1,10 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 /**
  * TYPES — These define the shape of our data.
- *
- * Think of types like a form template. They don't hold data themselves,
- * but they describe what data should look like.
- * TypeScript uses these to catch errors BEFORE your code runs.
  */
 
-// What a parsed resume looks like (output from AI)
 export interface ParsedResume {
   contactInfo: {
     name: string;
@@ -17,7 +13,7 @@ export interface ParsedResume {
     location: string;
     linkedin?: string;
     portfolio?: string;
-    authorization?: string; // e.g., "Canadian Permanent Resident"
+    authorization?: string;
   };
   summary: string;
   skills: {
@@ -28,7 +24,7 @@ export interface ParsedResume {
   experience: {
     company: string;
     role: string;
-    location?: string; // e.g., "Vancouver, BC"
+    location?: string;
     startDate: string;
     endDate: string;
     bullets: string[];
@@ -47,7 +43,6 @@ export interface ParsedResume {
   certifications: string[];
 }
 
-// What a parsed job description looks like
 export interface ParsedJob {
   title: string;
   company: string;
@@ -55,13 +50,12 @@ export interface ParsedJob {
   preferredSkills: string[];
   yearsExperience: string;
   responsibilities: string[];
-  keywords: string[];       // ATS-important keywords
-  cultureCues: string[];    // What the company values
+  keywords: string[];
+  cultureCues: string[];
 }
 
-// A tailored resume result
 export interface TailoredResult {
-  originalMatchScore?: number; // Score before optimization
+  originalMatchScore?: number;
   matchScore: number;
   matchBreakdown?: {
     requiredSkills: { score: number; max: number; detail: string };
@@ -78,10 +72,10 @@ export interface TailoredResult {
   };
   tailoredResume: ParsedResume;
   coverLetter: string;
-  changes: { category: string; text: string }[];  // Each change tagged with which gap it addresses
+  changes: { category: string; text: string }[];
 }
 
-// A tracked application
+// Legacy single-application tracking
 export interface Application {
   id: string;
   jobTitle: string;
@@ -89,35 +83,81 @@ export interface Application {
   jobUrl?: string;
   status: "matched" | "approved" | "applied" | "responded" | "interviewing" | "rejected" | "offer";
   appliedAt: string;
-  resumeVersion: string;  // Which tailored resume was used
+  resumeVersion: string;
   matchScore: number;
 }
 
 /**
- * THE STORE — Zustand state management.
- *
- * This is like a global variable that any component can read from and write to.
- * When the store updates, every component that uses it automatically re-renders.
- *
- * Why Zustand? React's built-in state (useState) only works within a single component.
- * When you navigate from the "upload resume" page to the "tailor" page,
- * you need the parsed resume data to travel with you. That's what the store does.
+ * PIPELINE TYPES — For the agentic auto-apply system.
+ * A PipelineJob represents a single job in the daily apply queue.
+ */
+
+export type PipelineStatus =
+  | "queued"        // Job added, waiting to be processed
+  | "analyzing"     // Parsing the JD
+  | "tailoring"     // Tailoring resume for this job
+  | "ready"         // Resume tailored, ready for review/apply
+  | "applying"      // Auto-apply in progress
+  | "applied"       // Successfully applied
+  | "skipped"       // User skipped this job
+  | "failed";       // Something went wrong
+
+export interface PipelineJob {
+  id: string;
+  // Job info
+  jobTitle: string;
+  company: string;
+  location: string;
+  jobUrl: string;
+  jobDescription: string;
+  source: "linkedin" | "indeed" | "manual" | "other";
+  easyApply: boolean; // LinkedIn Easy Apply available?
+
+  // Processing state
+  status: PipelineStatus;
+  error?: string;
+
+  // AI outputs (populated as pipeline progresses)
+  parsedJob?: ParsedJob;
+  tailoredResult?: TailoredResult;
+
+  // Tracking
+  addedAt: string;
+  processedAt?: string;
+  appliedAt?: string;
+
+  // Scoring
+  originalScore?: number;
+  tailoredScore?: number;
+}
+
+export interface BatchRun {
+  id: string;
+  startedAt: string;
+  completedAt?: string;
+  totalJobs: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  isRunning: boolean;
+}
+
+/**
+ * THE STORE — Zustand with localStorage persistence for pipeline data.
  */
 
 interface AppState {
-  // Data
+  // === Original single-resume flow ===
   rawResumeText: string;
   parsedResume: ParsedResume | null;
   parsedJob: ParsedJob | null;
   tailoredResult: TailoredResult | null;
   applications: Application[];
-
-  // Loading states (so we can show spinners)
   isParsingResume: boolean;
   isAnalyzingJob: boolean;
   isTailoring: boolean;
 
-  // Actions (functions to update the data)
+  // Actions for single-resume flow
   setRawResumeText: (text: string) => void;
   setParsedResume: (resume: ParsedResume) => void;
   setParsedJob: (job: ParsedJob) => void;
@@ -127,33 +167,94 @@ interface AppState {
   setIsParsingResume: (val: boolean) => void;
   setIsAnalyzingJob: (val: boolean) => void;
   setIsTailoring: (val: boolean) => void;
+
+  // === Pipeline (batch auto-apply) ===
+  pipelineJobs: PipelineJob[];
+  currentBatch: BatchRun | null;
+  pipelineResumeText: string;       // The base resume for pipeline
+  pipelineParsedResume: ParsedResume | null;
+
+  // Pipeline actions
+  setPipelineResumeText: (text: string) => void;
+  setPipelineParsedResume: (resume: ParsedResume) => void;
+  addPipelineJob: (job: PipelineJob) => void;
+  addPipelineJobs: (jobs: PipelineJob[]) => void;
+  updatePipelineJob: (id: string, updates: Partial<PipelineJob>) => void;
+  removePipelineJob: (id: string) => void;
+  clearPipelineJobs: () => void;
+  setCurrentBatch: (batch: BatchRun | null) => void;
+  updateCurrentBatch: (updates: Partial<BatchRun>) => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  // Initial state — everything starts empty
-  rawResumeText: "",
-  parsedResume: null,
-  parsedJob: null,
-  tailoredResult: null,
-  applications: [],
-  isParsingResume: false,
-  isAnalyzingJob: false,
-  isTailoring: false,
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      // === Original single-resume flow ===
+      rawResumeText: "",
+      parsedResume: null,
+      parsedJob: null,
+      tailoredResult: null,
+      applications: [],
+      isParsingResume: false,
+      isAnalyzingJob: false,
+      isTailoring: false,
 
-  // Actions — each one updates a specific piece of state
-  setRawResumeText: (text) => set({ rawResumeText: text }),
-  setParsedResume: (resume) => set({ parsedResume: resume }),
-  setParsedJob: (job) => set({ parsedJob: job }),
-  setTailoredResult: (result) => set({ tailoredResult: result }),
-  addApplication: (app) =>
-    set((state) => ({ applications: [...state.applications, app] })),
-  updateApplicationStatus: (id, status) =>
-    set((state) => ({
-      applications: state.applications.map((a) =>
-        a.id === id ? { ...a, status } : a
-      ),
-    })),
-  setIsParsingResume: (val) => set({ isParsingResume: val }),
-  setIsAnalyzingJob: (val) => set({ isAnalyzingJob: val }),
-  setIsTailoring: (val) => set({ isTailoring: val }),
-}));
+      setRawResumeText: (text) => set({ rawResumeText: text }),
+      setParsedResume: (resume) => set({ parsedResume: resume }),
+      setParsedJob: (job) => set({ parsedJob: job }),
+      setTailoredResult: (result) => set({ tailoredResult: result }),
+      addApplication: (app) =>
+        set((state) => ({ applications: [...state.applications, app] })),
+      updateApplicationStatus: (id, status) =>
+        set((state) => ({
+          applications: state.applications.map((a) =>
+            a.id === id ? { ...a, status } : a
+          ),
+        })),
+      setIsParsingResume: (val) => set({ isParsingResume: val }),
+      setIsAnalyzingJob: (val) => set({ isAnalyzingJob: val }),
+      setIsTailoring: (val) => set({ isTailoring: val }),
+
+      // === Pipeline ===
+      pipelineJobs: [],
+      currentBatch: null,
+      pipelineResumeText: "",
+      pipelineParsedResume: null,
+
+      setPipelineResumeText: (text) => set({ pipelineResumeText: text }),
+      setPipelineParsedResume: (resume) => set({ pipelineParsedResume: resume }),
+      addPipelineJob: (job) =>
+        set((state) => ({ pipelineJobs: [...state.pipelineJobs, job] })),
+      addPipelineJobs: (jobs) =>
+        set((state) => ({ pipelineJobs: [...state.pipelineJobs, ...jobs] })),
+      updatePipelineJob: (id, updates) =>
+        set((state) => ({
+          pipelineJobs: state.pipelineJobs.map((j) =>
+            j.id === id ? { ...j, ...updates } : j
+          ),
+        })),
+      removePipelineJob: (id) =>
+        set((state) => ({
+          pipelineJobs: state.pipelineJobs.filter((j) => j.id !== id),
+        })),
+      clearPipelineJobs: () => set({ pipelineJobs: [], currentBatch: null }),
+      setCurrentBatch: (batch) => set({ currentBatch: batch }),
+      updateCurrentBatch: (updates) =>
+        set((state) => ({
+          currentBatch: state.currentBatch
+            ? { ...state.currentBatch, ...updates }
+            : null,
+        })),
+    }),
+    {
+      name: "autoapply-pipeline",
+      // Only persist pipeline data and applications (not transient single-flow state)
+      partialize: (state) => ({
+        pipelineJobs: state.pipelineJobs,
+        applications: state.applications,
+        pipelineResumeText: state.pipelineResumeText,
+        pipelineParsedResume: state.pipelineParsedResume,
+      }),
+    }
+  )
+);
