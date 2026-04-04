@@ -92,6 +92,119 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           var controls = document.querySelectorAll('[class*="select__control"]');
           console.log("AutoApply: [main-world] Found " + controls.length + " React Select controls");
 
+          /* Helper: find the best matching option from an options array */
+          function findMatch(options, value) {
+            var vl = value.toLowerCase();
+            var match = null;
+            // Exact label match
+            for (var i = 0; i < options.length; i++) {
+              var ol = (options[i].label || "").toLowerCase();
+              if (ol === vl) { match = options[i]; break; }
+            }
+            // Partial match
+            if (!match) {
+              for (var i = 0; i < options.length; i++) {
+                var ol = (options[i].label || "").toLowerCase();
+                if (ol.indexOf(vl) !== -1 || (vl.indexOf(ol) !== -1 && ol.length > 2)) {
+                  match = options[i]; break;
+                }
+              }
+            }
+            // Yes/No pattern matching
+            if (!match && (vl === "no" || vl === "yes")) {
+              for (var i = 0; i < options.length; i++) {
+                var ol = (options[i].label || "").toLowerCase();
+                if (vl === "no" && (ol.indexOf("no") === 0 || ol.indexOf("not") !== -1)) { match = options[i]; break; }
+                if (vl === "yes" && ol.indexOf("yes") === 0) { match = options[i]; break; }
+              }
+            }
+            return match;
+          }
+
+          /* Helper: after calling React onChange, also fire DOM events to
+             satisfy form validation (Formik, React Hook Form, etc.) */
+          function fireDomEvents(control) {
+            // Find the select container (parent of control)
+            var container = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
+            if (!container) return;
+
+            // Find ALL inputs inside the select container (hidden + search)
+            var inputs = container.querySelectorAll("input");
+            inputs.forEach(function(input) {
+              // Set a non-empty value so required validation passes
+              var nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, "value"
+              );
+              if (nativeSetter && nativeSetter.set) {
+                nativeSetter.set.call(input, input.value || "filled");
+              }
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+              input.dispatchEvent(new Event("blur", { bubbles: true }));
+            });
+
+            // Also fire events on the container itself
+            container.dispatchEvent(new Event("change", { bubbles: true }));
+            container.dispatchEvent(new Event("blur", { bubbles: true }));
+          }
+
+          /* Helper: walk up fiber tree collecting ALL onChange handlers,
+             then call them all. Greenhouse wraps React Select in form
+             field components — we need to trigger the form-level onChange
+             too, not just React Select's internal one. */
+          function callAllOnChangeHandlers(startFiber, match, control) {
+            var fiber = startFiber;
+            var maxWalk = 40;
+            var calledReactSelect = false;
+            var calledFormField = false;
+
+            while (fiber && maxWalk-- > 0) {
+              var props = fiber.memoizedProps || fiber.pendingProps;
+              if (!props) { fiber = fiber.return; continue; }
+
+              // React Select component: has onChange + options array
+              if (!calledReactSelect && typeof props.onChange === "function" && Array.isArray(props.options)) {
+                console.log("AutoApply: [main-world]   Calling React Select onChange");
+                try {
+                  props.onChange(match, { action: "select-option", option: match, name: props.name });
+                  calledReactSelect = true;
+                } catch (e) {
+                  console.error("AutoApply: [main-world]   React Select onChange error:", e);
+                }
+              }
+
+              // Form field wrapper: has onChange but NO options array
+              // This is the Formik/RHF field component that updates form state
+              if (calledReactSelect && !calledFormField && typeof props.onChange === "function" && !Array.isArray(props.options)) {
+                // Only call if it looks like a form field handler (has field/name props)
+                if (props.field || props.name || props.input) {
+                  console.log("AutoApply: [main-world]   Calling form field onChange (name: " + (props.name || props.field?.name || "unknown") + ")");
+                  try {
+                    // Try passing both formats — option object and raw value
+                    props.onChange(match);
+                  } catch (e) {
+                    try { props.onChange(match.value); } catch (e2) { /* ignore */ }
+                  }
+                  calledFormField = true;
+                }
+              }
+
+              // Also look for onBlur to clear "touched" validation state
+              if (calledReactSelect && typeof props.onBlur === "function") {
+                try { props.onBlur(); } catch (e) { /* ignore */ }
+              }
+
+              if (calledReactSelect && calledFormField) break;
+              fiber = fiber.return;
+            }
+
+            // Always fire DOM events as a final safety net
+            fireDomEvents(control);
+
+            return calledReactSelect;
+          }
+
+          // Build control → field mapping
           var controlMap = [];
           controls.forEach(function(control, idx) {
             var labelText = "";
@@ -119,17 +232,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               if (matchedField) break;
             }
             if (!matchedField) return;
-
             controlMap.push({ control: control, labelText: labelText, value: matchedField.value });
           });
 
           console.log("AutoApply: [main-world] Matched " + controlMap.length + " dropdowns to fill");
 
+          // Fill each dropdown
           controlMap.forEach(function(item) {
             var control = item.control;
-            var value = item.value.toLowerCase();
 
-            // Find React fiber on the control or its parent/container
+            // Find React fiber
             var fiberEl = control;
             var fiberKey = Object.keys(fiberEl).find(function(k) {
               return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
@@ -147,63 +259,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               return;
             }
 
+            // Walk fiber to find React Select's options
             var fiber = fiberEl[fiberKey];
             var maxWalk = 30;
-            var found = false;
+            var selectFiber = null;
+            var options = null;
 
-            while (fiber && maxWalk-- > 0) {
-              var props = fiber.memoizedProps || fiber.pendingProps;
+            var tempFiber = fiber;
+            while (tempFiber && maxWalk-- > 0) {
+              var props = tempFiber.memoizedProps || tempFiber.pendingProps;
               if (props && typeof props.onChange === "function" && Array.isArray(props.options) && props.options.length > 0) {
-                var options = props.options;
-                console.log("AutoApply: [main-world] \"" + item.labelText + "\" has " + options.length + " options");
-
-                var match = null;
-                // Exact match
-                for (var i = 0; i < options.length; i++) {
-                  var ol = (options[i].label || "").toLowerCase();
-                  if (ol === value) { match = options[i]; break; }
-                }
-                // Partial match
-                if (!match) {
-                  for (var i = 0; i < options.length; i++) {
-                    var ol = (options[i].label || "").toLowerCase();
-                    if (ol.indexOf(value) !== -1 || (value.indexOf(ol) !== -1 && ol.length > 2)) {
-                      match = options[i];
-                      break;
-                    }
-                  }
-                }
-                // Yes/No pattern matching
-                if (!match && (value === "no" || value === "yes")) {
-                  for (var i = 0; i < options.length; i++) {
-                    var ol = (options[i].label || "").toLowerCase();
-                    if (value === "no" && (ol.indexOf("no") === 0 || ol.indexOf("not") !== -1)) {
-                      match = options[i]; break;
-                    }
-                    if (value === "yes" && ol.indexOf("yes") === 0) {
-                      match = options[i]; break;
-                    }
-                  }
-                }
-
-                if (match) {
-                  console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\"");
-                  try {
-                    props.onChange(match, { action: "select-option", option: match, name: props.name });
-                  } catch (e) {
-                    console.error("AutoApply: [main-world] onChange error:", e);
-                  }
-                } else {
-                  console.log("AutoApply: [main-world] No match for \"" + item.value + "\" in \"" + item.labelText + "\". Available: " +
-                    options.map(function(o) { return o.label; }).join(" | "));
-                }
-                found = true;
+                selectFiber = tempFiber;
+                options = props.options;
                 break;
               }
-              fiber = fiber.return;
+              tempFiber = tempFiber.return;
             }
-            if (!found) {
+
+            if (!options) {
               console.log("AutoApply: [main-world] No Select fiber for \"" + item.labelText + "\"");
+              return;
+            }
+
+            console.log("AutoApply: [main-world] \"" + item.labelText + "\" has " + options.length + " options");
+            var match = findMatch(options, item.value);
+
+            if (match) {
+              console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\"");
+              // Call ALL onChange handlers up the tree + fire DOM events
+              callAllOnChangeHandlers(selectFiber, match, control);
+            } else {
+              console.log("AutoApply: [main-world] No match for \"" + item.value + "\" in \"" + item.labelText + "\". Available: " +
+                options.map(function(o) { return o.label; }).join(" | "));
             }
           });
 
