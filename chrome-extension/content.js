@@ -187,38 +187,33 @@
   async function clickJobCard(dismissIndex, jobTitle) {
     const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
 
-    // Strategy 1: Try the original index first
+    // Strategy 1: Always try the original index first — most reliable for duplicate titles
     let btn = dismissBtns[dismissIndex];
-    if (btn) {
-      const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
-      const expectedTitle = (jobTitle || "").toLowerCase();
-      // Verify the index still points to the right job
-      if (expectedTitle && !ariaLabel.includes(expectedTitle.substring(0, 20))) {
-        btn = null; // Index shifted — fall through to strategy 2
-      }
-    }
 
-    // Strategy 2: Find by matching the aria-label with the job title
+    // Strategy 2: If index doesn't exist (scrolled away), fall back to title search
     if (!btn && jobTitle) {
       const titleLower = jobTitle.toLowerCase();
       for (const candidate of dismissBtns) {
         const ariaLabel = (candidate.getAttribute("aria-label") || "").toLowerCase();
-        if (ariaLabel.includes(titleLower.substring(0, 20)) || ariaLabel.includes(titleLower)) {
+        if (ariaLabel.includes(titleLower.substring(0, 20))) {
           btn = candidate;
           break;
         }
       }
     }
 
-    // Strategy 3: Last resort — try original index even if title doesn't match
     if (!btn) {
-      btn = dismissBtns[dismissIndex];
+      console.warn("AutoApply: No dismiss button found at index", dismissIndex, "for", jobTitle);
+      return false;
     }
 
-    if (!btn) return false;
+    // Click the card's <li> container, not the dismiss button itself
+    let card = btn;
+    for (let i = 0; i < 6; i++) {
+      if (card.parentElement) card = card.parentElement;
+      if (card.tagName === "LI" || card.getAttribute("data-occludable-job-id")) break;
+    }
 
-    // Click the card area, not the dismiss button
-    const card = btn.parentElement?.parentElement || btn.parentElement;
     if (card) {
       card.click();
       await new Promise((r) => setTimeout(r, 2500));
@@ -586,6 +581,8 @@
   function updateJobStatus(jobId, status) {
     const job = scrapedJobs.find((j) => j.id === jobId);
     if (job) job.status = status;
+    // Persist job statuses so UI survives tab switches / re-injection
+    persistState();
     renderJobList();
   }
 
@@ -813,7 +810,7 @@
         ${job.status === "applied" ? "background: #F0FDF4;" : ""}
         ${job.status === "failed" ? "background: #FEF2F2;" : ""}
       " data-job-id="${job.id}" class="autoapply-job-item">
-        ${isApplying
+        ${(isApplying || job.status !== "pending")
           ? `<span style="font-size: 14px; flex-shrink: 0;">${getStatusIcon(job.status)}</span>`
           : `<input type="checkbox" ${selectedJobIds.has(job.id) ? "checked" : ""} style="
               width: 16px; height: 16px; accent-color: #4F46E5; cursor: pointer; flex-shrink: 0;
@@ -831,9 +828,13 @@
             ${job.easyApply ? '<span style="color: #9CA3AF; font-size: 10px; margin-left: 4px;">(Easy Apply)</span>' : ""}
           </p>
         </div>
-        <span style="font-size: 10px; color: #999; flex-shrink: 0;">
-          ${job.status !== "pending" ? job.status : ""}
-        </span>
+        ${job.status !== "pending" ? `<span style="
+          font-size: 10px; font-weight: 600; flex-shrink: 0; padding: 2px 6px; border-radius: 4px;
+          ${job.status === "applied" ? "background: #D1FAE5; color: #065F46;" : ""}
+          ${job.status === "applying" ? "background: #FEF3C7; color: #92400E;" : ""}
+          ${job.status === "failed" ? "background: #FEE2E2; color: #991B1B;" : ""}
+          ${job.status === "skipped" ? "background: #F3F4F6; color: #6B7280;" : ""}
+        ">${job.status}</span>` : ""}
       </div>
     `
       )
@@ -843,6 +844,9 @@
       list.querySelectorAll(".autoapply-job-item").forEach((item) => {
         item.addEventListener("click", () => {
           const id = item.getAttribute("data-job-id");
+          // Don't allow toggling already-processed jobs
+          const job = scrapedJobs.find((j) => j.id === id);
+          if (job && job.status !== "pending") return;
           if (selectedJobIds.has(id)) selectedJobIds.delete(id);
           else selectedJobIds.add(id);
           persistState();
@@ -874,7 +878,24 @@
     if (scrapedJobs.length > 0) {
       renderJobList();
       updateStartButton();
-      updateStatus(`Restored ${scrapedJobs.length} jobs from previous scan`);
+
+      // Check if batch is still active — auto-open panel and show progress overlay
+      chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+        const bp = result._aa_batchProgress;
+        if (bp && bp.active) {
+          // Auto-expand the panel so user sees status
+          const toggle = document.getElementById("autoapply-toggle");
+          const expanded = document.getElementById("autoapply-expanded");
+          if (toggle && expanded) {
+            toggle.style.display = "none";
+            expanded.style.display = "block";
+          }
+          showProgressOverlay(bp.current, bp.total, { title: bp.jobTitle, company: bp.company, location: bp.location });
+          updateStatus(`In progress: Job ${bp.current}/${bp.total} — ${bp.jobTitle}`);
+        } else {
+          updateStatus(`Restored ${scrapedJobs.length} jobs from previous scan`);
+        }
+      });
     }
   });
 })();
