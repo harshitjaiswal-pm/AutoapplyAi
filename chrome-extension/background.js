@@ -87,7 +87,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       world: "MAIN",
       args: [message.fields],
       func: function(fields) {
-        /* This function runs in the PAGE's main world — full React access */
+        /* This function runs in the PAGE's main world — full React access.
+         *
+         * KEY INSIGHT (from live debugging on Greenhouse forms):
+         * - Calling props.onChange() on the React Select fiber only updates the
+         *   React Select display, NOT the Greenhouse form state (Rs component).
+         * - The correct approach is to find the React Select CLASS INSTANCE
+         *   (stateNode with focusInput method) and call instance.setValue().
+         *   setValue() is React Select's internal method that properly chains
+         *   through its state management and calls the parent onChange callback.
+         * - Dropdowns MUST be filled SEQUENTIALLY with delays (~600ms) between
+         *   each to avoid React batching race conditions that cause some form
+         *   state updates to be lost.
+         */
         try {
           var controls = document.querySelectorAll('[class*="select__control"]');
           console.log("AutoApply: [main-world] Found " + controls.length + " React Select controls");
@@ -121,100 +133,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return match;
           }
 
-          /* Helper: after calling React onChange, update the hidden form input
-             and fire DOM events to satisfy form validation.
-
-             React Select renders a hidden <input type="hidden" name="..."> for
-             form submission. Calling onChange updates React state but the hidden
-             input may not re-render in time for validation. We set it manually. */
-          function fireDomEvents(control, matchValue) {
-            var container = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
-            if (!container) return;
-
-            // Walk up further to find the field wrapper that contains the hidden input
-            var fieldWrapper = container;
-            for (var i = 0; i < 5; i++) {
-              fieldWrapper = fieldWrapper.parentElement;
-              if (!fieldWrapper) break;
-            }
-
-            var inputs = (fieldWrapper || container).querySelectorAll("input");
-            inputs.forEach(function(input) {
-              var inputType = (input.type || "").toLowerCase();
-
-              // Set value on HIDDEN inputs only (these are for form submission)
-              if (inputType === "hidden" && matchValue) {
-                console.log("AutoApply: [main-world]   Setting hidden input " + (input.name || "unnamed") + " = " + matchValue);
-                input.value = matchValue;
-                input.setAttribute("value", matchValue);
-                input.dispatchEvent(new Event("input", { bubbles: true }));
-                input.dispatchEvent(new Event("change", { bubbles: true }));
-              }
-
-              // Fire blur on ALL inputs to mark field as "touched"
-              input.dispatchEvent(new Event("blur", { bubbles: true }));
-              input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+          /* Helper: find the React Select class instance (stateNode) from a control element.
+             The instance has setValue(), focusInput(), and other internal methods. */
+          function getSelectInstance(control) {
+            var fiberKey = Object.keys(control).find(function(k) {
+              return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
             });
-
-            // Fire blur on the container too
-            container.dispatchEvent(new Event("blur", { bubbles: true }));
-            container.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-          }
-
-          /* Helper: walk up fiber tree collecting ALL onChange handlers,
-             then call them all. Greenhouse wraps React Select in form
-             field components — we need to trigger the form-level onChange
-             too, not just React Select's internal one. */
-          function callAllOnChangeHandlers(startFiber, match, control) {
-            var fiber = startFiber;
-            var maxWalk = 40;
-            var calledReactSelect = false;
-            var calledFormField = false;
-
-            while (fiber && maxWalk-- > 0) {
-              var props = fiber.memoizedProps || fiber.pendingProps;
-              if (!props) { fiber = fiber.return; continue; }
-
-              // React Select component: has onChange + options array
-              if (!calledReactSelect && typeof props.onChange === "function" && Array.isArray(props.options)) {
-                console.log("AutoApply: [main-world]   Calling React Select onChange");
-                try {
-                  props.onChange(match, { action: "select-option", option: match, name: props.name });
-                  calledReactSelect = true;
-                } catch (e) {
-                  console.error("AutoApply: [main-world]   React Select onChange error:", e);
-                }
+            if (!fiberKey) {
+              // Try parent containers
+              var container = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
+              if (container) {
+                fiberKey = Object.keys(container).find(function(k) {
+                  return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
+                });
+                if (fiberKey) control = container;
               }
+            }
+            if (!fiberKey) return null;
 
-              // Form field wrapper: has onChange but NO options array
-              // This is the Formik/RHF/custom field component that updates form state.
-              // Call ANY onChange above React Select level — don't be picky about props.
-              if (calledReactSelect && !calledFormField && typeof props.onChange === "function" && !Array.isArray(props.options)) {
-                console.log("AutoApply: [main-world]   Calling form field onChange");
-                try {
-                  props.onChange(match);
-                } catch (e) {
-                  try { props.onChange(match.value); } catch (e2) {
-                    try { props.onChange({ target: { value: match.value } }); } catch (e3) { /* ignore */ }
-                  }
-                }
-                calledFormField = true;
+            var fiber = control[fiberKey];
+            var current = fiber;
+            var maxWalk = 30;
+            var instance = null;
+            var options = null;
+
+            while (current && maxWalk-- > 0) {
+              // React Select class component: has stateNode with focusInput method
+              if (current.stateNode && typeof current.stateNode.focusInput === "function") {
+                instance = current.stateNode;
+                options = instance.props ? instance.props.options : null;
+                break;
               }
-
-              // Also look for onBlur to clear "touched" validation state
-              if (calledReactSelect && typeof props.onBlur === "function") {
-                try { props.onBlur(); } catch (e) { /* ignore */ }
-              }
-
-              if (calledReactSelect && calledFormField) break;
-              fiber = fiber.return;
+              current = current.return;
             }
 
-            // Always fire DOM events as a final safety net
-            // Pass match.value so the hidden form input gets the correct value
-            fireDomEvents(control, match ? match.value : null);
-
-            return calledReactSelect;
+            return { instance: instance, options: options || [] };
           }
 
           // Build control → field mapping
@@ -250,64 +203,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           console.log("AutoApply: [main-world] Matched " + controlMap.length + " dropdowns to fill");
 
-          // Fill each dropdown
-          controlMap.forEach(function(item) {
-            var control = item.control;
-
-            // Find React fiber
-            var fiberEl = control;
-            var fiberKey = Object.keys(fiberEl).find(function(k) {
-              return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
-            });
-            if (!fiberKey) {
-              fiberEl = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
-              if (fiberEl) {
-                fiberKey = Object.keys(fiberEl).find(function(k) {
-                  return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
-                });
-              }
-            }
-            if (!fiberKey) {
-              console.log("AutoApply: [main-world] No fiber for \"" + item.labelText + "\"");
+          /* Fill dropdowns SEQUENTIALLY with delays to prevent React batching
+             from swallowing form-state updates. Each setValue triggers a React
+             re-render; if we fire them all at once, React batches the updates
+             and some form-level state changes get lost. */
+          function fillDropdownSequentially(index) {
+            if (index >= controlMap.length) {
+              console.log("AutoApply: [main-world] All " + controlMap.length + " dropdowns filled sequentially");
               return;
             }
 
-            // Walk fiber to find React Select's options
-            var fiber = fiberEl[fiberKey];
-            var maxWalk = 30;
-            var selectFiber = null;
-            var options = null;
+            var item = controlMap[index];
+            var result = getSelectInstance(item.control);
 
-            var tempFiber = fiber;
-            while (tempFiber && maxWalk-- > 0) {
-              var props = tempFiber.memoizedProps || tempFiber.pendingProps;
-              if (props && typeof props.onChange === "function" && Array.isArray(props.options) && props.options.length > 0) {
-                selectFiber = tempFiber;
-                options = props.options;
-                break;
-              }
-              tempFiber = tempFiber.return;
-            }
-
-            if (!options) {
-              console.log("AutoApply: [main-world] No Select fiber for \"" + item.labelText + "\"");
+            if (!result.instance) {
+              console.log("AutoApply: [main-world] No Select instance for \"" + item.labelText + "\"");
+              // Move to next dropdown after delay
+              setTimeout(function() { fillDropdownSequentially(index + 1); }, 300);
               return;
             }
 
+            var options = result.options;
             console.log("AutoApply: [main-world] \"" + item.labelText + "\" has " + options.length + " options");
             var match = findMatch(options, item.value);
 
             if (match) {
-              console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\"");
-              // Call ALL onChange handlers up the tree + fire DOM events
-              callAllOnChangeHandlers(selectFiber, match, control);
+              console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\" (via setValue)");
+              // Use React Select's internal setValue method — this properly updates
+              // both React Select's internal state AND calls the parent form's onChange,
+              // which updates Greenhouse's form validation state.
+              result.instance.setValue(match, "select-option", match);
             } else {
               console.log("AutoApply: [main-world] No match for \"" + item.value + "\" in \"" + item.labelText + "\". Available: " +
                 options.map(function(o) { return o.label; }).join(" | "));
             }
-          });
 
-          // Also handle native <select> elements
+            // Delay before filling the next dropdown to let React finish re-rendering
+            setTimeout(function() { fillDropdownSequentially(index + 1); }, 600);
+          }
+
+          // Start the sequential fill chain
+          fillDropdownSequentially(0);
+
+          // Also handle native <select> elements (non-React Select)
           document.querySelectorAll("select").forEach(function(sel) {
             var labelText = "";
             var id = sel.id;
@@ -323,37 +261,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (m) { sel.value = m.value; sel.dispatchEvent(new Event("change", { bubbles: true })); console.log("AutoApply: [main-world native] " + labelText + " -> " + m.text); }
           });
 
-          // Schedule a delayed pass to verify hidden inputs after React re-renders.
-          // React batches state updates, so hidden inputs might not be set yet.
-          setTimeout(function() {
-            console.log("AutoApply: [main-world] Running delayed hidden input verification...");
-            var selects = document.querySelectorAll('[class*="select__container"], [class*="select__control"]');
-            selects.forEach(function(el) {
-              // Check if this select has a displayed value but the hidden input is empty
-              var valueContainer = el.querySelector('[class*="single-value"], [class*="singleValue"]');
-              if (!valueContainer) return;
-              var displayedText = valueContainer.textContent.trim();
-              if (!displayedText) return;
-
-              // Find hidden input in the wider field area
-              var fieldWrapper = el;
-              for (var i = 0; i < 6; i++) { fieldWrapper = fieldWrapper.parentElement; if (!fieldWrapper) break; }
-              if (!fieldWrapper) return;
-
-              var hiddenInputs = fieldWrapper.querySelectorAll('input[type="hidden"]');
-              hiddenInputs.forEach(function(inp) {
-                if (!inp.value && inp.name) {
-                  console.log("AutoApply: [main-world] Fixing empty hidden input: " + inp.name + " = displayed text");
-                  // We can't know the exact value, but the presence of any value helps validation
-                  inp.value = displayedText;
-                  inp.setAttribute("value", displayedText);
-                  inp.dispatchEvent(new Event("change", { bubbles: true }));
-                }
-              });
-            });
-          }, 1500);
-
-          console.log("AutoApply: [main-world] Dropdown filling complete");
+          console.log("AutoApply: [main-world] Dropdown filling initiated (sequential with delays)");
           return { success: true };
         } catch (err) {
           console.error("AutoApply: [main-world] Error:", err);

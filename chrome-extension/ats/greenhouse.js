@@ -184,11 +184,13 @@
     // Filter out empty values
     const activeDropdowns = dropdownFields.filter((f) => f.value);
 
-    // Fill dropdowns via main world. When done, RE-FILL text fields because
-    // the React re-renders triggered by dropdown onChange can wipe out
-    // DOM values set via setNativeValue (which only sets DOM, not React state).
+    // Fill dropdowns via main world using sequential setValue() with delays.
+    // Dropdowns are filled one-at-a-time (600ms apart) to prevent React batching
+    // from losing form state updates. After ALL dropdowns finish, RE-FILL text
+    // fields because React re-renders can wipe out DOM values set via setNativeValue.
+    const dropdownFillTimeMs = (activeDropdowns.length * 700) + 500;
     fillDropdownsViaMainWorld(activeDropdowns, function onComplete() {
-      console.log("AutoApply: Re-filling text fields after dropdown render...");
+      console.log("AutoApply: Re-filling text fields after dropdown render (waiting " + dropdownFillTimeMs + "ms)...");
       setTimeout(() => {
         for (const { sel, val } of selectorFields) {
           if (val) fillBySelector(sel, val, true);
@@ -197,7 +199,7 @@
           if (value) fillByLabel(labels, value, true);
         }
         console.log("AutoApply: Text fields re-filled");
-      }, 1000);
+      }, dropdownFillTimeMs);
     });
 
     // ── Cover letter ──
