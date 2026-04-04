@@ -171,9 +171,14 @@ Compare the candidate's location (from contactInfo.location) to the job's locati
 STEP 1 — Determine the job's country:
 - Parse the JD location for country. "Remote Canada", "Toronto, ON", "Vancouver, BC" = Canada. "New York, NY", "Remote US" = United States. "Remote" with no country = assume same country as candidate.
 
-STEP 2 — Apply the right rule:
-- REMOTE ROLE, SAME COUNTRY as candidate (e.g., job is "Remote Canada" and candidate is in Canada): Keep candidate's city. Append "Open to relocate anywhere in Canada" (or the relevant country). Do NOT mention a specific city. Format: "{Candidate's City}, Canada | Open to relocate anywhere in Canada".
-- REMOTE ROLE, DIFFERENT COUNTRY (e.g., job is "Remote US" but candidate is in Canada): Keep candidate's city. Do NOT claim willingness to relocate to another country unless the candidate's work authorization supports it. Instead, just keep the candidate's location as-is.
+STEP 2 — Scan the ENTIRE JD for city mentions:
+- Look beyond just the "Location" field. Check the JD body text, team description, office mentions, "About us" section, etc. for any city names (e.g., "Our Toronto office", "team is based in Toronto", "Toronto, ON").
+- If ANY specific city in the SAME COUNTRY as the candidate is mentioned anywhere in the JD, treat that as the JD city for relocation purposes.
+
+STEP 3 — Apply the right rule:
+- REMOTE ROLE, SAME COUNTRY, JD MENTIONS A SPECIFIC CITY (e.g., job is "Remote Canada" but JD mentions "Toronto" anywhere): Keep candidate's city. Append relocation to that city. Format: "{Candidate's City}, Canada | Open to relocate to {JD City}". Example: "Vancouver, Canada | Open to relocate to Toronto, ON". This signals ATS and recruiter that you'd be near the office if needed.
+- REMOTE ROLE, SAME COUNTRY, NO SPECIFIC CITY in JD (e.g., just "Remote Canada" with no city mentioned): Keep candidate's city. Append "Open to relocate anywhere in Canada". Format: "{Candidate's City}, Canada | Open to relocate anywhere in Canada".
+- REMOTE ROLE, DIFFERENT COUNTRY (e.g., job is "Remote US" but candidate is in Canada): Keep candidate's city as-is. Do NOT claim willingness to relocate to another country.
 - HYBRID/ONSITE ROLE, SAME COUNTRY, DIFFERENT CITY (e.g., job is "Toronto, ON" and candidate is in "Vancouver, BC"): Append relocation signal. Format: "{Candidate's City} | Open to relocate to {JD City}".
 - HYBRID/ONSITE ROLE, DIFFERENT COUNTRY: Do NOT suggest relocation to another country. Keep candidate's location as-is.
 - JD location MATCHES candidate's city: Keep as-is, no changes needed.
@@ -183,7 +188,7 @@ CRITICAL RULES:
 - NEVER suggest relocating to a different country (e.g., do NOT say "Open to relocate to San Francisco, CA" for a Canadian candidate applying to a Canadian remote role).
 - NEVER remove or hide the candidate's actual city. Always keep it.
 - NEVER change the candidate's location to the JD city without keeping the original city too.
-- For remote roles, "Open to relocate anywhere in {Country}" is the correct phrasing — not a specific city.
+- When the JD mentions a specific city in the same country, ALWAYS prefer "Open to relocate to {City}" over the generic "anywhere in {Country}".
 
 MATCH SCORE RUBRIC — Score using this EXACT formula. Show your math.
 
