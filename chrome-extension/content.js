@@ -372,16 +372,12 @@
           source: "linkedin",
         }));
 
-        const pipelineUrl = `${url}/pipeline?jobs=${encodeURIComponent(
-          JSON.stringify(payload)
-        )}`;
-
-        if (pipelineUrl.length > 8000) {
-          chrome.storage.local.set({ pendingJobs: payload });
-          window.open(`${url}/pipeline?fromExtension=true`, "_blank");
-        } else {
-          window.open(pipelineUrl, "_blank");
-        }
+        // Send via background script — it opens the tab and injects data into localStorage
+        chrome.runtime.sendMessage({
+          type: "SEND_JOBS_TO_PIPELINE",
+          jobs: payload,
+          url: url,
+        });
 
         send.textContent = `Sent ${selectedJobs.length} jobs!`;
         setTimeout(() => {

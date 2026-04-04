@@ -3,7 +3,7 @@
   "name": "AutoApply AI — LinkedIn Job Scraper",
   "version": "1.0.0",
   "description": "Scrape jobs from LinkedIn and send them to AutoApply AI for batch tailoring.",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": ["https://www.linkedin.com/*"],
   "action": {
     "default_popup": "popup.html",

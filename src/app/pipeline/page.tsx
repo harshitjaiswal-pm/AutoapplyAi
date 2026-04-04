@@ -40,35 +40,67 @@ function PipelinePage() {
   const [activeTab, setActiveTab] = useState<"add" | "queue" | "results">("add");
   const [mode, setMode] = useState<"fast" | "pro">("fast");
 
-  // Handle jobs received from Chrome Extension via URL params
+  // Helper to import jobs from any source
+  const importJobs = useCallback((incoming: any[]) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return;
+    const newJobs: PipelineJob[] = incoming.map((j: any) => ({
+      id: generateJobId(),
+      jobTitle: j.jobTitle || "Untitled",
+      company: j.company || "Unknown",
+      location: j.location || "",
+      jobUrl: j.jobUrl || "",
+      jobDescription: j.jobDescription || "",
+      source: (j.source as any) || "linkedin",
+      easyApply: j.easyApply ?? false,
+      status: "queued" as const,
+      addedAt: new Date().toISOString(),
+    }));
+    addPipelineJobs(newJobs);
+    setActiveTab("queue");
+  }, [addPipelineJobs]);
+
+  // Method 1: Handle jobs from URL params (small payloads)
   useEffect(() => {
     const jobsParam = searchParams.get("jobs");
     if (jobsParam) {
       try {
-        const incoming = JSON.parse(decodeURIComponent(jobsParam));
-        if (Array.isArray(incoming) && incoming.length > 0) {
-          const newJobs: PipelineJob[] = incoming.map((j: any) => ({
-            id: generateJobId(),
-            jobTitle: j.jobTitle || "Untitled",
-            company: j.company || "Unknown",
-            location: j.location || "",
-            jobUrl: j.jobUrl || "",
-            jobDescription: j.jobDescription || "",
-            source: (j.source as any) || "linkedin",
-            easyApply: j.easyApply ?? false,
-            status: "queued" as const,
-            addedAt: new Date().toISOString(),
-          }));
-          addPipelineJobs(newJobs);
-          setActiveTab("queue");
-          // Clean URL
-          window.history.replaceState({}, "", "/pipeline");
-        }
+        const incoming = JSON.parse(jobsParam);
+        importJobs(incoming);
+        window.history.replaceState({}, "", "/pipeline");
       } catch (e) {
         console.error("Failed to parse jobs from URL:", e);
       }
     }
-  }, [searchParams, addPipelineJobs]);
+  }, [searchParams, importJobs]);
+
+  // Method 2: Handle jobs injected by Chrome Extension via localStorage + custom event
+  useEffect(() => {
+    // Check localStorage on mount (extension may have already injected data)
+    const stored = localStorage.getItem("autoapply-extension-jobs");
+    if (stored) {
+      try {
+        const incoming = JSON.parse(stored);
+        importJobs(incoming);
+        localStorage.removeItem("autoapply-extension-jobs");
+        window.history.replaceState({}, "", "/pipeline");
+      } catch (e) {
+        console.error("Failed to parse jobs from localStorage:", e);
+      }
+    }
+
+    // Also listen for the custom event (if extension injects after page load)
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.jobs) {
+        importJobs(detail.jobs);
+        localStorage.removeItem("autoapply-extension-jobs");
+        window.history.replaceState({}, "", "/pipeline");
+      }
+    };
+
+    window.addEventListener("autoapply-extension-import", handler);
+    return () => window.removeEventListener("autoapply-extension-import", handler);
+  }, [importJobs]);
 
   return (
     <div className="max-w-5xl mx-auto py-10 space-y-6 animate-fade-in">
