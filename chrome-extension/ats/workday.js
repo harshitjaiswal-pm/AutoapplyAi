@@ -216,13 +216,13 @@
       }
 
       // Now we're on Step 2 — wait for tailoring (likely already done by now)
-      showBanner("Preparing your tailored resume...", "ai", { subtext: "Almost ready..." });
+      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — it will download automatically." });
       const tailoredData = await tailoringPromise;
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
     } else if (step === 2) {
       // Landed directly on Step 2 — wait for tailoring then upload
-      showBanner("Preparing your tailored resume...", "ai", { subtext: "Tailoring in progress..." });
+      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — it will download automatically." });
       const tailoredData = await tailoringPromise;
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
@@ -278,9 +278,9 @@
     });
 
     showBanner(
-      "Upload the downloaded resume PDF — AutoApply will continue automatically once detected.",
+      "Your tailored resume is downloading now — upload it here to continue.",
       "user",
-      { subtext: "Check your Downloads folder for the tailored PDF." }
+      { subtext: "📥 Check your Downloads folder · drag the PDF into the upload box above · AutoApply will take over automatically." }
     );
 
     LOG("Waiting for user to upload resume...");
