@@ -807,84 +807,66 @@
     if (!input || value === undefined || value === null) return false;
     value = String(value);
 
-    // ── Strategy 1: execCommand insertText ───────────────────────────────────
-    // Goes through the browser's native text-insertion path, which React
-    // intercepts at the event-listener level — the most authentic approach
-    // short of real CDP keystrokes. Works even when React props are absent.
-    try {
-      input.focus();
-
-      // Clear existing content first
-      const proto = input.tagName === "TEXTAREA"
-        ? window.HTMLTextAreaElement.prototype
-        : window.HTMLInputElement.prototype;
-      const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-      if (nativeSetter) nativeSetter.call(input, "");
-      else input.value = "";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
-
-      // Insert the real value
-      const inserted = document.execCommand("insertText", false, value);
-      if (inserted && input.value === value) {
-        LOG(`execCommand insertText succeeded: "${value.substring(0, 25)}"`);
-        input.dispatchEvent(new Event("blur", { bubbles: true }));
-        return true;
-      }
-    } catch (e) { /* fall through */ }
-
-    // ── Strategy 2: React __reactProps$ onInput/onChange ────────────────────
-    // Find React props key — covers __reactProps$ (React 17+) and
-    // __reactEventHandlers$ (React 16)
-    const propsKey = Object.keys(input).find(k =>
-      k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers')
-    );
-
-    const proto2 = input.tagName === "TEXTAREA"
+    // Set native DOM value first (makes the text visible)
+    const proto = input.tagName === "TEXTAREA"
       ? window.HTMLTextAreaElement.prototype
       : window.HTMLInputElement.prototype;
-    const nativeSetter2 = Object.getOwnPropertyDescriptor(proto2, "value")?.set;
-    if (nativeSetter2) nativeSetter2.call(input, value);
+    const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (nativeSetter) nativeSetter.call(input, value);
     else input.value = value;
 
-    if (propsKey) {
-      const props = input[propsKey];
+    // ── Strategy 1: React __reactProps$ / __reactEventHandlers$ ────────────
+    // Covers React 17+ (__reactProps$) and React 16 (__reactEventHandlers$).
+    // Call onInput and onChange directly so Workday's form state updates.
+    try {
+      const propsKey = Object.keys(input).find(k =>
+        k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers')
+      );
 
-      // Try onInput (Workday's primary handler)
-      if (props?.onInput) {
-        const ev = new InputEvent("input", { bubbles: true, inputType: "insertText", data: value });
-        Object.defineProperty(ev, "target", { value: input, writable: false });
-        props.onInput(ev);
+      if (propsKey) {
+        const props = input[propsKey];
+
+        if (props?.onInput) {
+          const ev = new InputEvent("input", { bubbles: true, inputType: "insertText", data: value });
+          Object.defineProperty(ev, "target", { value: input, writable: false });
+          props.onInput(ev);
+        }
+
+        if (props?.onChange) {
+          const ev = new Event("change", { bubbles: true });
+          Object.defineProperty(ev, "target", { value: input, writable: false });
+          props.onChange(ev);
+        }
+
+        if (props?.onBlur) {
+          const ev = new FocusEvent("blur", { bubbles: true });
+          Object.defineProperty(ev, "target", { value: input, writable: false });
+          props.onBlur(ev);
+        }
+
+        LOG(`React props fired for: "${value.substring(0, 25)}"`);
+        return true;
       }
-
-      // Also try onChange (some Workday versions use this)
-      if (props?.onChange) {
-        const ev = new Event("change", { bubbles: true });
-        Object.defineProperty(ev, "target", { value: input, writable: false });
-        props.onChange(ev);
-      }
-
-      // Trigger blur to finalise
-      if (props?.onBlur) {
-        const ev = new Event("blur", { bubbles: true });
-        Object.defineProperty(ev, "target", { value: input, writable: false });
-        props.onBlur(ev);
-      }
-
-      LOG(`React props fired for: "${value.substring(0, 25)}"`);
-      return true;
+    } catch (e) {
+      LOG(`React props strategy failed (${e.message}), trying native events`);
     }
 
-    // ── Strategy 3: _valueTracker + native events (older React / non-React) ─
-    const tracker = input._valueTracker;
-    if (tracker) tracker.setValue("");
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
-    LOG(`Fallback native events fired for: "${value.substring(0, 25)}"`);
+    // ── Strategy 2: _valueTracker + native events (non-React / older React) ─
+    try {
+      const tracker = input._valueTracker;
+      if (tracker) tracker.setValue("");
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+      LOG(`Native events fired for: "${value.substring(0, 25)}"`);
+    } catch (e) {
+      LOG(`Native events also failed: ${e.message}`);
+    }
+
     return true;
   }
 
-  /** Legacy alias kept for callers that still reference setNativeValueFallback */
+  /** Legacy alias kept for backward compat */
   function setNativeValueFallback(el, value) {
     return setWorkdayValue(el, value);
   }
