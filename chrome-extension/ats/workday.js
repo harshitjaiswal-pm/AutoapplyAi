@@ -187,45 +187,145 @@
     if (step === 1) {
       await fillStep1(tailoredData?.tailoredResult, pendingJob);
       await advanceToStep(2);
+      // Step 2 = resume upload — download the tailored PDF and wait for user to upload
+      await handleStep2ResumeUpload(tailoredData, pendingJob);
+
     } else if (step === 2) {
-      await fillStep2(tailoredData?.tailoredResult, pendingJob);
-      await advanceToStep(3);
+      // Landed directly on Step 2 — same resume upload flow
+      await handleStep2ResumeUpload(tailoredData, pendingJob);
+
     } else if (step === 3) {
       await fillStep3(tailoredData?.tailoredResult, pendingJob);
       await advanceToStep(4);
+      showBanner("AutoApply: Almost done! Review your application and click Submit.", "success");
+      watchForSubmit(pendingJob);
+
     } else if (step === 4) {
-      // Review step — nothing to fill
       LOG("On Review step — user should review and submit");
+      showBanner("AutoApply: Review your application and click Submit.", "success");
+      watchForSubmit(pendingJob);
+    }
+  }
+
+  /**
+   * Handle Step 2 (My Experience / Resume Upload).
+   * Downloads the tailored PDF, shows a persistent "waiting" banner,
+   * watches for the user to upload the file, then continues automatically.
+   */
+  async function handleStep2ResumeUpload(tailoredData, pendingJob) {
+    // First try programmatic upload — if Workday allows it, great
+    const uploaded = await uploadResumeProgrammatically();
+
+    if (uploaded) {
+      // Programmatic upload succeeded — proceed automatically
+      await sleep(1500);
+      showBanner("AutoApply: Resume uploaded! Continuing application...");
+      await fillStep2(tailoredData?.tailoredResult, pendingJob);
+      await advanceToStep(3);
+      await sleep(1000);
+      await fillStep3(tailoredData?.tailoredResult, pendingJob);
+      await advanceToStep(4);
+      showBanner("AutoApply: Almost done! Review your application and click Submit.", "success");
+      watchForSubmit(pendingJob);
+      chrome.storage.local.remove(["pendingApplication"]);
+      return;
     }
 
-    // Download tailored resume PDF for manual upload
+    // Programmatic upload failed — download PDF and wait for manual upload
     chrome.runtime.sendMessage({
       type: "DOWNLOAD_RESUME",
       job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
     });
 
-    // Mark as form_filled (not fully applied yet — user must submit)
-    chrome.runtime.sendMessage({
-      type: "APPLICATION_COMPLETED",
-      job: {
-        id: pendingJob.id,
-        jobTitle: pendingJob.jobTitle,
-        company: pendingJob.company,
-        jobUrl: pendingJob.jobUrl || window.location.href,
-        matchScore: tailoredData?.tailoredResult?.matchScore || 0,
-        completedAt: new Date().toISOString(),
-      },
-    });
-
-    chrome.storage.local.remove(["pendingApplication"]);
-
-    // Watch for submit confirmation
-    watchForSubmit(pendingJob);
-
     showBanner(
-      "AutoApply: Form filled! Review any remaining fields, upload resume on Step 2 if needed, review, and submit.",
-      "success"
+      "⬆️ Upload the downloaded resume PDF, then AutoApply will continue automatically.",
+      "waiting"
     );
+
+    LOG("Waiting for user to upload resume...");
+
+    // Watch for the file to appear in the upload area
+    const uploaded2 = await waitForResumeUpload(120000); // 2-minute timeout
+
+    if (!uploaded2) {
+      showBanner("AutoApply: Resume upload timed out. Please complete the application manually.", "error");
+      chrome.storage.local.remove(["pendingApplication"]);
+      return;
+    }
+
+    // User uploaded — take over and finish the application
+    showBanner("AutoApply: Resume detected! Continuing application...");
+    LOG("Resume upload detected — advancing through remaining steps");
+
+    await sleep(1500); // Let Workday process the upload
+
+    await fillStep2(tailoredData?.tailoredResult, pendingJob);
+    await advanceToStep(3);
+    await sleep(1000);
+    await fillStep3(tailoredData?.tailoredResult, pendingJob);
+    await advanceToStep(4);
+
+    showBanner("AutoApply: Almost done! Review your application and click Submit.", "success");
+    watchForSubmit(pendingJob);
+    chrome.storage.local.remove(["pendingApplication"]);
+  }
+
+  /**
+   * Poll for resume upload on Workday Step 2.
+   * Watches for a file to appear in the upload area (either a filename chip
+   * or a successful upload indicator). Returns true when detected.
+   */
+  async function waitForResumeUpload(timeoutMs = 120000) {
+    const startTime = Date.now();
+    const pollInterval = 1000;
+
+    // Selectors that indicate a file has been uploaded in Workday
+    const uploadedSelectors = [
+      '[data-automation-id="file-upload-item"]',          // File chip appears
+      '[data-automation-id="attachmentTitle"]',            // Attachment title
+      '[class*="fileUpload"] [class*="fileName"]',         // Generic filename in upload widget
+      '.css-1p0sjhy',                                      // Workday file chip class (varies)
+    ];
+
+    while (Date.now() - startTime < timeoutMs) {
+      // Check if any uploaded file indicators exist
+      for (const sel of uploadedSelectors) {
+        if (document.querySelector(sel)) {
+          LOG("Resume upload detected via selector:", sel);
+          return true;
+        }
+      }
+
+      // Also check: did the file input get a file attached?
+      const fileInput = document.querySelector('[data-automation-id="file-upload-input-ref"]') ||
+                        document.querySelector('input[type="file"]');
+      if (fileInput && fileInput.files && fileInput.files.length > 0) {
+        LOG("Resume upload detected via file input files list");
+        return true;
+      }
+
+      // Check for "Successfully Uploaded" text in the upload area
+      const uploadArea = document.querySelector('[data-automation-id="fileUploader"]') ||
+                         document.querySelector('[class*="fileUpload"]');
+      if (uploadArea && uploadArea.innerText?.toLowerCase().includes("successfully uploaded")) {
+        LOG("Resume upload detected via success text");
+        return true;
+      }
+
+      // Update banner every 10s so user knows we're still watching
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      if (elapsed > 0 && elapsed % 10 === 0) {
+        const remaining = Math.round((timeoutMs - (Date.now() - startTime)) / 1000);
+        showBanner(
+          `⬆️ Waiting for resume upload... (${remaining}s remaining) AutoApply will continue automatically.`,
+          "waiting"
+        );
+      }
+
+      await sleep(pollInterval);
+    }
+
+    return false; // Timed out
   }
 
   /**
@@ -489,7 +589,7 @@
 
       if (!base64Pdf) {
         LOG("No tailored resume PDF found in storage");
-        return;
+        return false;
       }
 
       // Find the file input — try both selectors
@@ -500,7 +600,7 @@
 
       if (!fileInput) {
         LOG("Could not find file input for resume upload");
-        return;
+        return false;
       }
 
       // Decode base64 to Uint8Array
@@ -529,7 +629,15 @@
         };
         fileInput[reactPropsKey].onChange(fakeEvent);
         LOG("Resume uploaded via React onChange handler");
-        showBanner("AutoApply: Resume uploaded!", "success");
+        await sleep(2000); // Wait for Workday to process upload
+        // Verify the upload registered (Workday shows a file chip)
+        const chip = document.querySelector('[data-automation-id="file-upload-item"], [data-automation-id="attachmentTitle"]');
+        if (chip) {
+          LOG("Upload confirmed — file chip appeared");
+          return true;
+        }
+        LOG("React onChange fired but no file chip appeared — upload may not have worked");
+        return false;
       } else {
         // Strategy 2: Fallback — Object.defineProperty + change event
         const dataTransfer = new DataTransfer();
@@ -543,11 +651,19 @@
 
         fileInput.dispatchEvent(new Event("change", { bubbles: true }));
         LOG("Resume uploaded via fallback (defineProperty + change event)");
-        showBanner("AutoApply: Resume uploaded!", "success");
+        await sleep(2000);
+        const chip = document.querySelector('[data-automation-id="file-upload-item"], [data-automation-id="attachmentTitle"]');
+        if (chip) {
+          LOG("Upload confirmed — file chip appeared");
+          return true;
+        }
+        LOG("Fallback upload fired but no file chip appeared");
+        return false;
       }
 
     } catch (err) {
       LOG(`Resume upload error: ${err.message}`);
+      return false;
     }
   }
 
@@ -1194,6 +1310,7 @@
       info: { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", text: "#fff" },
       success: { bg: "linear-gradient(135deg, #059669 0%, #10B981 100%)", text: "#fff" },
       error: { bg: "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)", text: "#fff" },
+      waiting: { bg: "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)", text: "#fff" }, // Amber — waiting for user action
     };
     const c = colors[type] || colors.info;
 
