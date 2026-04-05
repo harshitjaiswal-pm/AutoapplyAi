@@ -540,7 +540,7 @@
       const actorBadge = `<span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">${cfg.icon} ${cfg.actor.toUpperCase()}</span>`;
       const statusMsg  = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
       const timerEl    = isAi
-        ? `<span id="aa-elapsed-timer" style="font-size:11px;opacity:0.6;margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:0.5px;">0:00</span>`
+        ? `<span id="aa-elapsed-timer" style="font-size:14px;font-weight:700;opacity:0.9;margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:1px;background:rgba(0,0,0,0.18);border-radius:5px;padding:1px 8px;">0:00</span>`
         : "";
 
       const subtextRow = opts.subtext
