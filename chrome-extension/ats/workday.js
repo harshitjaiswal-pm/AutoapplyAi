@@ -43,7 +43,7 @@
 
     const pendingJob = stored.pendingApplication;
     LOG("Processing application for", pendingJob.jobTitle);
-    showBanner("AutoApply: Preparing Workday application...");
+    showBanner("Preparing Workday application...", "ai");
 
     try {
       const page = detectPage();
@@ -51,7 +51,7 @@
 
       if (page === "jobPosting") {
         // We're on the job posting page — need to navigate to form
-        showBanner("AutoApply: Navigating to application form...");
+        showBanner("Navigating to application form...", "ai");
         await navigateToForm();
         // After navigation, Workday will reload as SPA — this script instance continues
         // Wait for the form to render
@@ -70,7 +70,7 @@
 
     } catch (err) {
       LOG("Error:", err);
-      showBanner(`AutoApply: Error — ${err.message}. Please apply manually.`, "error");
+      showBanner(`Error — please apply manually.`, "error", { subtext: err.message });
     }
   }
 
@@ -163,7 +163,7 @@
     const jobDescription = pageJD || pendingJob.jobDescription;
 
     // Request AI tailoring
-    showBanner("AutoApply: Tailoring your resume...");
+    showBanner("Tailoring your resume for this role...", "ai");
     let tailoredData = null;
 
     try {
@@ -174,15 +174,15 @@
 
       if (tailoredData?.error) {
         LOG("Tailoring error:", tailoredData.error);
-        showBanner(`AutoApply: Tailoring error — ${tailoredData.error}. Filling basic info...`, "error");
+        showBanner("Tailoring had an issue — filling with base resume data.", "error", { subtext: tailoredData.error });
       }
     } catch (err) {
       LOG("Tailoring request failed:", err.message);
-      showBanner("AutoApply: Tailoring timed out. Filling basic info...", "error");
+      showBanner("Tailoring timed out — filling with base resume data.", "error");
     }
 
     // Fill the current step
-    showBanner("AutoApply: Filling application form...");
+    showBanner("Filling application form...", "ai");
 
     if (step === 1) {
       await fillStep1(tailoredData?.tailoredResult, pendingJob);
@@ -197,12 +197,12 @@
     } else if (step === 3) {
       await fillStep3(tailoredData?.tailoredResult, pendingJob);
       await advanceToStep(4);
-      showBanner("AutoApply: Almost done! Review your application and click Submit.", "success");
+      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
       watchForSubmit(pendingJob);
 
     } else if (step === 4) {
       LOG("On Review step — user should review and submit");
-      showBanner("AutoApply: Review your application and click Submit.", "success");
+      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
       watchForSubmit(pendingJob);
     }
   }
@@ -219,13 +219,13 @@
     if (uploaded) {
       // Programmatic upload succeeded — proceed automatically
       await sleep(1500);
-      showBanner("AutoApply: Resume uploaded! Continuing application...");
+      showBanner("Resume uploaded! Continuing application...", "ai");
       await fillStep2(tailoredData?.tailoredResult, pendingJob);
       await advanceToStep(3);
       await sleep(1000);
       await fillStep3(tailoredData?.tailoredResult, pendingJob);
       await advanceToStep(4);
-      showBanner("AutoApply: Almost done! Review your application and click Submit.", "success");
+      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
       watchForSubmit(pendingJob);
       chrome.storage.local.remove(["pendingApplication"]);
       return;
@@ -238,8 +238,9 @@
     });
 
     showBanner(
-      "⬆️ Upload the downloaded resume PDF, then AutoApply will continue automatically.",
-      "waiting"
+      "Upload the downloaded resume PDF — AutoApply will continue automatically once detected.",
+      "user",
+      { subtext: "Check your Downloads folder for the tailored PDF." }
     );
 
     LOG("Waiting for user to upload resume...");
@@ -248,13 +249,13 @@
     const uploaded2 = await waitForResumeUpload(120000); // 2-minute timeout
 
     if (!uploaded2) {
-      showBanner("AutoApply: Resume upload timed out. Please complete the application manually.", "error");
+      showBanner("Resume upload timed out — please complete the application manually.", "error");
       chrome.storage.local.remove(["pendingApplication"]);
       return;
     }
 
     // User uploaded — take over and finish the application
-    showBanner("AutoApply: Resume detected! Continuing application...");
+    showBanner("Resume detected! Taking over and finishing the application...", "ai");
     LOG("Resume upload detected — advancing through remaining steps");
 
     await sleep(1500); // Let Workday process the upload
@@ -265,7 +266,7 @@
     await fillStep3(tailoredData?.tailoredResult, pendingJob);
     await advanceToStep(4);
 
-    showBanner("AutoApply: Almost done! Review your application and click Submit.", "success");
+    showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
     watchForSubmit(pendingJob);
     chrome.storage.local.remove(["pendingApplication"]);
   }
@@ -317,8 +318,9 @@
       if (elapsed > 0 && elapsed % 10 === 0) {
         const remaining = Math.round((timeoutMs - (Date.now() - startTime)) / 1000);
         showBanner(
-          `⬆️ Waiting for resume upload... (${remaining}s remaining) AutoApply will continue automatically.`,
-          "waiting"
+          `Waiting for your resume upload... AutoApply will continue automatically.`,
+          "user",
+          { subtext: `${remaining}s remaining — upload the tailored PDF from your Downloads folder.` }
         );
       }
 
@@ -342,7 +344,7 @@
     if (errorsBefore.length > 0) {
       const errorTexts = Array.from(errorsBefore).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
       LOG(`WARNING: ${errorsBefore.length} validation errors on page before clicking Next:`, errorTexts.join(", "));
-      showBanner(`AutoApply: Form has validation errors — please review highlighted fields before submitting.`, "error");
+      showBanner(`Form has validation errors — please fix the highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
       return; // Don't click Next if there are errors
     }
 
@@ -366,7 +368,7 @@
     if (errorsAfter.length > 0) {
       const errorTexts = Array.from(errorsAfter).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
       LOG(`Validation errors appeared after Next click:`, errorTexts.join(", "));
-      showBanner(`AutoApply: Some required fields need attention — check highlighted fields.`, "error");
+      showBanner(`Some required fields need attention — check highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
       return;
     }
 
@@ -1242,7 +1244,7 @@
           pageText.includes("Successfully Submitted")) {
         LOG("Detected application submitted confirmation!");
         observer.disconnect();
-        showBanner("AutoApply: Application submitted successfully!", "success");
+        showBanner("Application submitted successfully! Moving to next job...", "success");
       }
     });
 
@@ -1294,7 +1296,20 @@
 
   /* ═══════════════════ UI BANNER ═══════════════════ */
 
-  function showBanner(message, type = "info") {
+  /**
+   * showBanner(message, type, opts)
+   *
+   * type:
+   *   "ai"      — AI is acting (purple). Used whenever the script is doing something.
+   *   "user"    — User must act (amber). Banner stays until dismissed or state changes.
+   *   "success" — Step or application completed (green). Auto-dismisses after 15s.
+   *   "error"   — Something went wrong (red). Auto-dismisses after 20s.
+   *   "info"    — Neutral (purple, same as ai).
+   *
+   * opts:
+   *   subtext {string}  — Optional second line of smaller text below the main message.
+   */
+  function showBanner(message, type = "ai", opts = {}) {
     let banner = document.getElementById("autoapply-banner");
     if (!banner) {
       banner = document.createElement("div");
@@ -1304,42 +1319,62 @@
     banner.style.cssText = `
       position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      transition: all 0.3s; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     `;
-    const colors = {
-      info: { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", text: "#fff" },
-      success: { bg: "linear-gradient(135deg, #059669 0%, #10B981 100%)", text: "#fff" },
-      error: { bg: "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)", text: "#fff" },
-      waiting: { bg: "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)", text: "#fff" }, // Amber — waiting for user action
+
+    // Colour + actor config per type
+    const typeConfig = {
+      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
+      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
+      user:    { bg: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", icon: "👆", actor: "Your turn" },
+      success: { bg: "linear-gradient(135deg, #047857 0%, #059669 100%)", icon: "✅", actor: "Done" },
+      error:   { bg: "linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)", icon: "⚠️", actor: "Issue" },
     };
-    const c = colors[type] || colors.info;
+    const cfg = typeConfig[type] || typeConfig.ai;
 
     chrome.storage.local.get(["_aa_batchProgress"], (result) => {
       const bp = result._aa_batchProgress;
-      let progressHTML = "";
-      if (bp && bp.active) {
-        progressHTML = `
-          <div style="display: flex; align-items: center; gap: 14px;">
-            <span style="
-              background: rgba(255,255,255,0.2); border-radius: 8px; padding: 4px 12px;
-              font-size: 16px; font-weight: 800; letter-spacing: -0.5px;
-            ">Job ${bp.current}/${bp.total}</span>
-            <span style="font-size: 13px; font-weight: 500;">${message}</span>
-          </div>
-          <div style="height: 3px; background: rgba(255,255,255,0.15); margin-top: 8px;">
-            <div style="height: 100%; background: #34D399; width: ${Math.round((bp.current / bp.total) * 100)}%; border-radius: 0 2px 2px 0;"></div>
-          </div>
-        `;
-      } else {
-        progressHTML = `<div style="font-size: 13px; font-weight: 500;">${message}</div>`;
-      }
+      const hasBatch = bp && bp.total > 0;
 
-      banner.style.background = c.bg;
-      banner.style.color = c.text;
-      banner.innerHTML = `<div style="padding: 10px 20px;">${progressHTML}</div>`;
+      // ── Row 1: Batch counter + job title/company
+      const batchTag = hasBatch
+        ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
+        : "";
+      const jobLabel = hasBatch && bp.title
+        ? `<span style="font-size:12px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bp.title}${bp.company ? " · " + bp.company : ""}</span>`
+        : "";
+
+      // ── Row 2: Progress bar (only when batch active)
+      const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
+      const progressBar = hasBatch ? `
+        <div style="height:3px;background:rgba(255,255,255,0.2);margin:6px 0 4px;">
+          <div style="height:100%;width:${pct}%;background:rgba(255,255,255,0.7);border-radius:2px;transition:width 0.4s;"></div>
+        </div>` : "";
+
+      // ── Row 3: Actor icon + status message
+      const actorBadge = `<span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">${cfg.icon} ${cfg.actor.toUpperCase()}</span>`;
+      const statusMsg = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
+
+      // ── Optional subtext row
+      const subtextRow = opts.subtext
+        ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
+        : "";
+
+      banner.style.background = cfg.bg;
+      banner.style.color = "#fff";
+      banner.innerHTML = `
+        <div style="padding:8px 18px 7px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
+          ${progressBar}
+          <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}</div>
+          ${subtextRow}
+        </div>`;
     });
 
-    if (type === "success") setTimeout(() => { if (banner) banner.remove(); }, 20000);
-    if (type === "error") setTimeout(() => { if (banner) banner.remove(); }, 20000);
+    // Clear any existing auto-dismiss timer
+    if (banner._dismissTimer) clearTimeout(banner._dismissTimer);
+    if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
+    if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
+    // "user" and "ai" types stay until explicitly replaced
   }
 })();

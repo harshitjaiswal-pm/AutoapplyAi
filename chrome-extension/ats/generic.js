@@ -24,7 +24,7 @@
 
     const pendingJob = stored.pendingApplication;
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
-    showBanner("AutoApply: Preparing application...");
+    showBanner("Preparing application...", "ai");
 
     try {
       // Try to scrape JD from whatever page we're on
@@ -32,10 +32,10 @@
       const jobDescription = pageJD || pendingJob.jobDescription;
 
       if (!jobDescription || jobDescription.length < 30) {
-        showBanner("AutoApply: No job description found. Filling basic info only...", "info");
+        showBanner("No job description found — filling with base profile data.", "ai");
       }
 
-      showBanner("AutoApply: Tailoring your resume (this may take 15-30s)...");
+      showBanner("Tailoring your resume for this role...", "ai", { subtext: "This may take 15–30 seconds." });
 
       // Send to background with a timeout
       const tailoredData = await sendMessageWithTimeout({
@@ -45,19 +45,19 @@
 
       if (tailoredData?.error) {
         console.error("AutoApply: Tailoring error:", tailoredData.error);
-        showBanner(`AutoApply: ${tailoredData.error}`, "error");
+        showBanner("Tailoring had an issue — filling with base profile data.", "error", { subtext: tailoredData.error });
         // Still try to fill basic profile info
         await fillBasicProfile();
         return;
       }
 
       if (!tailoredData?.tailoredResult) {
-        showBanner("AutoApply: Tailoring returned no data. Filling basic info...", "error");
+        showBanner("Tailoring returned no data — filling with base profile data.", "error");
         await fillBasicProfile();
         return;
       }
 
-      showBanner("AutoApply: Filling form fields...");
+      showBanner("Filling form fields...", "ai");
       console.log("AutoApply: Got tailored result, match score:", tailoredData.matchScore);
 
       await fillGenericForm(tailoredData.tailoredResult, pendingJob);
@@ -71,17 +71,16 @@
         });
       }
 
-      showBanner(
-        uploaded
-          ? "AutoApply: Form filled & resume uploaded! Review and submit."
-          : "AutoApply: Fields filled! Upload the downloaded resume PDF and review before submitting.",
-        "success"
-      );
+      if (uploaded) {
+        showBanner("Form filled & resume uploaded — review and submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+      } else {
+        showBanner("Fields filled — upload the downloaded resume PDF, then review and submit.", "user", { subtext: "Check your Downloads folder for the tailored PDF." });
+      }
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {
       console.error("AutoApply: Generic ATS error", err);
-      showBanner(`AutoApply: Error — ${err.message}. Filling basic info...`, "error");
+      showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
       // Still try to fill basic profile info even if tailoring fails
       await fillBasicProfile();
     }
@@ -136,7 +135,7 @@
     const user = profile.userProfile || {};
 
     if (!user.firstName && !user.email) {
-      showBanner("AutoApply: No profile data found. Sync your profile from the pipeline page.", "error");
+      showBanner("No profile data found — sync your profile from the extension panel.", "error");
       return;
     }
 
@@ -170,7 +169,7 @@
     }
 
     if (filled > 0) {
-      showBanner(`AutoApply: Filled ${filled} fields with your profile info. Complete the rest manually.`, "success");
+      showBanner(`Filled ${filled} fields — complete the rest manually and submit when ready.`, "user");
     }
   }
 
@@ -446,7 +445,20 @@
     return element.getAttribute("aria-label") || element.placeholder || "";
   }
 
-  function showBanner(message, type = "info") {
+  /**
+   * showBanner(message, type, opts)
+   *
+   * type:
+   *   "ai"      — AI is acting (purple). Used whenever the script is doing something.
+   *   "user"    — User must act (amber). Banner stays until dismissed or state changes.
+   *   "success" — Step or application completed (green). Auto-dismisses after 15s.
+   *   "error"   — Something went wrong (red). Auto-dismisses after 20s.
+   *   "info"    — Neutral (purple, same as ai).
+   *
+   * opts:
+   *   subtext {string}  — Optional second line of smaller text below the main message.
+   */
+  function showBanner(message, type = "ai", opts = {}) {
     let banner = document.getElementById("autoapply-banner");
     if (!banner) {
       banner = document.createElement("div");
@@ -456,41 +468,55 @@
     banner.style.cssText = `
       position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      transition: all 0.3s; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     `;
-    const colors = {
-      info: { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", text: "#fff" },
-      success: { bg: "linear-gradient(135deg, #059669 0%, #10B981 100%)", text: "#fff" },
-      error: { bg: "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)", text: "#fff" },
+
+    const typeConfig = {
+      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
+      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
+      user:    { bg: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", icon: "👆", actor: "Your turn" },
+      success: { bg: "linear-gradient(135deg, #047857 0%, #059669 100%)", icon: "✅", actor: "Done" },
+      error:   { bg: "linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)", icon: "⚠️", actor: "Issue" },
     };
-    const c = colors[type] || colors.info;
+    const cfg = typeConfig[type] || typeConfig.ai;
 
     chrome.storage.local.get(["_aa_batchProgress"], (result) => {
       const bp = result._aa_batchProgress;
-      let progressHTML = "";
-      if (bp && bp.active) {
-        progressHTML = `
-          <div style="display: flex; align-items: center; gap: 14px;">
-            <span style="
-              background: rgba(255,255,255,0.2); border-radius: 8px; padding: 4px 12px;
-              font-size: 16px; font-weight: 800; letter-spacing: -0.5px;
-            ">Job ${bp.current}/${bp.total}</span>
-            <span style="font-size: 13px; font-weight: 500;">${message}</span>
-          </div>
-          <div style="height: 3px; background: rgba(255,255,255,0.15); margin-top: 8px;">
-            <div style="height: 100%; background: #34D399; width: ${Math.round((bp.current / bp.total) * 100)}%; border-radius: 0 2px 2px 0;"></div>
-          </div>
-        `;
-      } else {
-        progressHTML = `<div style="font-size: 13px; font-weight: 500;">${message}</div>`;
-      }
+      const hasBatch = bp && bp.total > 0;
 
-      banner.style.background = c.bg;
-      banner.style.color = c.text;
-      banner.innerHTML = `<div style="padding: 10px 20px;">${progressHTML}</div>`;
+      const batchTag = hasBatch
+        ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
+        : "";
+      const jobLabel = hasBatch && bp.title
+        ? `<span style="font-size:12px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bp.title}${bp.company ? " · " + bp.company : ""}</span>`
+        : "";
+
+      const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
+      const progressBar = hasBatch ? `
+        <div style="height:3px;background:rgba(255,255,255,0.2);margin:6px 0 4px;">
+          <div style="height:100%;width:${pct}%;background:rgba(255,255,255,0.7);border-radius:2px;transition:width 0.4s;"></div>
+        </div>` : "";
+
+      const actorBadge = `<span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">${cfg.icon} ${cfg.actor.toUpperCase()}</span>`;
+      const statusMsg = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
+
+      const subtextRow = opts.subtext
+        ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
+        : "";
+
+      banner.style.background = cfg.bg;
+      banner.style.color = "#fff";
+      banner.innerHTML = `
+        <div style="padding:8px 18px 7px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
+          ${progressBar}
+          <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}</div>
+          ${subtextRow}
+        </div>`;
     });
 
-    if (type === "success") setTimeout(() => { if (banner) banner.remove(); }, 15000);
-    if (type === "error") setTimeout(() => { if (banner) banner.remove(); }, 20000);
+    if (banner._dismissTimer) clearTimeout(banner._dismissTimer);
+    if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
+    if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
   }
 })();
