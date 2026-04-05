@@ -212,6 +212,19 @@
       { labels: ["previously been employed", "worked here", "employed at"],   value: "not previously" },
     ];
 
+    // ── Radio / checkbox questions (common in custom Greenhouse forms) ──
+    // Match by question label text, then pick the best option.
+    fillRadioCheckboxQuestions(user);
+
+    // ── Free-text custom questions ──
+    const customTextFields = [
+      { labels: ["compensation", "salary", "salary expectation", "compensation expectation"], value: user.salaryExpectation || user.compensation || "" },
+      { labels: ["start date", "earliest start", "when can you start"],                       value: user.startDate || "2 weeks notice" },
+    ];
+    for (const { labels, value } of customTextFields) {
+      if (value) fillByLabel(labels, value);
+    }
+
     // Filter out empty values
     const activeDropdowns = dropdownFields.filter((f) => f.value);
 
@@ -226,6 +239,11 @@
         for (const { labels, value } of labelFields) {
           if (value) fillByLabel(labels, value, true);
         }
+        // Re-run radio/custom text fills after React re-renders
+        fillRadioCheckboxQuestions(user);
+        for (const { labels, value } of customTextFields) {
+          if (value) fillByLabel(labels, value, true);
+        }
         console.log("AutoApply: Text fields re-filled");
 
         // Validate fields and log any empty ones
@@ -234,6 +252,79 @@
     });
 
     console.log(`AutoApply: Initial fill of ${filled} fields completed`);
+  }
+
+  /* ─────────────── RADIO / CHECKBOX QUESTIONS ─────────────── */
+
+  /**
+   * Handle radio-button and checkbox questions that appear on custom Greenhouse forms.
+   * Strategy: find the question container by label text, then pick the best option.
+   */
+  function fillRadioCheckboxQuestions(user) {
+    // All labels on the page — look for question text
+    const allLabels = document.querySelectorAll("label, legend, .field label, [class*='label']");
+
+    // Years of experience questions — pick the highest bucket that fits
+    const yearsOfExp = parseInt(user.yearsOfExperience || "9", 10);
+    const expKeywords = ["years of experience", "years of product management", "years of pm", "years working"];
+
+    for (const label of allLabels) {
+      const text = (label.textContent || "").toLowerCase().trim();
+      if (text.length > 200) continue;
+
+      if (expKeywords.some(k => text.includes(k))) {
+        // Find the container and pick the best radio/checkbox option
+        const container = label.closest("fieldset") || label.closest("[class*='field']") || label.closest("div");
+        if (!container) continue;
+        const options = container.querySelectorAll("input[type='radio'], input[type='checkbox']");
+        let bestOption = null;
+        let bestValue = -1;
+        for (const opt of options) {
+          const optLabel = (opt.closest("label")?.textContent || document.querySelector(`label[for="${opt.id}"]`)?.textContent || opt.value || "").toLowerCase();
+          // Extract the highest number from the option label (e.g. "3+ years" → 3)
+          const nums = optLabel.match(/\d+/g);
+          const optVal = nums ? Math.max(...nums.map(Number)) : 0;
+          if (yearsOfExp >= optVal && optVal >= bestValue) {
+            bestValue = optVal;
+            bestOption = opt;
+          }
+        }
+        if (bestOption && !bestOption.checked) {
+          bestOption.click();
+          console.log("AutoApply: Selected years-of-experience option:", bestOption.value);
+        }
+        continue;
+      }
+
+      // Yes/No questions — hybrid schedule, remote work, sponsorship, etc.
+      if (text.includes("hybrid") || text.includes("work in office") || text.includes("on-site")) {
+        // User's answer from profile, default to "No" for remote preference
+        const answer = user.canWorkHybrid === true ? "yes" : "no";
+        answerYesNo(label, answer);
+        continue;
+      }
+
+      if (text.includes("require.*sponsor") || text.includes("work authoriz") || text.includes("legally authorized")) {
+        const answer = (user.requireSponsorship === "No" || !user.requireSponsorship) ? "no" : "yes";
+        answerYesNo(label, answer);
+        continue;
+      }
+    }
+  }
+
+  /** Click yes or no radio inside a question container found via its label element. */
+  function answerYesNo(labelEl, yesOrNo) {
+    const container = labelEl.closest("fieldset") || labelEl.closest("[class*='field']") || labelEl.closest("div");
+    if (!container) return;
+    const radios = container.querySelectorAll("input[type='radio'], input[type='checkbox']");
+    for (const r of radios) {
+      const optText = (r.closest("label")?.textContent || document.querySelector(`label[for="${r.id}"]`)?.textContent || r.value || "").toLowerCase();
+      if (optText.includes(yesOrNo)) {
+        if (!r.checked) r.click();
+        console.log("AutoApply: Answered yes/no question →", yesOrNo);
+        return;
+      }
+    }
   }
 
   /* ─────────────── FIELD VALIDATION ─────────────── */

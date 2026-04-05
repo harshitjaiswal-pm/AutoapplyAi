@@ -543,16 +543,17 @@ async function injectATSScript(tabId, url) {
   const urlLower = url.toLowerCase();
 
   let scriptFile = "ats/generic.js";
-  if (urlLower.includes("greenhouse.io")) {
+  if (urlLower.includes("greenhouse.io") || urlLower.includes("gh_jid=")) {
+    // greenhouse.io hosted OR company-domain Greenhouse embed (e.g. buildops.com/careers/?gh_jid=...)
     scriptFile = "ats/greenhouse.js";
-  } else if (urlLower.includes("lever.co")) {
+  } else if (urlLower.includes("lever.co") || urlLower.includes("jobs.lever")) {
     scriptFile = "ats/lever.js";
   } else if (urlLower.includes("myworkdayjobs.com")) {
     scriptFile = "ats/workday.js";
   } else if (urlLower.includes("ashbyhq.com")) {
-    scriptFile = "ats/generic.js"; // Ashby uses generic for now
+    scriptFile = "ats/generic.js";
   } else if (urlLower.includes("icims.com")) {
-    scriptFile = "ats/generic.js"; // iCIMS uses generic for now
+    scriptFile = "ats/generic.js";
   }
 
   try {
