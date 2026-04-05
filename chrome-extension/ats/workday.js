@@ -588,8 +588,8 @@
     // Phone Device Type — default to Mobile
     dropdownPromises.push(selectDropdown("formField-phoneType", "Mobile"));
 
-    // Wait for all dropdowns to complete
-    await Promise.all(dropdownPromises);
+    // Wait for all dropdowns — use allSettled so one failure never blocks the others
+    await Promise.allSettled(dropdownPromises);
 
     LOG("Step 1 filled");
   }
@@ -844,12 +844,18 @@
     value = String(value);
 
     // Set native DOM value first (makes the text visible)
-    const proto = input.tagName === "TEXTAREA"
-      ? window.HTMLTextAreaElement.prototype
-      : window.HTMLInputElement.prototype;
-    const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-    if (nativeSetter) nativeSetter.call(input, value);
-    else input.value = value;
+    // Wrapped in try-catch: nativeSetter.call can throw "Illegal invocation"
+    // if the element is from a different window context (e.g. shadow DOM or iframe).
+    try {
+      const proto = input.tagName === "TEXTAREA"
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (nativeSetter) nativeSetter.call(input, value);
+      else input.value = value;
+    } catch (e) {
+      input.value = value; // Direct assignment as safe fallback
+    }
 
     // ── Strategy 1: React __reactProps$ / __reactEventHandlers$ ────────────
     // Covers React 17+ (__reactProps$) and React 16 (__reactEventHandlers$).
@@ -1064,16 +1070,20 @@
 
     try {
       const btnSelector = `[data-automation-id="${fieldAutomationId}"] button`;
-      const cdpResult = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-          type: "CDP_CLICK",
-          selector: btnSelector,
-          selectOption: optionText,
-        }, (response) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else resolve(response);
-        });
-      });
+      // Add a 5s timeout so a non-responsive background script never hangs the flow
+      const cdpResult = await Promise.race([
+        new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            type: "CDP_CLICK",
+            selector: btnSelector,
+            selectOption: optionText,
+          }, (response) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(response);
+          });
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("CDP_CLICK timeout")), 5000)),
+      ]);
 
       if (cdpResult?.success) {
         // Verify selection
