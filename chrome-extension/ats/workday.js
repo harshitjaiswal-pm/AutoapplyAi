@@ -213,6 +213,18 @@
    * watches for the user to upload the file, then continues automatically.
    */
   async function handleStep2ResumeUpload(tailoredData, pendingJob) {
+    // Guard: only proceed if there's actually a file upload area on this page.
+    // If we're still on Step 1 (e.g. form errors prevented advancing), bail out.
+    const hasUploadArea =
+      document.querySelector('[data-automation-id="file-upload-input-ref"]') ||
+      document.querySelector('[data-automation-id="fileUploader"]') ||
+      document.querySelector('input[type="file"]');
+
+    if (!hasUploadArea) {
+      LOG("No file upload found on page — not on Step 2 yet, skipping resume upload");
+      return;
+    }
+
     // First try programmatic upload — if Workday allows it, great
     const uploaded = await uploadResumeProgrammatically();
 
@@ -331,6 +343,43 @@
   }
 
   /**
+   * Returns true if the page currently has Workday validation errors.
+   * Covers: DOM selectors AND text-based detection of "Errors Found" banner.
+   */
+  function hasPageErrors() {
+    // Selector-based: Workday field-level errors and error summary
+    const bySelector = document.querySelectorAll(
+      '[data-automation-id="validationError"], [data-automation-id="errorSummary"], ' +
+      '[class*="ValidationError"], [class*="errorSummary"]'
+    );
+    if (bySelector.length > 0) return true;
+
+    // Text-based: catches the "Errors Found" collapsible header Workday shows
+    const pageText = document.body.innerText || "";
+    if (
+      pageText.includes("Errors Found") ||
+      pageText.match(/Error:\s*(The field|This field|Required)/) ||
+      pageText.includes("is required and must have a value")
+    ) return true;
+
+    return false;
+  }
+
+  /** Collect short error messages for display in the banner subtext. */
+  function collectErrorTexts() {
+    const els = document.querySelectorAll(
+      '[data-automation-id="validationError"], [data-automation-id="errorSummary"] li, ' +
+      '[class*="ValidationError"], [class*="errorSummary"] li'
+    );
+    const fromEls = Array.from(els).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
+    if (fromEls.length) return fromEls;
+
+    // Fallback: grab "Error - Field Name" lines from visible text
+    const lines = (document.body.innerText || "").split("\n");
+    return lines.filter(l => l.trim().startsWith("Error")).map(l => l.trim()).slice(0, 3);
+  }
+
+  /**
    * Auto-advance to the next step by clicking the Next button.
    * Checks for validation errors before and after clicking.
    */
@@ -338,14 +387,11 @@
     LOG(`Advancing to Step ${nextStep}...`);
 
     // Check for pre-existing validation errors on the page
-    const errorsBefore = document.querySelectorAll(
-      '[data-automation-id="validationError"], .wd-error, [class*="error"]:not([class*="icon"])'
-    );
-    if (errorsBefore.length > 0) {
-      const errorTexts = Array.from(errorsBefore).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
-      LOG(`WARNING: ${errorsBefore.length} validation errors on page before clicking Next:`, errorTexts.join(", "));
+    if (hasPageErrors()) {
+      const errorTexts = collectErrorTexts();
+      LOG(`WARNING: validation errors on page before clicking Next:`, errorTexts.join(", "));
       showBanner(`Form has validation errors — please fix the highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
-      return; // Don't click Next if there are errors
+      return;
     }
 
     // Find and click the Next button
@@ -360,13 +406,10 @@
       return;
     }
 
-    // Wait briefly then check for validation errors that appeared after clicking Next
-    await sleep(1000);
-    const errorsAfter = document.querySelectorAll(
-      '[data-automation-id="validationError"], [class*="ValidationError"]'
-    );
-    if (errorsAfter.length > 0) {
-      const errorTexts = Array.from(errorsAfter).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
+    // Wait for Workday to validate then check for errors
+    await sleep(1500);
+    if (hasPageErrors()) {
+      const errorTexts = collectErrorTexts();
       LOG(`Validation errors appeared after Next click:`, errorTexts.join(", "));
       showBanner(`Some required fields need attention — check highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
       return;
@@ -475,6 +518,23 @@
 
     // Field validation: read back values and retry any that didn't stick
     await validateAndRetryTextFields(textFieldsToFill);
+
+    // Label-text fallback: for Workday instances with non-standard automation IDs,
+    // scan all visible labels and fill matched inputs directly.
+    const labelFallbacks = [
+      { labels: ["first name", "legal first name", "given name", "prénom"], value: firstName },
+      { labels: ["last name", "legal last name", "family name", "surname", "nom"], value: lastName },
+      { labels: ["email", "e-mail", "email address", "courriel"], value: email },
+      { labels: ["phone", "phone number", "telephone", "mobile", "cell"], value: phone },
+      { labels: ["city", "city of residence", "municipality", "ville"], value: city },
+      { labels: ["address line 1", "street address", "street", "address"], value: address },
+      { labels: ["postal code", "zip code", "zip", "postcode"], value: postalCode },
+    ];
+    for (const fb of labelFallbacks) {
+      fillByLabelText(fb.labels, fb.value);
+    }
+
+    await sleep(300);
 
     // PARALLEL DROPDOWN FILLING: Fill all dropdowns in parallel
     LOG("Filling dropdowns in parallel...");
@@ -747,70 +807,86 @@
     if (!input || value === undefined || value === null) return false;
     value = String(value);
 
-    // Find React props key on the element
-    const propsKey = Object.keys(input).find(k => k.startsWith('__reactProps'));
-    if (!propsKey) {
-      LOG(`No React props found on element — falling back to native setter`);
-      return setNativeValueFallback(input, value);
-    }
+    // ── Strategy 1: execCommand insertText ───────────────────────────────────
+    // Goes through the browser's native text-insertion path, which React
+    // intercepts at the event-listener level — the most authentic approach
+    // short of real CDP keystrokes. Works even when React props are absent.
+    try {
+      input.focus();
 
-    const props = input[propsKey];
-    const onInput = props?.onInput;
-    const onBlur = props?.onBlur;
+      // Clear existing content first
+      const proto = input.tagName === "TEXTAREA"
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (nativeSetter) nativeSetter.call(input, "");
+      else input.value = "";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
 
-    if (!onInput) {
-      LOG(`No onInput handler in React props — falling back to native setter`);
-      return setNativeValueFallback(input, value);
-    }
+      // Insert the real value
+      const inserted = document.execCommand("insertText", false, value);
+      if (inserted && input.value === value) {
+        LOG(`execCommand insertText succeeded: "${value.substring(0, 25)}"`);
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        return true;
+      }
+    } catch (e) { /* fall through */ }
 
-    // Set value via native setter (bypasses React's controlled input checks)
-    const proto = input.tagName === "TEXTAREA"
+    // ── Strategy 2: React __reactProps$ onInput/onChange ────────────────────
+    // Find React props key — covers __reactProps$ (React 17+) and
+    // __reactEventHandlers$ (React 16)
+    const propsKey = Object.keys(input).find(k =>
+      k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers')
+    );
+
+    const proto2 = input.tagName === "TEXTAREA"
       ? window.HTMLTextAreaElement.prototype
       : window.HTMLInputElement.prototype;
-    const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    const nativeSetter2 = Object.getOwnPropertyDescriptor(proto2, "value")?.set;
+    if (nativeSetter2) nativeSetter2.call(input, value);
+    else input.value = value;
 
-    if (nativeSetter) {
-      nativeSetter.call(input, value);
-    } else {
-      input.value = value;
+    if (propsKey) {
+      const props = input[propsKey];
+
+      // Try onInput (Workday's primary handler)
+      if (props?.onInput) {
+        const ev = new InputEvent("input", { bubbles: true, inputType: "insertText", data: value });
+        Object.defineProperty(ev, "target", { value: input, writable: false });
+        props.onInput(ev);
+      }
+
+      // Also try onChange (some Workday versions use this)
+      if (props?.onChange) {
+        const ev = new Event("change", { bubbles: true });
+        Object.defineProperty(ev, "target", { value: input, writable: false });
+        props.onChange(ev);
+      }
+
+      // Trigger blur to finalise
+      if (props?.onBlur) {
+        const ev = new Event("blur", { bubbles: true });
+        Object.defineProperty(ev, "target", { value: input, writable: false });
+        props.onBlur(ev);
+      }
+
+      LOG(`React props fired for: "${value.substring(0, 25)}"`);
+      return true;
     }
 
-    // Call React's onInput handler directly — this updates Workday's form state
-    const inputEvent = new Event("input", { bubbles: true });
-    Object.defineProperty(inputEvent, "target", { value: input, writable: false });
-    onInput(inputEvent);
-
-    // Trigger blur to finalize validation
-    if (onBlur) {
-      const blurEvent = new Event("blur", { bubbles: true });
-      Object.defineProperty(blurEvent, "target", { value: input, writable: false });
-      onBlur(blurEvent);
-    }
-
+    // ── Strategy 3: _valueTracker + native events (older React / non-React) ─
+    const tracker = input._valueTracker;
+    if (tracker) tracker.setValue("");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    LOG(`Fallback native events fired for: "${value.substring(0, 25)}"`);
     return true;
   }
 
-  /** Fallback for elements without React props (older Workday instances) */
+  /** Legacy alias kept for callers that still reference setNativeValueFallback */
   function setNativeValueFallback(el, value) {
-    if (!el || !value) return false;
-    el.focus();
-
-    const proto = el.tagName === "TEXTAREA"
-      ? window.HTMLTextAreaElement.prototype
-      : window.HTMLInputElement.prototype;
-    const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-
-    if (nativeSetter) nativeSetter.call(el, value);
-    else el.value = value;
-
-    // Try _valueTracker reset for standard React apps
-    const tracker = el._valueTracker;
-    if (tracker) tracker.setValue("");
-
-    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
-    return true;
+    return setWorkdayValue(el, value);
   }
 
   /**
