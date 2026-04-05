@@ -493,6 +493,18 @@
       banner.id = "autoapply-banner";
       document.body.appendChild(banner);
     }
+
+    if (banner._timerInterval) { clearInterval(banner._timerInterval); banner._timerInterval = null; }
+    if (banner._dismissTimer)  { clearTimeout(banner._dismissTimer);  banner._dismissTimer  = null; }
+
+    const isAi = (type === "ai" || type === "info");
+    if (isAi) {
+      if (!banner._timerStart) banner._timerStart = Date.now();
+    } else {
+      banner._timerStart = null;
+    }
+    const timerStart = banner._timerStart;
+
     banner.style.cssText = `
       position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -526,7 +538,10 @@
         </div>` : "";
 
       const actorBadge = `<span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">${cfg.icon} ${cfg.actor.toUpperCase()}</span>`;
-      const statusMsg = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
+      const statusMsg  = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
+      const timerEl    = isAi
+        ? `<span id="aa-elapsed-timer" style="font-size:11px;opacity:0.6;margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:0.5px;">0:00</span>`
+        : "";
 
       const subtextRow = opts.subtext
         ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
@@ -538,12 +553,22 @@
         <div style="padding:8px 18px 7px;">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
           ${progressBar}
-          <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
           ${subtextRow}
         </div>`;
+
+      if (isAi && timerStart) {
+        banner._timerInterval = setInterval(() => {
+          const el = document.getElementById("aa-elapsed-timer");
+          if (!el) return;
+          const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+          const m = Math.floor(elapsed / 60);
+          const s = elapsed % 60;
+          el.textContent = `${m}:${s.toString().padStart(2, "0")}`;
+        }, 1000);
+      }
     });
 
-    if (banner._dismissTimer) clearTimeout(banner._dismissTimer);
     if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
     if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
   }
