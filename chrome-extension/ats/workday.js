@@ -230,14 +230,24 @@
 
   /**
    * Auto-advance to the next step by clicking the Next button.
-   * Waits for the new step to render before returning.
+   * Checks for validation errors before and after clicking.
    */
   async function advanceToStep(nextStep) {
     LOG(`Advancing to Step ${nextStep}...`);
 
+    // Check for pre-existing validation errors on the page
+    const errorsBefore = document.querySelectorAll(
+      '[data-automation-id="validationError"], .wd-error, [class*="error"]:not([class*="icon"])'
+    );
+    if (errorsBefore.length > 0) {
+      const errorTexts = Array.from(errorsBefore).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
+      LOG(`WARNING: ${errorsBefore.length} validation errors on page before clicking Next:`, errorTexts.join(", "));
+      showBanner(`AutoApply: Form has validation errors — please review highlighted fields before submitting.`, "error");
+      return; // Don't click Next if there are errors
+    }
+
     // Find and click the Next button
     const nextBtn = document.querySelector('[data-automation-id="pageFooterNextButton"]') ||
-                    document.querySelector('button:has-text("Next")') ||
                     Array.from(document.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Next');
 
     if (nextBtn) {
@@ -248,10 +258,21 @@
       return;
     }
 
+    // Wait briefly then check for validation errors that appeared after clicking Next
+    await sleep(1000);
+    const errorsAfter = document.querySelectorAll(
+      '[data-automation-id="validationError"], [class*="ValidationError"]'
+    );
+    if (errorsAfter.length > 0) {
+      const errorTexts = Array.from(errorsAfter).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
+      LOG(`Validation errors appeared after Next click:`, errorTexts.join(", "));
+      showBanner(`AutoApply: Some required fields need attention — check highlighted fields.`, "error");
+      return;
+    }
+
     // Wait for the next step to render
     const progressBar = await waitForElement('[data-automation-id="progressBarActiveStep"]', 8000);
     if (progressBar) {
-      // Wait until the step text changes to nextStep
       for (let i = 0; i < 20; i++) {
         const stepText = progressBar.textContent?.trim() || "";
         if (stepText.includes(String(nextStep)) || stepText.includes(`Step ${nextStep}`)) {
@@ -263,7 +284,6 @@
       }
     }
 
-    // If we couldn't verify, just wait a bit
     await sleep(1000);
     LOG(`Advanced (verification uncertain)`);
   }
@@ -312,11 +332,14 @@
     const firstName = user.firstName || resume.contactInfo?.firstName || "";
     const lastName = user.lastName || resume.contactInfo?.lastName || "";
     const email = user.email || resume.contactInfo?.email || "";
-    const phone = user.phone || resume.contactInfo?.phone || "";
-    const address = user.address || "";
-    const city = user.city || "";
-    const postalCode = user.postalCode || "";
-    const province = user.province || "";
+    const rawPhone = user.phone || resume.contactInfo?.phone || "";
+    // Workday expects local phone format (no country code). Strip +1- or +1 prefix.
+    const phone = normalizePhone(rawPhone);
+    const address = user.address || resume.contactInfo?.address || "";
+    const province = user.province || resume.contactInfo?.province || "";
+    // Use stored city, or fall back to a major city for the province
+    const city = user.city || resume.contactInfo?.city || getDefaultCity(province);
+    const postalCode = user.postalCode || resume.contactInfo?.postalCode || "";
 
     LOG("Filling Step 1 — My Information");
 
@@ -670,6 +693,58 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
     return true;
+  }
+
+  /**
+   * Strip country code and normalize phone to local format.
+   * Workday rejects +1-778-793-7522 — expects 778-793-7522 or (778) 793-7522.
+   * Strategy: remove +1, +44, etc. prefix, then reformat digits as XXX-XXX-XXXX.
+   */
+  function normalizePhone(raw) {
+    if (!raw) return "";
+    // Remove country code prefix: +1-, +1 , 001-, etc.
+    let digits = raw.replace(/^\+1[-\s]?/, "").replace(/^00?1[-\s]?/, "");
+    // Strip all non-digit characters
+    digits = digits.replace(/\D/g, "");
+    // Format as XXX-XXX-XXXX for 10-digit North American numbers
+    if (digits.length === 10) {
+      return `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}`;
+    }
+    // For other lengths, just return digits (let user fix if Workday rejects)
+    return digits || raw;
+  }
+
+  /**
+   * Return a major city for a given Canadian province/US state.
+   * Used when the user profile has no city field.
+   */
+  function getDefaultCity(province) {
+    if (!province) return "";
+    const p = province.toLowerCase();
+    const map = {
+      "british columbia": "Vancouver", "bc": "Vancouver",
+      "ontario": "Toronto", "on": "Toronto",
+      "alberta": "Calgary", "ab": "Calgary",
+      "quebec": "Montreal", "qc": "Montreal",
+      "nova scotia": "Halifax", "ns": "Halifax",
+      "new brunswick": "Fredericton", "nb": "Fredericton",
+      "manitoba": "Winnipeg", "mb": "Winnipeg",
+      "saskatchewan": "Saskatoon", "sk": "Saskatoon",
+      "newfoundland": "St. John's", "nl": "St. John's",
+      "prince edward island": "Charlottetown", "pei": "Charlottetown", "pe": "Charlottetown",
+      "northwest territories": "Yellowknife", "nt": "Yellowknife",
+      "nunavut": "Iqaluit", "nu": "Iqaluit",
+      "yukon": "Whitehorse", "yt": "Whitehorse",
+      // US states
+      "california": "San Francisco", "ca": "San Francisco",
+      "new york": "New York", "ny": "New York",
+      "texas": "Austin", "tx": "Austin",
+      "washington": "Seattle", "wa": "Seattle",
+      "illinois": "Chicago", "il": "Chicago",
+      "massachusetts": "Boston", "ma": "Boston",
+      "georgia": "Atlanta", "ga": "Atlanta",
+    };
+    return map[p] || "";
   }
 
   function fillFormField(automationId, value) {
