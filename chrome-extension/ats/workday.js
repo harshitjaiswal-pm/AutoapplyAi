@@ -190,39 +190,46 @@
     const pageJD = scrapeWorkdayJD();
     const jobDescription = pageJD || pendingJob.jobDescription;
 
-    // Request AI tailoring
-    showBanner("Tailoring your resume for this role...", "ai");
-    let tailoredData = null;
-
-    try {
-      tailoredData = await sendMessageWithTimeout({
-        type: "TAILOR_AND_FILL",
-        job: { ...pendingJob, jobDescription },
-      }, 90000);
-
-      if (tailoredData?.error) {
-        LOG("Tailoring error:", tailoredData.error);
-        showBanner("Tailoring had an issue — filling with base resume data.", "error", { subtext: tailoredData.error });
-      }
-    } catch (err) {
-      LOG("Tailoring request failed:", err.message);
-      showBanner("Tailoring timed out — filling with base resume data.", "error");
-    }
-
-    // Fill the current step
-    showBanner("Filling application form...", "ai");
+    // ── Fire tailoring immediately as a background Promise — don't block on it ──
+    // Step 1 only needs base profile data; tailoring is needed for Step 2/3.
+    const tailoringPromise = sendMessageWithTimeout({
+      type: "TAILOR_AND_FILL",
+      job: { ...pendingJob, jobDescription },
+    }, 90000).then(result => {
+      if (result?.error) LOG("Tailoring error:", result.error);
+      return result;
+    }).catch(err => {
+      LOG("Tailoring failed:", err.message);
+      return null; // Graceful degradation — fill with base data
+    });
 
     if (step === 1) {
-      await fillStep1(tailoredData?.tailoredResult, pendingJob);
-      await advanceToStep(2);
-      // Step 2 = resume upload — download the tailored PDF and wait for user to upload
+      // Fill Step 1 immediately with base profile — no tailoring needed here
+      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+      await fillStep1(null, pendingJob);
+
+      // Advance to Step 2 — fail fast if errors
+      const advanced = await advanceToStep(2);
+      if (!advanced) {
+        showBanner("Please fix the form errors and we'll continue.", "user");
+        return;
+      }
+
+      // Now we're on Step 2 — wait for tailoring (likely already done by now)
+      showBanner("Preparing your tailored resume...", "ai", { subtext: "Almost ready..." });
+      const tailoredData = await tailoringPromise;
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
     } else if (step === 2) {
-      // Landed directly on Step 2 — same resume upload flow
+      // Landed directly on Step 2 — wait for tailoring then upload
+      showBanner("Preparing your tailored resume...", "ai", { subtext: "Tailoring in progress..." });
+      const tailoredData = await tailoringPromise;
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
     } else if (step === 3) {
+      // Application questions — needs tailored answers
+      showBanner("Filling application questions...", "ai", { subtext: "Tailoring in progress..." });
+      const tailoredData = await tailoringPromise;
       await fillStep3(tailoredData?.tailoredResult, pendingJob);
       await advanceToStep(4);
       showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
@@ -419,7 +426,7 @@
       const errorTexts = collectErrorTexts();
       LOG(`WARNING: validation errors on page before clicking Next:`, errorTexts.join(", "));
       showBanner(`Form has validation errors — please fix the highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
-      return;
+      return false;
     }
 
     // Find and click the Next button
@@ -431,7 +438,7 @@
       LOG(`Clicked Next button`);
     } else {
       LOG(`No Next button found to advance to Step ${nextStep}`);
-      return;
+      return false;
     }
 
     // Wait for Workday to validate then check for errors
@@ -440,7 +447,7 @@
       const errorTexts = collectErrorTexts();
       LOG(`Validation errors appeared after Next click:`, errorTexts.join(", "));
       showBanner(`Some required fields need attention — check highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
-      return;
+      return false;
     }
 
     // Wait for the next step to render
@@ -451,7 +458,7 @@
         if (stepText.includes(String(nextStep)) || stepText.includes(`Step ${nextStep}`)) {
           LOG(`Successfully advanced to Step ${nextStep}`);
           await sleep(500);
-          return;
+          return true;
         }
         await sleep(100);
       }
@@ -459,6 +466,7 @@
 
     await sleep(1000);
     LOG(`Advanced (verification uncertain)`);
+    return true; // Optimistically treat as success if no errors detected
   }
 
   function getCurrentStep() {

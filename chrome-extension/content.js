@@ -465,12 +465,11 @@
    * Process a single job: click card → scroll → scrape JD → click Apply → notify background
    */
   async function processJob(job) {
-    updateJobStatus(job.id, "applying");
+    updateJobStatus(job.id, "applying", "Loading job details...");
     updateStatus(`Applying: ${job.title} at ${job.company}...`);
 
     try {
       // Step 1: Click the job card to load detail panel
-      updateStatus(`Loading: ${job.title}...`);
       const clicked = await clickJobCard(job);
       if (!clicked) {
         console.warn("AutoApply: Could not click job card for", job.title, "at index", job.index);
@@ -479,18 +478,15 @@
       }
 
       // Step 2: Scroll the detail panel to load the full JD
-      updateStatus(`Scrolling to load JD: ${job.title}...`);
+      updateJobStatus(job.id, "applying", "Reading job description...");
       await scrollDetailPanel();
-      // Extra wait for content to render
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 600));
 
       // Step 3: Scrape the JD from the detail panel
-      updateStatus(`Scraping JD: ${job.title}...`);
       let jobDescription = scrapeJobDescription();
       if (!jobDescription || jobDescription.length < 50) {
-        // Try scrolling more and retrying
         await scrollDetailPanel();
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise((r) => setTimeout(r, 600));
         jobDescription = scrapeJobDescription();
         if (!jobDescription || jobDescription.length < 50) {
           updateJobStatus(job.id, "failed");
@@ -894,12 +890,38 @@
     if (overlay) overlay.style.display = "none";
   }
 
-  function updateJobStatus(jobId, status) {
+  function updateJobStatus(jobId, status, statusText = "") {
     const job = scrapedJobs.find((j) => j.id === jobId);
-    if (job) job.status = status;
-    // Persist job statuses so UI survives tab switches / re-injection
+    if (job) {
+      job.status = status;
+      if (statusText) job.statusText = statusText;
+      // Track when we started processing this job (for elapsed timer)
+      if (status === "applying" && !job.startedAt) job.startedAt = Date.now();
+      if (status !== "applying") { job.startedAt = null; job.statusText = ""; }
+    }
     persistState();
     renderJobList();
+    // Start/stop the per-job elapsed timer
+    startJobTimer(jobId, status === "applying");
+  }
+
+  // Per-job elapsed timer — ticks the M:SS counter for the active "applying" job
+  let _jobTimerInterval = null;
+  function startJobTimer(jobId, active) {
+    if (_jobTimerInterval) { clearInterval(_jobTimerInterval); _jobTimerInterval = null; }
+    if (!active) return;
+    _jobTimerInterval = setInterval(() => {
+      const job = scrapedJobs.find(j => j.id === jobId);
+      if (!job || job.status !== "applying" || !job.startedAt) {
+        clearInterval(_jobTimerInterval); _jobTimerInterval = null; return;
+      }
+      const el = document.getElementById(`job-timer-${jobId}`);
+      if (!el) return;
+      const elapsed = Math.floor((Date.now() - job.startedAt) / 1000);
+      const m = Math.floor(elapsed / 60);
+      const s = elapsed % 60;
+      el.textContent = `${m}:${s.toString().padStart(2,"0")}`;
+    }, 1000);
   }
 
   function createFloatingUI() {
@@ -1145,15 +1167,19 @@
             📍 ${job.location}
             ${job.easyApply ? '<span style="color: #9CA3AF; font-size: 10px; margin-left: 4px;">(Easy Apply)</span>' : ""}
           </p>
+          ${job.status === "applying" && job.statusText ? `<p style="margin:2px 0 0;font-size:10px;color:#B45309;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${job.statusText}</p>` : ""}
         </div>
-        ${job.status !== "pending" ? `<span style="
-          font-size: 10px; font-weight: 600; flex-shrink: 0; padding: 2px 6px; border-radius: 4px;
-          ${job.status === "opened" ? "background: #DBEAFE; color: #1E40AF;" : ""}
-          ${job.status === "applied" ? "background: #D1FAE5; color: #065F46;" : ""}
-          ${job.status === "applying" ? "background: #FEF3C7; color: #92400E;" : ""}
-          ${job.status === "failed" ? "background: #FEE2E2; color: #991B1B;" : ""}
-          ${job.status === "skipped" ? "background: #F3F4F6; color: #6B7280;" : ""}
-        ">${job.status}</span>` : ""}
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;">
+          ${job.status !== "pending" ? `<span style="
+            font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
+            ${job.status === "opened" ? "background: #DBEAFE; color: #1E40AF;" : ""}
+            ${job.status === "applied" ? "background: #D1FAE5; color: #065F46;" : ""}
+            ${job.status === "applying" ? "background: #FEF3C7; color: #92400E;" : ""}
+            ${job.status === "failed" ? "background: #FEE2E2; color: #991B1B;" : ""}
+            ${job.status === "skipped" ? "background: #F3F4F6; color: #6B7280;" : ""}
+          ">${job.status}</span>` : ""}
+          ${job.status === "applying" ? `<span id="job-timer-${job.id}" style="font-size:10px;font-weight:700;color:#92400E;font-variant-numeric:tabular-nums;">0:00</span>` : ""}
+        </div>
       </div>
     `
       )
