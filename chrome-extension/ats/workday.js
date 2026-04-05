@@ -490,20 +490,38 @@
       // Create File object
       const file = new File([bytes], "resume.pdf", { type: "application/pdf" });
 
-      // Override the files getter on the file input
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
+      // Strategy 1: Call React's onChange handler directly (bypasses isTrusted check)
+      const reactPropsKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
+      if (reactPropsKey && fileInput[reactPropsKey]?.onChange) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const fakeEvent = {
+          target: { files: dt.files },
+          currentTarget: { files: dt.files },
+          preventDefault: () => {},
+          stopPropagation: () => {},
+          nativeEvent: new Event("change"),
+          type: "change",
+          bubbles: true,
+        };
+        fileInput[reactPropsKey].onChange(fakeEvent);
+        LOG("Resume uploaded via React onChange handler");
+        showBanner("AutoApply: Resume uploaded!", "success");
+      } else {
+        // Strategy 2: Fallback — Object.defineProperty + change event
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
 
-      Object.defineProperty(fileInput, "files", {
-        value: dataTransfer.files,
-        writable: false,
-      });
+        Object.defineProperty(fileInput, "files", {
+          value: dataTransfer.files,
+          writable: true,
+          configurable: true,
+        });
 
-      // Dispatch change event
-      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-
-      LOG("Resume uploaded programmatically");
-      showBanner("AutoApply: Resume uploaded!", "success");
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+        LOG("Resume uploaded via fallback (defineProperty + change event)");
+        showBanner("AutoApply: Resume uploaded!", "success");
+      }
 
     } catch (err) {
       LOG(`Resume upload error: ${err.message}`);

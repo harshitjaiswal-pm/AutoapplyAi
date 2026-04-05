@@ -291,21 +291,35 @@
 
       const file = new File([bytes], "tailored_resume.pdf", { type: "application/pdf" });
 
-      // Override the files getter using Object.defineProperty
-      Object.defineProperty(fileInput, "files", {
-        get: function () {
-          const dataTransfer = new DataTransfer();
-          dataTransfer.items.add(file);
-          return dataTransfer.files;
-        },
-        configurable: true,
-      });
-
-      // Dispatch change event to trigger React handlers
-      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-      fileInput.dispatchEvent(new Event("input", { bubbles: true }));
-
-      console.log("AutoApply: Resume file upload dispatched");
+      // Strategy 1: Call React's onChange handler directly
+      const reactPropsKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
+      if (reactPropsKey && fileInput[reactPropsKey]?.onChange) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const fakeEvent = {
+          target: { files: dt.files },
+          currentTarget: { files: dt.files },
+          preventDefault: () => {},
+          stopPropagation: () => {},
+          nativeEvent: new Event("change"),
+          type: "change",
+          bubbles: true,
+        };
+        fileInput[reactPropsKey].onChange(fakeEvent);
+        console.log("AutoApply: Resume uploaded via React onChange handler");
+      } else {
+        // Strategy 2: Fallback — Object.defineProperty + native events
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        Object.defineProperty(fileInput, "files", {
+          value: dataTransfer.files,
+          writable: true,
+          configurable: true,
+        });
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+        fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+        console.log("AutoApply: Resume uploaded via fallback (defineProperty)");
+      }
     } catch (err) {
       console.error("AutoApply: Resume upload error:", err);
     }
