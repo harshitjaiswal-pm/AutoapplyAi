@@ -15,6 +15,73 @@
 
   setTimeout(() => init(), 3000);
 
+  /* ─────────────── FORM VS POSTING DETECTION ─────────────── */
+
+  /**
+   * Returns true if the current page looks like an application form
+   * (has text inputs / email fields / a visible form), as opposed to
+   * a job posting page that just has an "Apply" button.
+   */
+  function isOnApplicationForm() {
+    // A real form has multiple interactive inputs
+    const inputs = document.querySelectorAll(
+      'input[type="text"], input[type="email"], input[type="tel"], textarea'
+    );
+    if (inputs.length >= 2) return true;
+
+    // Or an explicit <form> with at least one input
+    const forms = document.querySelectorAll("form");
+    for (const f of forms) {
+      if (f.querySelector("input, textarea, select")) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Find and click the "Apply" / "Apply Now" button on a job posting page.
+   * Returns true if a button was clicked.
+   */
+  async function clickApplyOnPosting() {
+    const applyTexts = ["apply now", "apply for this job", "apply for job", "apply today", "apply"];
+
+    // 1. Look for <a> or <button> whose visible text matches
+    const candidates = Array.from(document.querySelectorAll('a[href], button'));
+    for (const el of candidates) {
+      const text = el.textContent?.trim().toLowerCase() || "";
+      if (applyTexts.includes(text)) {
+        console.log("AutoApply: Clicking Apply button:", el.tagName, el.textContent?.trim());
+        el.click();
+        return true;
+      }
+    }
+
+    // 2. Broader match — button/link that starts with "apply"
+    for (const el of candidates) {
+      const text = el.textContent?.trim().toLowerCase() || "";
+      if (text.startsWith("apply")) {
+        console.log("AutoApply: Clicking broad Apply button:", el.textContent?.trim());
+        el.click();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Wait until the page transitions to an application form,
+   * or until the timeout elapses. Returns true if form found.
+   */
+  async function waitForApplicationForm(timeoutMs = 15000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (isOnApplicationForm()) return true;
+      await sleep(600);
+    }
+    return false;
+  }
+
   async function init() {
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     if (!stored.pendingApplication) {
@@ -27,6 +94,33 @@
     showBanner("Preparing application...", "ai");
 
     try {
+      // ── Step 0: If we're on a job posting page (not the form yet), click Apply ──
+      if (!isOnApplicationForm()) {
+        console.log("AutoApply: Not on application form — looking for Apply button");
+        showBanner("Opening application form...", "ai");
+
+        const clicked = await clickApplyOnPosting();
+        if (!clicked) {
+          // No Apply button found — tell user to click it manually
+          showBanner("Click the Apply button to open the application form.", "user",
+            { subtext: "AutoApply will detect the form and continue automatically." });
+        } else {
+          showBanner("Waiting for application form to load...", "ai");
+        }
+
+        // Wait for the form regardless (covers both: auto-click or manual click)
+        const formReady = await waitForApplicationForm(20000);
+        if (!formReady) {
+          showBanner("Could not detect application form — please navigate to it manually.", "user");
+          return;
+        }
+
+        // Give the form an extra moment to fully render
+        await sleep(1000);
+        showBanner("Application form detected — filling your details...", "ai");
+      }
+
+      // ── Step 1: Scrape JD ──
       // Try to scrape JD from whatever page we're on
       const pageJD = scrapeGenericJD();
       const jobDescription = pageJD || pendingJob.jobDescription;
@@ -89,6 +183,10 @@
   /**
    * Send a chrome.runtime message with a timeout.
    */
+  function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+  }
+
   function sendMessageWithTimeout(message, timeoutMs) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
