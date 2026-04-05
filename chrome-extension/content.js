@@ -580,12 +580,12 @@
         </div>
 
         <div style="padding: 16px 20px; border-bottom: 1px solid #E5E5E5;">
-          <h4 style="margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">Tailored Resume Preview</h4>
+          <h4 style="margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">Job Description</h4>
           <div id="confirm-resume-preview" style="
             font-size: 11px; color: #333; line-height: 1.5; max-height: 200px;
             overflow-y: auto; background: #FAFAFA; border-radius: 8px; padding: 12px;
             border: 1px solid #E5E5E5;
-          ">Tailoring resume...</div>
+          ">Loading job description...</div>
           <div id="confirm-match-score" style="
             margin-top: 8px; display: flex; align-items: center; gap: 8px;
           ">
@@ -618,7 +618,7 @@
    * Show the confirmation modal for a job and wait for user decision.
    * Returns: "apply" | "skip" | "stop"
    */
-  function showConfirmation(jobNumber, totalJobs, job, tailoredResult) {
+  function showConfirmation(jobNumber, totalJobs, job, tailoredResult, jobDescription) {
     return new Promise((resolve) => {
       const modal = createConfirmationModal();
       modal.style.display = "flex";
@@ -630,20 +630,16 @@
       const preview = document.getElementById("confirm-resume-preview");
       const scoreEl = document.getElementById("confirm-score-value");
 
+      // Show job description so user can verify the right JD was scraped
+      preview.textContent = jobDescription
+        ? jobDescription.trim().slice(0, 1200) + (jobDescription.length > 1200 ? "…" : "")
+        : "Job description not available.";
+
+      // Show match score from tailoring result (JD preview is already set above)
       if (tailoredResult) {
-        const resume = tailoredResult.tailoredResume;
-        let previewText = "";
-        if (resume?.summary) previewText += resume.summary + "\n\n";
-        if (resume?.experience?.length > 0) {
-          const exp = resume.experience[0];
-          previewText += `${exp.title || ""} at ${exp.company || ""}\n`;
-          if (exp.bullets?.length > 0) previewText += exp.bullets.slice(0, 3).map(b => "• " + b).join("\n");
-        }
-        preview.textContent = previewText || "Resume tailored successfully. Click Apply to proceed.";
         scoreEl.textContent = (tailoredResult.matchScore || 0) + "%";
         scoreEl.style.color = tailoredResult.matchScore >= 70 ? "#059669" : tailoredResult.matchScore >= 50 ? "#D97706" : "#DC2626";
       } else {
-        preview.textContent = "Tailoring in progress... Resume will be generated when you apply.";
         scoreEl.textContent = "—";
       }
 
@@ -743,7 +739,7 @@
         console.warn("AutoApply: Tailoring error for", job.title, err);
       }
 
-      const decision = await showConfirmation(jobNumber, selectedJobs.length, job, tailoredResult);
+      const decision = await showConfirmation(jobNumber, selectedJobs.length, job, tailoredResult, jobDescription);
 
       if (decision === "stop") {
         stopApplying();
