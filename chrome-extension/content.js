@@ -494,8 +494,8 @@
         }
       }
 
-      // Step 3: Send job data to background for processing BEFORE clicking Apply
-      // Background will store it and the ATS content script will pick it up
+      // Step 3: Store job + JD in background so ATS scripts can pick it up
+      updateJobStatus(job.id, "applying", "Scanning job description...");
       const jobData = {
         jobTitle: job.title,
         company: job.company,
@@ -505,7 +505,6 @@
         source: "linkedin",
       };
 
-      // Store in chrome.storage so ATS scripts can access it
       await new Promise((resolve) => {
         chrome.runtime.sendMessage({
           type: "PREPARE_APPLICATION",
@@ -514,7 +513,7 @@
       });
 
       // Step 4: Click the Apply button
-      updateStatus(`Clicking Apply: ${job.title}...`);
+      updateJobStatus(job.id, "applying", "Opening application...");
       const applyType = await clickApplyButton();
 
       if (applyType === "external") {
@@ -705,8 +704,7 @@
 
       // Step 1: Click job card to load JD
       showProgressOverlay(jobNumber, selectedJobs.length, job);
-      updateStatus(`Loading JD: ${job.title}...`);
-      updateJobStatus(job.id, "applying");
+      updateJobStatus(job.id, "applying", "Loading job details...");
 
       const clicked = await clickJobCard(job);
       if (!clicked) {
@@ -714,11 +712,13 @@
         continue;
       }
 
+      updateJobStatus(job.id, "applying", "Reading job description...");
       await scrollDetailPanel();
       await new Promise((r) => setTimeout(r, 800));
       const jobDescription = scrapeJobDescription();
 
       // Step 2: Tailor the resume in background (non-blocking preview)
+      updateJobStatus(job.id, "applying", "Scanning job description...");
       let tailoredResult = null;
       const jobData = {
         jobTitle: job.title, company: job.company,
@@ -732,6 +732,7 @@
       });
 
       // Step 3: Show confirmation modal — user decides per-job
+      updateJobStatus(job.id, "applying", "Tailoring resume...");
       updateStatus(`Review job ${jobNumber}/${selectedJobs.length}: ${job.title}`);
 
       // Wait for tailoring to complete before showing confirmation
@@ -777,7 +778,7 @@
 
       // Step 4: Click Apply button
       showProgressOverlay(jobNumber, selectedJobs.length, job);
-      updateStatus(`Clicking Apply: ${job.title}...`);
+      updateJobStatus(job.id, "applying", "Opening application...");
       const applyType = await clickApplyButton();
 
       if (applyType === "external") {
