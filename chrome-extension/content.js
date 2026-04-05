@@ -13,8 +13,12 @@
  */
 
 (() => {
-  if (window.__autoapply_injected) return;
-  window.__autoapply_injected = true;
+  const SCRIPT_VERSION = "2.3.0";
+
+  // Version-aware injection guard: always re-inject when version changes
+  if (window.__autoapply_injected === SCRIPT_VERSION) return;
+  window.__autoapply_injected = SCRIPT_VERSION;
+  console.log(`AutoApply: Content script v${SCRIPT_VERSION} injecting...`);
 
   // State
   let scrapedJobs = [];
@@ -49,79 +53,149 @@
   /* ─────────────────────── SCRAPING ─────────────────────── */
 
   /**
-   * Scrape all visible job cards using dismiss button aria-labels as anchors.
+   * Scrape all visible job cards.
+   * Supports TWO LinkedIn DOM layouts:
+   *   A) /jobs/search/  → li[data-occludable-job-id] cards
+   *   B) /jobs/search-results/ (AI-powered search) → dismiss button aria-labels
    */
   function scrapeJobCards() {
-    const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
+    // --- Strategy A: data-occludable-job-id (classic search) ---
+    const cardItems = document.querySelectorAll("li[data-occludable-job-id]");
+    if (cardItems.length > 0) {
+      console.log(`AutoApply: Using Strategy A (data-occludable-job-id), found ${cardItems.length} cards`);
+      return scrapeStrategyA(cardItems);
+    }
+
+    // --- Strategy B: dismiss button aria-labels (AI-powered search-results) ---
+    const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"][aria-label$=" job"]');
+    if (dismissBtns.length > 0) {
+      console.log(`AutoApply: Using Strategy B (dismiss buttons), found ${dismissBtns.length} cards`);
+      return scrapeStrategyB(dismissBtns);
+    }
+
+    console.warn("AutoApply: No job cards found with any strategy");
+    return [];
+  }
+
+  /** Strategy A: Classic /jobs/search/ with li[data-occludable-job-id] */
+  function scrapeStrategyA(cardItems) {
     const jobs = [];
-
-    dismissBtns.forEach((btn, index) => {
+    cardItems.forEach((card, index) => {
       try {
-        const ariaLabel = btn.getAttribute("aria-label") || "";
-        const ariaTitle = ariaLabel.replace(/^Dismiss\s+/i, "").replace(/\s+job$/i, "").trim();
-        if (!ariaTitle) return;
+        const jobId = card.getAttribute("data-occludable-job-id") || "";
+        const titleLink = card.querySelector("a.job-card-container__link")
+          || card.querySelector('a[href*="/jobs/view/"]')
+          || card.querySelector("a");
 
-        let card = btn;
-        for (let i = 0; i < 6; i++) {
-          if (card.parentElement) card = card.parentElement;
-          if (card.tagName === "LI" || card.getAttribute("data-occludable-job-id")) break;
+        let title = "";
+        if (titleLink) {
+          title = titleLink.getAttribute("aria-label")
+            || titleLink.querySelector("strong")?.textContent?.trim()
+            || titleLink.querySelector('[class*="title"]')?.textContent?.trim()
+            || titleLink.textContent?.trim()
+            || "";
         }
+        title = title.replace(/\s*\(Verified job\)/gi, "").trim();
+        if (!title || title.length < 3) return;
 
-        const text = card?.innerText?.trim() || "";
-        if (!text || text.length < 10) return;
-
-        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-        const titleLower = ariaTitle.toLowerCase();
-        const noiseWords = ["easy apply", "promoted", "verified", "actively recruiting", "viewed", "applied", "new", "dismiss"];
-
-        let company = "";
-        let location = "";
-        let foundTitle = false;
-        let companySet = false;
-
-        for (const line of lines) {
-          const lineLower = line.toLowerCase().replace(/\(verified job\)/i, "").trim();
-          if (!foundTitle && (lineLower === titleLower || lineLower.includes(titleLower) || titleLower.includes(lineLower))) {
-            foundTitle = true;
-            continue;
-          }
-          if (noiseWords.some((n) => lineLower === n || lineLower.startsWith(n))) continue;
-          if (line.length < 2) continue;
-          if (/^\d+\s+(day|hour|minute|week|month)s?\s+ago$/i.test(line)) continue;
-          if (/^just now$/i.test(line)) continue;
-
-          if (!companySet) {
-            company = line.replace(/\s*\(Verified job\)/i, "").trim();
-            companySet = true;
-            continue;
-          }
-          if (!location) {
-            location = line;
-            break;
-          }
-        }
-
-        if (!company && lines.length >= 2) company = lines[1]?.replace(/\s*\(Verified job\)/i, "") || "";
-        if (!location && lines.length >= 3) location = lines[2] || "";
-
-        const easyApply = text.toLowerCase().includes("easy apply");
+        const { company, location, easyApply } = parseCardText(card.innerText, title);
 
         jobs.push({
           id: `li_${Date.now()}_${index}`,
-          index, // original dismiss button index for clicking
-          title: ariaTitle.replace(/\s*\(Verified job\)/i, ""),
-          company,
-          location,
-          easyApply,
-          selected: false,
-          status: "pending", // pending | applying | applied | skipped | failed
+          index,
+          linkedinJobId: jobId,
+          title, company, location, easyApply,
+          selected: false, status: "pending",
         });
       } catch (e) {
-        console.warn("AutoApply: Failed to parse job card", e);
+        console.warn("AutoApply: Failed to parse job card (A)", e);
       }
     });
-
     return jobs;
+  }
+
+  /** Strategy B: AI-powered /jobs/search-results/ with dismiss buttons */
+  function scrapeStrategyB(dismissBtns) {
+    const jobs = [];
+    dismissBtns.forEach((btn, index) => {
+      try {
+        const label = btn.getAttribute("aria-label") || "";
+        const titleMatch = label.match(/^Dismiss (.+?) job$/);
+        const title = titleMatch ? titleMatch[1].trim() : "";
+        if (!title || title.length < 3) return;
+
+        // Walk up to find card container with text (50-500 chars)
+        let card = btn;
+        for (let j = 0; j < 6; j++) {
+          card = card.parentElement;
+          if (!card) break;
+          const len = (card.innerText || "").length;
+          if (len > 50 && len < 500) break;
+        }
+
+        const { company, location, easyApply } = parseCardText(card?.innerText, title);
+
+        jobs.push({
+          id: `dismiss_${Date.now()}_${index}`,
+          index,
+          linkedinJobId: "",
+          dismissTitle: title, // used for clicking in Strategy B
+          title, company, location, easyApply,
+          selected: false, status: "pending",
+        });
+      } catch (e) {
+        console.warn("AutoApply: Failed to parse job card (B)", e);
+      }
+    });
+    return jobs;
+  }
+
+  /** Shared: extract company, location, easyApply from card innerText */
+  function parseCardText(text, title) {
+    text = (text || "").trim();
+    if (!text || text.length < 10) return { company: "", location: "", easyApply: false };
+
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const titleLower = title.toLowerCase();
+    const noiseWords = [
+      "easy apply", "promoted", "verified", "actively recruiting",
+      "actively reviewing", "viewed", "applied", "new", "dismiss",
+      "be an early applicant", "people also viewed",
+    ];
+
+    let company = "";
+    let location = "";
+    let foundTitle = false;
+    let companySet = false;
+
+    for (const line of lines) {
+      const lineLower = line.toLowerCase().replace(/\(verified job\)/i, "").trim();
+      if (!foundTitle && (lineLower === titleLower || lineLower.includes(titleLower) || titleLower.includes(lineLower))) {
+        foundTitle = true;
+        continue;
+      }
+      if (foundTitle && lineLower === titleLower) continue;
+      if (noiseWords.some((n) => lineLower === n || lineLower.startsWith(n))) continue;
+      if (line.length < 2) continue;
+      if (/^\d+\s+(day|hour|minute|week|month)s?\s+ago$/i.test(line)) continue;
+      if (/^just now$/i.test(line)) continue;
+
+      if (!companySet) {
+        company = line.replace(/\s*\(Verified job\)/i, "").trim();
+        companySet = true;
+        continue;
+      }
+      if (!location) {
+        location = line;
+        break;
+      }
+    }
+
+    if (!company && lines.length >= 2) company = lines[1]?.replace(/\s*\(Verified job\)/i, "") || "";
+    if (!location && lines.length >= 3) location = lines[2] || "";
+    const easyApply = text.toLowerCase().includes("easy apply");
+
+    return { company, location, easyApply };
   }
 
   /**
@@ -184,42 +258,70 @@
    * Click a job card by its dismiss button index and wait for detail panel.
    * Falls back to matching by job title if the index has shifted.
    */
-  async function clickJobCard(dismissIndex, jobTitle) {
-    const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"]');
+  async function clickJobCard(job) {
+    let card = null;
 
-    // Strategy 1: Always try the original index first — most reliable for duplicate titles
-    let btn = dismissBtns[dismissIndex];
+    // --- Strategy A cards: li[data-occludable-job-id] ---
+    if (job.linkedinJobId) {
+      card = document.querySelector(`li[data-occludable-job-id="${job.linkedinJobId}"]`);
+    }
+    if (!card) {
+      const allCards = document.querySelectorAll("li[data-occludable-job-id]");
+      if (allCards.length > 0) {
+        card = allCards[job.index];
+        if (!card && job.title) {
+          const titleLower = job.title.toLowerCase();
+          for (const candidate of allCards) {
+            const linkText = candidate.querySelector("a")?.textContent?.toLowerCase() || "";
+            if (linkText.includes(titleLower.substring(0, 25))) { card = candidate; break; }
+          }
+        }
+      }
+    }
 
-    // Strategy 2: If index doesn't exist (scrolled away), fall back to title search
-    if (!btn && jobTitle) {
-      const titleLower = jobTitle.toLowerCase();
-      for (const candidate of dismissBtns) {
-        const ariaLabel = (candidate.getAttribute("aria-label") || "").toLowerCase();
-        if (ariaLabel.includes(titleLower.substring(0, 20))) {
-          btn = candidate;
+    // --- Strategy B cards: find via dismiss button aria-label ---
+    if (!card && job.dismissTitle) {
+      const dismissBtn = document.querySelector(`button[aria-label="Dismiss ${job.dismissTitle} job"]`);
+      if (dismissBtn) {
+        // Walk up to find clickable card container
+        card = dismissBtn;
+        for (let j = 0; j < 6; j++) {
+          card = card.parentElement;
+          if (!card) break;
+          const len = (card.innerText || "").length;
+          if (len > 50 && len < 500) break;
+        }
+      }
+    }
+
+    // --- Fallback: search all dismiss buttons by title ---
+    if (!card && job.title) {
+      const titleLower = job.title.toLowerCase();
+      const allDismiss = document.querySelectorAll('button[aria-label*="Dismiss"][aria-label$=" job"]');
+      for (const btn of allDismiss) {
+        const label = (btn.getAttribute("aria-label") || "").toLowerCase();
+        if (label.includes(titleLower.substring(0, 25))) {
+          card = btn;
+          for (let j = 0; j < 6; j++) {
+            card = card.parentElement;
+            if (!card) break;
+            const len = (card.innerText || "").length;
+            if (len > 50 && len < 500) break;
+          }
           break;
         }
       }
     }
 
-    if (!btn) {
-      console.warn("AutoApply: No dismiss button found at index", dismissIndex, "for", jobTitle);
+    if (!card) {
+      console.warn("AutoApply: No job card found for", job.title);
       return false;
     }
 
-    // Click the card's <li> container, not the dismiss button itself
-    let card = btn;
-    for (let i = 0; i < 6; i++) {
-      if (card.parentElement) card = card.parentElement;
-      if (card.tagName === "LI" || card.getAttribute("data-occludable-job-id")) break;
-    }
-
-    if (card) {
-      card.click();
-      await new Promise((r) => setTimeout(r, 2500));
-      return true;
-    }
-    return false;
+    // Click the card to load job details in the right panel
+    card.click();
+    await new Promise((r) => setTimeout(r, 2500));
+    return true;
   }
 
   /**
@@ -350,7 +452,7 @@
     try {
       // Step 1: Click the job card to load detail panel
       updateStatus(`Loading: ${job.title}...`);
-      const clicked = await clickJobCard(job.index, job.title);
+      const clicked = await clickJobCard(job);
       if (!clicked) {
         console.warn("AutoApply: Could not click job card for", job.title, "at index", job.index);
         updateJobStatus(job.id, "failed");
@@ -427,8 +529,134 @@
     }
   }
 
+  /* ─────────────── RESUME CONFIRMATION MODAL ─────────────── */
+
+  function createConfirmationModal() {
+    let modal = document.getElementById("autoapply-confirm-modal");
+    if (modal) return modal;
+
+    modal = document.createElement("div");
+    modal.id = "autoapply-confirm-modal";
+    modal.style.cssText = `
+      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 100000; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: none; align-items: center; justify-content: center;
+    `;
+    modal.innerHTML = `
+      <div style="
+        background: white; border-radius: 16px; width: 500px; max-height: 80vh;
+        overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      ">
+        <div style="
+          padding: 20px; border-bottom: 1px solid #E5E5E5;
+          display: flex; align-items: center; justify-content: space-between;
+        ">
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span id="confirm-step" style="
+                background: #4F46E5; color: white; font-size: 12px; font-weight: 700;
+                padding: 3px 10px; border-radius: 6px;
+              ">Job 1/5</span>
+              <span style="font-size: 11px; color: #999;">Review before applying</span>
+            </div>
+            <h3 id="confirm-title" style="margin: 8px 0 2px; font-size: 16px; font-weight: 600; color: #111;">Job Title</h3>
+            <p id="confirm-company" style="margin: 0; font-size: 13px; color: #4F46E5; font-weight: 500;">Company — Location</p>
+          </div>
+        </div>
+
+        <div style="padding: 16px 20px; border-bottom: 1px solid #E5E5E5;">
+          <h4 style="margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">Tailored Resume Preview</h4>
+          <div id="confirm-resume-preview" style="
+            font-size: 11px; color: #333; line-height: 1.5; max-height: 200px;
+            overflow-y: auto; background: #FAFAFA; border-radius: 8px; padding: 12px;
+            border: 1px solid #E5E5E5;
+          ">Tailoring resume...</div>
+          <div id="confirm-match-score" style="
+            margin-top: 8px; display: flex; align-items: center; gap: 8px;
+          ">
+            <span style="font-size: 11px; color: #666;">Match Score:</span>
+            <span id="confirm-score-value" style="font-size: 14px; font-weight: 700; color: #4F46E5;">—</span>
+          </div>
+        </div>
+
+        <div style="padding: 16px 20px; display: flex; gap: 10px;">
+          <button id="confirm-apply" style="
+            flex: 1; background: #4F46E5; color: white; border: none; border-radius: 8px;
+            padding: 12px; font-size: 13px; font-weight: 600; cursor: pointer;
+          ">Apply with this Resume</button>
+          <button id="confirm-skip" style="
+            background: #F5F5F5; color: #666; border: 1px solid #E5E5E5; border-radius: 8px;
+            padding: 12px 20px; font-size: 13px; font-weight: 500; cursor: pointer;
+          ">Skip</button>
+          <button id="confirm-stop" style="
+            background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; border-radius: 8px;
+            padding: 12px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+          ">Stop All</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  /**
+   * Show the confirmation modal for a job and wait for user decision.
+   * Returns: "apply" | "skip" | "stop"
+   */
+  function showConfirmation(jobNumber, totalJobs, job, tailoredResult) {
+    return new Promise((resolve) => {
+      const modal = createConfirmationModal();
+      modal.style.display = "flex";
+
+      document.getElementById("confirm-step").textContent = `Job ${jobNumber}/${totalJobs}`;
+      document.getElementById("confirm-title").textContent = job.title;
+      document.getElementById("confirm-company").textContent = `${job.company} — ${job.location}`;
+
+      const preview = document.getElementById("confirm-resume-preview");
+      const scoreEl = document.getElementById("confirm-score-value");
+
+      if (tailoredResult) {
+        const resume = tailoredResult.tailoredResume;
+        let previewText = "";
+        if (resume?.summary) previewText += resume.summary + "\n\n";
+        if (resume?.experience?.length > 0) {
+          const exp = resume.experience[0];
+          previewText += `${exp.title || ""} at ${exp.company || ""}\n`;
+          if (exp.bullets?.length > 0) previewText += exp.bullets.slice(0, 3).map(b => "• " + b).join("\n");
+        }
+        preview.textContent = previewText || "Resume tailored successfully. Click Apply to proceed.";
+        scoreEl.textContent = (tailoredResult.matchScore || 0) + "%";
+        scoreEl.style.color = tailoredResult.matchScore >= 70 ? "#059669" : tailoredResult.matchScore >= 50 ? "#D97706" : "#DC2626";
+      } else {
+        preview.textContent = "Tailoring in progress... Resume will be generated when you apply.";
+        scoreEl.textContent = "—";
+      }
+
+      const cleanup = () => {
+        modal.style.display = "none";
+        applyBtn.removeEventListener("click", onApply);
+        skipBtn.removeEventListener("click", onSkip);
+        stopBtn.removeEventListener("click", onStop);
+      };
+
+      const applyBtn = document.getElementById("confirm-apply");
+      const skipBtn = document.getElementById("confirm-skip");
+      const stopBtn = document.getElementById("confirm-stop");
+
+      const onApply = () => { cleanup(); resolve("apply"); };
+      const onSkip = () => { cleanup(); resolve("skip"); };
+      const onStop = () => { cleanup(); resolve("stop"); };
+
+      applyBtn.addEventListener("click", onApply);
+      skipBtn.addEventListener("click", onSkip);
+      stopBtn.addEventListener("click", onStop);
+    });
+  }
+
   /**
    * Run the auto-apply loop for all selected jobs.
+   * Shows a confirmation modal for each job so the user stays in the loop.
    */
   async function startApplying() {
     const selectedJobs = scrapedJobs.filter((j) => selectedJobIds.has(j.id));
@@ -460,35 +688,99 @@
       const job = selectedJobs[i];
       const jobNumber = i + 1;
 
-      // Show prominent progress overlay
+      // Step 1: Click job card to load JD
       showProgressOverlay(jobNumber, selectedJobs.length, job);
-      updateStatus(`Processing ${jobNumber}/${selectedJobs.length}: ${job.title}`);
+      updateStatus(`Loading JD: ${job.title}...`);
+      updateJobStatus(job.id, "applying");
 
-      // Store batch progress so background.js + ATS tabs can read it
+      const clicked = await clickJobCard(job);
+      if (!clicked) {
+        updateJobStatus(job.id, "failed");
+        continue;
+      }
+
+      await scrollDetailPanel();
+      await new Promise((r) => setTimeout(r, 800));
+      const jobDescription = scrapeJobDescription();
+
+      // Step 2: Tailor the resume in background (non-blocking preview)
+      let tailoredResult = null;
+      const jobData = {
+        jobTitle: job.title, company: job.company,
+        location: job.location, jobDescription,
+        easyApply: job.easyApply, source: "linkedin",
+      };
+
+      // Start tailoring asynchronously — we'll show partial results in the modal
+      const tailorPromise = new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: jobData }, resolve);
+      });
+
+      // Step 3: Show confirmation modal — user decides per-job
+      updateStatus(`Review job ${jobNumber}/${selectedJobs.length}: ${job.title}`);
+
+      // Wait for tailoring to complete before showing confirmation
+      try {
+        const result = await tailorPromise;
+        if (result && !result.error) tailoredResult = result.tailoredResult || result;
+      } catch (err) {
+        console.warn("AutoApply: Tailoring error for", job.title, err);
+      }
+
+      const decision = await showConfirmation(jobNumber, selectedJobs.length, job, tailoredResult);
+
+      if (decision === "stop") {
+        stopApplying();
+        break;
+      }
+
+      if (decision === "skip") {
+        updateJobStatus(job.id, "skipped");
+        skippedCount++;
+        updateStatus(`Skipped: ${job.title}`);
+        continue;
+      }
+
+      // decision === "apply" — proceed
+      // Store batch progress for ATS tabs
       await new Promise((resolve) => {
         chrome.storage.local.set({
           _aa_currentJobNumber: jobNumber,
           _aa_totalJobs: selectedJobs.length,
           _aa_batchProgress: {
-            current: jobNumber,
-            total: selectedJobs.length,
-            jobTitle: job.title,
-            company: job.company,
-            location: job.location,
-            applied: appliedCount,
-            skipped: skippedCount,
-            active: true,
+            current: jobNumber, total: selectedJobs.length,
+            jobTitle: job.title, company: job.company, location: job.location,
+            applied: appliedCount, skipped: skippedCount, active: true,
           },
         }, resolve);
       });
 
-      await processJob(job);
+      // Store pending application for ATS script
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "PREPARE_APPLICATION", job: jobData }, resolve);
+      });
 
-      // Brief pause between jobs to avoid rate limiting
+      // Step 4: Click Apply button
+      showProgressOverlay(jobNumber, selectedJobs.length, job);
+      updateStatus(`Clicking Apply: ${job.title}...`);
+      const applyType = await clickApplyButton();
+
+      if (applyType === "external") {
+        updateJobStatus(job.id, "opened");
+        appliedCount++;
+        updateStatus(`Tab opened: ${job.title}. ATS auto-filling...`);
+        await new Promise((r) => setTimeout(r, 3000));
+      } else if (applyType === "easy_apply") {
+        updateJobStatus(job.id, "skipped");
+        skippedCount++;
+        updateStatus(`Skipped (Easy Apply): ${job.title}`);
+      } else {
+        updateJobStatus(job.id, "failed");
+      }
+
+      // Brief pause between jobs
       if (i < selectedJobs.length - 1) {
-        showProgressOverlay(jobNumber, selectedJobs.length, job);
-        updateStatus(`Waiting before next job... (${jobNumber}/${selectedJobs.length} done)`);
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 1500));
       }
     }
 

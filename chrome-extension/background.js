@@ -13,6 +13,15 @@
 let expectingNewTab = false;
 let expectingTimeout = null;
 
+// Known ATS domains for immediate tab detection
+const KNOWN_ATS_DOMAINS = [
+  "greenhouse.io",
+  "lever.co",
+  "myworkdayjobs.com",
+  "ashbyhq.com",
+  "icims.com",
+];
+
 /* ── Keep-alive mechanism for MV3 service worker ──
  * MV3 service workers die after ~30s of inactivity.
  * We use chrome.alarms to keep it alive during long API calls.
@@ -60,12 +69,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Start watching for new tabs
       expectingNewTab = true;
-      // Auto-expire after 30 seconds (increased from 15 for slow page loads)
+      // Auto-expire after 60 seconds (increased from 30 for slow page loads)
       clearTimeout(expectingTimeout);
       expectingTimeout = setTimeout(() => {
         expectingNewTab = false;
         stopKeepAlive();
-      }, 30000);
+      }, 60000);
 
       sendResponse({ success: true });
     });
@@ -78,6 +87,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleTailorAndFill(message.job)
       .then((result) => { stopKeepAlive(); sendResponse(result); })
       .catch((err) => { stopKeepAlive(); sendResponse({ error: err.message }); });
+    return true;
+  }
+
+  /* ── Get stored user profile ── */
+  if (message.type === "GET_PROFILE") {
+    chrome.storage.local.get(["userProfile"], (stored) => {
+      sendResponse({ profile: stored.userProfile || null });
+    });
+    return true;
+  }
+
+  /* ── Save user profile ── */
+  if (message.type === "SAVE_PROFILE") {
+    chrome.storage.local.set({ userProfile: message.profile }, () => {
+      console.log("AutoApply BG: Saved user profile");
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  /* ── Get extension status ── */
+  if (message.type === "GET_STATUS") {
+    chrome.storage.local.get(["completedApplications", "_aa_currentJobNumber"], (stored) => {
+      sendResponse({
+        expectingNewTab,
+        completedCount: (stored.completedApplications || []).length,
+        currentJobNumber: stored._aa_currentJobNumber || 0,
+      });
+    });
     return true;
   }
 
@@ -343,16 +381,144 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  /* ── From Workday ATS: Click a button-dropdown using CDP trusted click ──
+   * Workday button-based dropdowns (Province, Phone Type) check `isTrusted`
+   * on click events, so content script clicks don't open them. We use
+   * chrome.debugger to dispatch a trusted click via CDP Input.dispatchMouseEvent.
+   *
+   * message.type: "CDP_CLICK"
+   * message.selector: CSS selector of the element to click
+   * message.selectOption: (optional) text of dropdown option to select after click
+   */
+  if (message.type === "CDP_CLICK") {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ error: "No tab ID" });
+      return true;
+    }
+
+    handleCDPClick(tabId, message.selector, message.selectOption)
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
 });
+
+/* ── CDP Click: Trusted click for Workday button-based dropdowns ── */
+async function handleCDPClick(tabId, selector, selectOption) {
+  const debuggee = { tabId };
+
+  try {
+    // Attach debugger
+    await chrome.debugger.attach(debuggee, "1.3");
+
+    // Get element position via JS evaluation
+    const evalResult = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
+      expression: `
+        (function() {
+          const el = document.querySelector('${selector.replace(/'/g, "\\'")}');
+          if (!el) return JSON.stringify({ error: 'Element not found' });
+          el.scrollIntoView({ block: 'center' });
+          const rect = el.getBoundingClientRect();
+          return JSON.stringify({
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            text: el.textContent?.trim().substring(0, 50)
+          });
+        })()
+      `,
+      returnByValue: true,
+    });
+
+    const pos = JSON.parse(evalResult.result.value);
+    if (pos.error) {
+      await chrome.debugger.detach(debuggee);
+      return { error: pos.error };
+    }
+
+    console.log(`AutoApply BG: CDP clicking at (${pos.x}, ${pos.y}) — "${pos.text}"`);
+
+    // Dispatch trusted mouse click via CDP
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1,
+    });
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1,
+    });
+
+    // Wait for dropdown popup to appear
+    await new Promise(r => setTimeout(r, 800));
+
+    // If selectOption provided, find and click the option
+    if (selectOption) {
+      const optResult = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
+        expression: `
+          (function() {
+            const options = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
+            for (const opt of options) {
+              if (opt.textContent?.trim() === '${selectOption.replace(/'/g, "\\'")}') {
+                const rect = opt.getBoundingClientRect();
+                return JSON.stringify({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, text: opt.textContent.trim() });
+              }
+            }
+            return JSON.stringify({ error: 'Option not found', available: Array.from(options).map(o => o.textContent?.trim()).slice(0, 10) });
+          })()
+        `,
+        returnByValue: true,
+      });
+
+      const optPos = JSON.parse(optResult.result.value);
+      if (!optPos.error) {
+        console.log(`AutoApply BG: CDP clicking option "${optPos.text}" at (${optPos.x}, ${optPos.y})`);
+        await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+          type: "mousePressed", x: optPos.x, y: optPos.y, button: "left", clickCount: 1,
+        });
+        await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+          type: "mouseReleased", x: optPos.x, y: optPos.y, button: "left", clickCount: 1,
+        });
+        await new Promise(r => setTimeout(r, 300));
+      } else {
+        console.log("AutoApply BG: Option not found:", optPos);
+      }
+    }
+
+    await chrome.debugger.detach(debuggee);
+    return { success: true };
+  } catch (err) {
+    try { await chrome.debugger.detach(debuggee); } catch (e) { /* already detached */ }
+    console.error("AutoApply BG: CDP click error:", err);
+    return { error: err.message };
+  }
+}
 
 /* ── Watch for new tabs opened by Apply clicks ── */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!expectingNewTab) return;
   if (changeInfo.status !== "complete") return;
   if (!tab.url) return;
 
-  // Skip LinkedIn tabs, extension pages, and chrome:// URLs
   const url = tab.url.toLowerCase();
+
+  // Check if this is a known ATS domain — if so, treat it as the apply tab
+  // regardless of expectingNewTab flag (handles race condition where page loads slowly)
+  const isKnownATS = KNOWN_ATS_DOMAINS.some(domain => url.includes(domain));
+
+  if (isKnownATS && !url.includes("linkedin.com")) {
+    console.log("AutoApply BG: Detected known ATS domain in new tab:", tab.url);
+    expectingNewTab = false;
+    clearTimeout(expectingTimeout);
+
+    // Wait a moment for the page to fully render, then inject
+    setTimeout(() => {
+      injectATSScript(tabId, tab.url);
+    }, 3000);
+    return;
+  }
+
+  // Fall back to original expectingNewTab logic for other cases
+  if (!expectingNewTab) return;
+
+  // Skip LinkedIn tabs, extension pages, and chrome:// URLs
   if (url.includes("linkedin.com") || url.startsWith("chrome") || url.startsWith("about:")) return;
 
   // Skip if it's our own app
@@ -383,6 +549,10 @@ async function injectATSScript(tabId, url) {
     scriptFile = "ats/lever.js";
   } else if (urlLower.includes("myworkdayjobs.com")) {
     scriptFile = "ats/workday.js";
+  } else if (urlLower.includes("ashbyhq.com")) {
+    scriptFile = "ats/generic.js"; // Ashby uses generic for now
+  } else if (urlLower.includes("icims.com")) {
+    scriptFile = "ats/generic.js"; // iCIMS uses generic for now
   }
 
   try {
@@ -410,9 +580,14 @@ async function injectATSScript(tabId, url) {
 
 /**
  * Call the AutoApply API to tailor the resume for the given job.
+ * Optimized: Step 1 (analyze-job) and storage fetch run in parallel.
  */
 async function handleTailorAndFill(job) {
-  const stored = await chrome.storage.local.get(["parsedResume", "autoapplyUrl", "userProfile"]);
+  // Run Step 1 and storage fetch in parallel (Step 1 doesn't depend on stored data)
+  const [analyzeRes, stored] = await Promise.all([
+    fetch_analyze_job(job),
+    chrome.storage.local.get(["parsedResume", "autoapplyUrl", "userProfile"]),
+  ]);
 
   if (!stored.parsedResume) {
     throw new Error("No resume found. Upload your resume on the AutoApply pipeline page first.");
@@ -441,20 +616,7 @@ async function handleTailorAndFill(job) {
     console.log("AutoApply BG: Merged userProfile into resume contactInfo");
   }
 
-  // Step 1: Analyze the job description
-  console.log("AutoApply BG: Step 1/3 — Analyzing JD for", job.jobTitle);
-  let analyzeRes;
-  try {
-    analyzeRes = await fetch(`${apiUrl}/api/analyze-job`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobDescription: job.jobDescription }),
-    });
-  } catch (fetchErr) {
-    console.error("AutoApply BG: Network error on analyze-job:", fetchErr);
-    throw new Error(`Network error calling analyze-job: ${fetchErr.message}`);
-  }
-
+  // Analyze response from parallel execution
   if (!analyzeRes.ok) {
     const errBody = await analyzeRes.text().catch(() => "");
     console.error("AutoApply BG: analyze-job failed:", analyzeRes.status, errBody);
@@ -546,6 +708,26 @@ async function handleTailorAndFill(job) {
 }
 
 /**
+ * Helper: Fetch analyze-job API in parallel
+ */
+async function fetch_analyze_job(job) {
+  const apiUrl = (await chrome.storage.local.get(["autoapplyUrl"])).autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+  console.log("AutoApply BG: Step 1/3 — Analyzing JD for", job.jobTitle);
+
+  try {
+    const res = await fetch(`${apiUrl}/api/analyze-job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobDescription: job.jobDescription }),
+    });
+    return res;
+  } catch (fetchErr) {
+    console.error("AutoApply BG: Network error on analyze-job:", fetchErr);
+    throw new Error(`Network error calling analyze-job: ${fetchErr.message}`);
+  }
+}
+
+/**
  * Download the tailored resume PDF to the user's Downloads folder.
  */
 async function handleDownloadResume(job) {
@@ -578,9 +760,51 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-/* ── Extension Install ── */
-chrome.runtime.onInstalled.addListener(() => {
+/**
+ * Initialize extension state on install or startup
+ */
+function initializeExtension() {
   chrome.storage.local.set({
     autoapplyUrl: "https://autoapply-ai-delta.vercel.app",
   });
+  console.log("AutoApply BG: Extension initialized with default settings");
+}
+
+/* ── Extension Install ── */
+chrome.runtime.onInstalled.addListener(() => {
+  initializeExtension();
+});
+
+/* ── Extension Startup (persistence after restart) ── */
+chrome.runtime.onStartup.addListener(() => {
+  console.log("AutoApply BG: Extension restarted, re-initializing state");
+  initializeExtension();
+  expectingNewTab = false;
+  clearTimeout(expectingTimeout);
+});
+
+/* ── Programmatic Content Script Injection ──
+ * Chrome aggressively caches manifest-based content scripts.
+ * This ensures the LATEST content.js always runs on LinkedIn job pages,
+ * bypassing Chrome's content script cache after extension reload.
+ * Also handles LinkedIn jobs search and collections pages.
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && tab.url) {
+    const url = tab.url.toLowerCase();
+    // Inject on LinkedIn job pages, search results, and collections
+    if (url.includes("linkedin.com/jobs/") ||
+        url.includes("linkedin.com/jobs/search") ||
+        url.includes("linkedin.com/jobs/collections")) {
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content.js"],
+      }).then(() => {
+        console.log("AutoApply BG: Programmatically injected content.js into tab", tabId);
+      }).catch((err) => {
+        // Silently ignore — tab might have navigated away or lack permission
+        console.log("AutoApply BG: Could not inject content.js:", err.message);
+      });
+    }
+  }
 });

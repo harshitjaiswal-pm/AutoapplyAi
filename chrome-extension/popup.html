@@ -5,28 +5,83 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 320px;
+      width: 360px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: #FAFAFA;
       color: #111;
     }
+
     .header {
       background: #4F46E5;
       color: white;
       padding: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
+
+    .header-title {
+      flex: 1;
+    }
+
     .header h1 {
       font-size: 15px;
       font-weight: 600;
+      margin: 0;
     }
+
     .header p {
       font-size: 11px;
       opacity: 0.8;
       margin-top: 2px;
     }
-    .content {
+
+    .tabs {
+      display: flex;
+      background: white;
+      border-bottom: 2px solid #E5E7EB;
+      gap: 0;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 12px 16px;
+      border: none;
+      background: transparent;
+      color: #666;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: #4F46E5;
+      background: #F9FAFB;
+    }
+
+    .tab-btn.active {
+      color: #4F46E5;
+      border-bottom-color: #4F46E5;
+      background: #F9FAFB;
+    }
+
+    .tab-content {
+      display: none;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Dashboard Tab */
+    .dashboard {
       padding: 16px;
     }
+
     .stat-row {
       display: flex;
       justify-content: space-between;
@@ -34,44 +89,58 @@
       padding: 10px 0;
       border-bottom: 1px solid #EEE;
     }
-    .stat-row:last-child { border-bottom: none; }
+
+    .stat-row:last-of-type {
+      border-bottom: none;
+      margin-bottom: 16px;
+    }
+
     .stat-label {
       font-size: 12px;
       color: #666;
     }
+
     .stat-value {
       font-size: 14px;
       font-weight: 600;
       color: #111;
     }
-    .settings {
-      padding: 16px;
+
+    .settings-section {
+      margin-top: 16px;
+      padding-top: 16px;
       border-top: 1px solid #EEE;
     }
-    .settings label {
+
+    .settings-section label {
       display: block;
       font-size: 11px;
       color: #999;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
+      font-weight: 500;
     }
-    .settings input {
+
+    .settings-section input {
       width: 100%;
       padding: 8px 10px;
       font-size: 12px;
       border: 1px solid #DDD;
       border-radius: 6px;
       color: #333;
+      margin-bottom: 12px;
     }
-    .settings input:focus {
+
+    .settings-section input:focus {
       outline: none;
       border-color: #4F46E5;
       box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
     }
+
     .btn {
       display: block;
       width: 100%;
       padding: 10px;
-      margin-top: 12px;
+      margin-top: 8px;
       background: #4F46E5;
       color: white;
       border: none;
@@ -79,39 +148,107 @@
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
+      transition: background 0.2s;
     }
-    .btn:hover { background: #4338CA; }
+
+    .btn:hover {
+      background: #4338CA;
+    }
+
     .btn-secondary {
       background: #F5F5F5;
       color: #333;
       border: 1px solid #E5E5E5;
+      margin-top: 8px;
     }
-    .btn-secondary:hover { background: #EEEEEE; }
+
+    .btn-secondary:hover {
+      background: #EEEEEE;
+    }
+
+    /* Profile Tab */
+    .profile {
+      padding: 16px;
+    }
+
+    .form-group {
+      margin-bottom: 12px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .form-row .form-group {
+      flex: 1;
+      margin-bottom: 0;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 12px;
+      border: 1px solid #DDD;
+      border-radius: 6px;
+      color: #333;
+      font-family: inherit;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: #4F46E5;
+      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+    }
+
+    .save-feedback {
+      display: none;
+      font-size: 12px;
+      color: #059669;
+      margin-top: 8px;
+      font-weight: 500;
+    }
+
+    .save-feedback.show {
+      display: block;
+    }
+
+    /* Instructions */
     .instructions {
       padding: 16px;
       border-top: 1px solid #EEE;
-    }
-    .instructions h3 {
-      font-size: 12px;
-      font-weight: 600;
-      color: #333;
-      margin-bottom: 8px;
-    }
-    .instructions ol {
       font-size: 11px;
-      color: #666;
-      padding-left: 16px;
+      color: #999;
       line-height: 1.6;
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>AutoApply AI</h1>
-    <p>LinkedIn Job Scraper</p>
+    <div class="header-title">
+      <h1>AutoApply AI</h1>
+      <p>LinkedIn Job Scraper</p>
+    </div>
   </div>
 
-  <div class="content">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="profile">Profile</button>
+  </div>
+
+  <!-- Dashboard Tab -->
+  <div id="dashboard" class="tab-content active dashboard">
     <div class="stat-row">
       <span class="stat-label">Jobs scraped this session</span>
       <span class="stat-value" id="scraped-count">0</span>
@@ -120,26 +257,117 @@
       <span class="stat-label">Jobs sent to pipeline</span>
       <span class="stat-value" id="sent-count">0</span>
     </div>
+
+    <div class="settings-section">
+      <label for="url-input">AutoApply URL</label>
+      <input id="url-input" type="text" placeholder="https://autoapply-ai-delta.vercel.app" />
+      <button class="btn" id="open-pipeline">Open Pipeline</button>
+      <button class="btn btn-secondary" id="clear-data">Clear Data</button>
+    </div>
   </div>
 
-  <div class="settings">
-    <label for="url-input">AutoApply URL</label>
-    <input id="url-input" type="text" placeholder="https://autoapply-ai-delta.vercel.app" />
-    <button class="btn" id="open-pipeline">Open Pipeline</button>
-    <button class="btn btn-secondary" id="clear-data" style="margin-top: 8px;">Clear Scraped Data</button>
-  </div>
+  <!-- Profile Tab -->
+  <div id="profile" class="tab-content profile">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="firstName">First Name</label>
+        <input id="firstName" type="text" placeholder="John" />
+      </div>
+      <div class="form-group">
+        <label for="lastName">Last Name</label>
+        <input id="lastName" type="text" placeholder="Doe" />
+      </div>
+    </div>
 
-  <div class="instructions">
-    <h3>How to use</h3>
-    <ol>
-      <li>Go to LinkedIn Jobs search</li>
-      <li>Click the floating AutoApply button</li>
-      <li>Click "Scan Page" to find jobs</li>
-      <li>Select jobs and click "Send to AutoApply"</li>
-      <li>Jobs appear in your Pipeline for batch tailoring</li>
-    </ol>
-  </div>
+    <div class="form-group">
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="john@example.com" />
+    </div>
 
-  <script src="popup.js"></script>
+    <div class="form-group">
+      <label for="phone">Phone</label>
+      <input id="phone" type="tel" placeholder="+1 (555) 000-0000" />
+    </div>
+
+    <div class="form-group">
+      <label for="address">Address Line 1</label>
+      <input id="address" type="text" placeholder="123 Main St" />
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="city">City</label>
+        <input id="city" type="text" placeholder="Toronto" />
+      </div>
+      <div class="form-group">
+        <label for="province">Province/State</label>
+        <input id="province" type="text" placeholder="ON" />
+      </div>
+      <div class="form-group">
+        <label for="postalCode">Postal Code</label>
+        <input id="postalCode" type="text" placeholder="M1A 1A1" />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="linkedin">LinkedIn URL</label>
+      <input id="linkedin" type="url" placeholder="https://linkedin.com/in/johndoe" />
+    </div>
+
+    <div class="form-group">
+      <label for="github">GitHub URL</label>
+      <input id="github" type="url" placeholder="https://github.com/johndoe" />
+    </div>
+
+    <div class="form-group">
+      <label for="portfolio">Portfolio URL</label>
+      <input id="portfolio" type="url" placeholder="https://johndoe.com" />
+    </div>
+
+    <div class="form-group">
+      <label for="currentCompany">Current Company</label>
+      <input id="currentCompany" type="text" placeholder="Acme Corp" />
+    </div>
+
+    <div class="form-group">
+      <label for="pronouns">Pronouns</label>
+      <select id="pronouns">
+        <option value="">Select pronouns</option>
+        <option value="He/Him">He/Him</option>
+        <option value="She/Her">She/Her</option>
+        <option value="They/Them">They/Them</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="workAuth">Work Authorization</label>
+      <select id="workAuth">
+        <option value="">Select work authorization</option>
+        <option value="Citizen">Citizen</option>
+        <option value="Permanent Resident">Permanent Resident</option>
+        <option value="Work Permit">Work Permit</option>
+        <option value="Require Sponsorship">Require Sponsorship</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="howDidYouHear">How Did You Hear About Us?</label>
+      <select id="howDidYouHear">
+        <option value="">Select source</option>
+        <option value="LinkedIn">LinkedIn</option>
+        <option value="Indeed">Indeed</option>
+        <option value="Glassdoor">Glassdoor</option>
+        <option value="Referral">Referral</option>
+        <option value="Company Website">Company Website</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+
+    <button class="btn" id="save-profile">Save Profile</button>
+    <div class="save-feedback" id="save-feedback">Saved!</div>
+  </div>
 </body>
+
+<script src="popup.js"></script>
 </html>

@@ -6,7 +6,7 @@
  * 2. Scrape JD from Greenhouse page (more reliable than LinkedIn)
  * 3. Send to background.js for AI tailoring
  * 4. Fill ALL form fields (basic + Greenhouse-specific)
- * 5. Download tailored resume PDF for manual upload
+ * 5. Validate fields and attempt programmatic resume upload
  */
 
 (() => {
@@ -15,7 +15,7 @@
 
   console.log("AutoApply: Greenhouse ATS script loaded on", window.location.href);
 
-  setTimeout(() => init(), 2500);
+  setTimeout(() => init(), 1500);
 
   async function init() {
     const stored = await chrome.storage.local.get(["pendingApplication"]);
@@ -59,6 +59,9 @@
 
       // Fill form fields
       await fillGreenhouseForm(tailoredData.tailoredResult, pendingJob);
+
+      // Attempt resume file upload
+      await attemptResumeUpload();
 
       // Download tailored resume PDF
       chrome.runtime.sendMessage({
@@ -158,6 +161,7 @@
       { sel: 'input[name*="phone"], input[id*="phone"], input[type="tel"]', val: user.phone },
     ];
 
+    // Fill selector fields synchronously
     for (const { sel, val } of selectorFields) {
       if (val && fillBySelector(sel, val)) filled++;
     }
@@ -173,15 +177,28 @@
       { labels: ["name pronunciation"], value: "" }, // leave blank
     ];
 
+    // Fill label fields synchronously
     for (const { labels, value } of labelFields) {
       if (value && fillByLabel(labels, value)) filled++;
     }
 
+    // Fill cover letter synchronously if present
+    if (tailoredResult?.coverLetter) {
+      const textareas = document.querySelectorAll("textarea");
+      for (const ta of textareas) {
+        const label = getFieldLabel(ta).toLowerCase();
+        if (label.includes("cover letter") || label.includes("cover_letter")) {
+          setNativeValue(ta, tailoredResult.coverLetter);
+          filled++;
+          console.log("AutoApply: Filled cover letter textarea");
+          break;
+        }
+      }
+    }
+
     // ── Select / dropdown fields ──
-    // Greenhouse uses React Select v5. Content scripts run in Chrome's "isolated world"
-    // which means synthetic DOM events don't reliably trigger React's event handlers.
-    // Solution: inject a <script> tag into the page's MAIN world, find each React Select's
-    // internal fiber, and call onChange() directly. No event simulation needed.
+    // Greenhouse uses React Select v5. Dropdowns are filled via main world,
+    // then text fields are re-filled after React re-renders (faster timing).
     const dropdownFields = [
       { labels: ["pronouns"],                                                  value: user.pronouns || "He/Him" },
       { labels: ["sponsorship", "immigration", "require immigration"],         value: user.requireSponsorship === "No" ? "No" : (user.requireSponsorship || "No") },
@@ -197,11 +214,8 @@
     // Filter out empty values
     const activeDropdowns = dropdownFields.filter((f) => f.value);
 
-    // Fill dropdowns via main world using sequential setValue() with delays.
-    // Dropdowns are filled one-at-a-time (600ms apart) to prevent React batching
-    // from losing form state updates. After ALL dropdowns finish, RE-FILL text
-    // fields because React re-renders can wipe out DOM values set via setNativeValue.
-    const dropdownFillTimeMs = (activeDropdowns.length * 700) + 500;
+    // Fill dropdowns via main world with faster re-fill timing
+    const dropdownFillTimeMs = (activeDropdowns.length * 500) + 300;
     fillDropdownsViaMainWorld(activeDropdowns, function onComplete() {
       console.log("AutoApply: Re-filling text fields after dropdown render (waiting " + dropdownFillTimeMs + "ms)...");
       setTimeout(() => {
@@ -212,27 +226,89 @@
           if (value) fillByLabel(labels, value, true);
         }
         console.log("AutoApply: Text fields re-filled");
+
+        // Validate fields and log any empty ones
+        validateFilledFields(user, tailoredResult);
       }, dropdownFillTimeMs);
     });
 
-    // ── Cover letter ──
-    // Only fill textareas explicitly labeled as cover letter — NOT "Other Links" or generic fields
-    if (tailoredResult?.coverLetter) {
-      const textareas = document.querySelectorAll("textarea");
-      for (const ta of textareas) {
-        const label = getFieldLabel(ta).toLowerCase();
-        if (label.includes("cover letter") || label.includes("cover_letter")) {
-          setNativeValue(ta, tailoredResult.coverLetter);
-          filled++;
-          console.log("AutoApply: Filled cover letter textarea");
-          break;
-        }
+    console.log(`AutoApply: Initial fill of ${filled} fields completed`);
+  }
+
+  /* ─────────────── FIELD VALIDATION ─────────────── */
+
+  function validateFilledFields(user, tailoredResult) {
+    console.log("AutoApply: Validating filled fields...");
+    const emptyFields = [];
+
+    // Check key selector fields
+    const selectorFields = [
+      { sel: 'input[name*="first_name"], input[id*="first_name"]', name: "First Name" },
+      { sel: 'input[name*="last_name"], input[id*="last_name"]', name: "Last Name" },
+      { sel: 'input[name*="email"], input[id*="email"], input[type="email"]', name: "Email" },
+      { sel: 'input[name*="phone"], input[id*="phone"], input[type="tel"]', name: "Phone" },
+    ];
+
+    for (const { sel, name } of selectorFields) {
+      const el = document.querySelector(sel);
+      if (!el || !el.value || el.value.trim() === "") {
+        emptyFields.push(name);
       }
-      // Note: Greenhouse cover letter is typically a file upload, not a textarea.
-      // The tailored cover letter will be downloaded as part of the resume PDF.
     }
 
-    console.log(`AutoApply: Filled ${filled} fields total`);
+    if (emptyFields.length > 0) {
+      console.warn("AutoApply: Empty key fields detected:", emptyFields);
+    } else {
+      console.log("AutoApply: All key fields validated successfully");
+    }
+  }
+
+  /* ─────────────── RESUME FILE UPLOAD ─────────────── */
+
+  async function attemptResumeUpload() {
+    try {
+      const stored = await chrome.storage.local.get(["tailoredResumePdf"]);
+      if (!stored.tailoredResumePdf) {
+        console.log("AutoApply: No tailored resume PDF found in storage for programmatic upload");
+        return;
+      }
+
+      const fileInput = document.querySelector('input[type="file"]');
+      if (!fileInput) {
+        console.log("AutoApply: No file input found for resume upload");
+        return;
+      }
+
+      console.log("AutoApply: Attempting programmatic resume file upload...");
+
+      // Create File object from base64
+      const base64Data = stored.tailoredResumePdf;
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const file = new File([bytes], "tailored_resume.pdf", { type: "application/pdf" });
+
+      // Override the files getter using Object.defineProperty
+      Object.defineProperty(fileInput, "files", {
+        get: function () {
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(file);
+          return dataTransfer.files;
+        },
+        configurable: true,
+      });
+
+      // Dispatch change event to trigger React handlers
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+      console.log("AutoApply: Resume file upload dispatched");
+    } catch (err) {
+      console.error("AutoApply: Resume upload error:", err);
+    }
   }
 
   /* ─────────────── VALUE SETTING (React-compatible) ─────────────── */
