@@ -140,23 +140,33 @@
       return;
     }
 
-    const fieldMappings = [
-      { labels: ["first name", "given name", "prénom"], value: user.firstName },
-      { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
+    let filled = 0;
+
+    // Try combined name field first
+    let filledFullName = false;
+    if (user.firstName && user.lastName) {
+      const fullName = `${user.firstName} ${user.lastName}`;
+      if (fillByLabel(["full name", "your name", "first & last name", "first and last name"], fullName)) {
+        filledFullName = true;
+        filled++;
+      }
+    }
+
+    // Only fill separate first/last name if combined didn't work
+    if (!filledFullName) {
+      if (user.firstName && fillByLabel(["first name", "given name", "prénom"], user.firstName)) filled++;
+      if (user.lastName && fillByLabel(["last name", "family name", "surname", "nom"], user.lastName)) filled++;
+    }
+
+    const otherMappings = [
       { labels: ["email", "e-mail", "email address"], value: user.email },
       { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
       { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
     ];
 
-    let filled = 0;
-    for (const mapping of fieldMappings) {
+    for (const mapping of otherMappings) {
       if (!mapping.value) continue;
       if (fillByLabel(mapping.labels, mapping.value)) filled++;
-    }
-
-    // Try full name field
-    if (user.firstName && user.lastName) {
-      if (fillByLabel(["full name", "your name"], `${user.firstName} ${user.lastName}`)) filled++;
     }
 
     if (filled > 0) {
@@ -170,16 +180,39 @@
 
     console.log("AutoApply: User profile:", JSON.stringify(user));
 
-    // Field mappings — order matters (specific first)
+    let filled = 0;
+
+    // Try to fill combined "full name" / "first & last name" field FIRST
+    // This prevents separate first/last fills from overwriting each other
+    // on forms that use a single combined name field.
+    let filledFullName = false;
+    if (user.firstName && user.lastName) {
+      const fullName = `${user.firstName} ${user.lastName}`;
+      if (fillByLabel(["full name", "your name", "first & last name", "first and last name"], fullName)) {
+        filledFullName = true;
+        filled++;
+      }
+    }
+
+    // Only fill separate first/last name fields if we didn't fill a combined name field
+    if (!filledFullName) {
+      const nameFieldMappings = [
+        { labels: ["first name", "given name", "prénom"], value: user.firstName },
+        { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
+      ];
+      for (const mapping of nameFieldMappings) {
+        if (!mapping.value) continue;
+        if (fillByLabel(mapping.labels, mapping.value)) filled++;
+      }
+    }
+
+    // Other field mappings
     const fieldMappings = [
-      { labels: ["first name", "given name", "prénom"], value: user.firstName },
-      { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
       { labels: ["email", "e-mail", "email address"], value: user.email },
       { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
       { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
     ];
 
-    let filled = 0;
     for (const mapping of fieldMappings) {
       if (!mapping.value) continue;
       if (fillByLabel(mapping.labels, mapping.value)) filled++;
@@ -198,11 +231,6 @@
           break;
         }
       }
-    }
-
-    // Try to fill "full name" field (only if we didn't fill first/last separately)
-    if (user.firstName && user.lastName) {
-      fillByLabel(["full name", "your name"], `${user.firstName} ${user.lastName}`);
     }
 
     console.log(`AutoApply: Filled ${filled} fields`);
