@@ -50,22 +50,39 @@
       LOG("Detected page type:", page);
 
       if (page === "jobPosting") {
-        // We're on the job posting page — need to navigate to form
-        showBanner("Navigating to application form...", "ai");
-        await navigateToForm();
-        // After navigation, Workday will reload as SPA — this script instance continues
-        // Wait for the form to render
-        await waitForElement('[data-automation-id="applyFlowMyInfoPage"], [data-automation-id="applyFlowPage"]', 15000);
-        await sleep(2000); // Extra wait for fields to render
+        showBanner("Opening application form...", "ai");
+        const clicked = await navigateToForm();
+
+        if (!clicked) {
+          // Couldn't find Apply button — ask user to click it, then wait
+          showBanner("Click the Apply button to open the application form.", "user",
+            { subtext: "AutoApply will detect the form and continue automatically." });
+        }
+
+        // Wait for the Workday form to render (up to 20s)
+        const formEl = await waitForElement(
+          '[data-automation-id="applyFlowMyInfoPage"], [data-automation-id="applyFlowPage"], [data-automation-id="progressBar"]',
+          20000
+        );
+        if (!formEl) {
+          showBanner("Application form didn't load — please open it manually.", "user",
+            { subtext: "Navigate to the Apply page and AutoApply will pick up automatically." });
+          return;
+        }
+        await sleep(1500); // Let fields fully render
+
       } else if (page === "modal") {
-        // Modal is already open
         await handleApplyModal();
-        await waitForElement('[data-automation-id="applyFlowMyInfoPage"], [data-automation-id="applyFlowPage"]', 15000);
-        await sleep(2000);
+        const formEl = await waitForElement(
+          '[data-automation-id="applyFlowMyInfoPage"], [data-automation-id="applyFlowPage"], [data-automation-id="progressBar"]',
+          15000
+        );
+        if (!formEl) return;
+        await sleep(1500);
       }
       // else: already on form page
 
-      // Now we should be on the form — determine which step
+      // Now confirmed on the form — start tailoring + filling
       await processCurrentStep(pendingJob);
 
     } catch (err) {
@@ -109,19 +126,30 @@
   /* ═══════════════════ NAVIGATION ═══════════════════ */
 
   async function navigateToForm() {
-    // Step 1: Click the Apply button
-    const applyBtn = document.querySelector('[data-automation-id="adventureButton"]');
+    // 1. Standard Workday Apply button
+    let applyBtn = document.querySelector('[data-automation-id="adventureButton"]');
+
+    // 2. Generic fallback — any link/button whose visible text is "Apply" or similar
     if (!applyBtn) {
-      LOG("No Apply button found — checking if already on form");
-      return;
+      const candidates = Array.from(document.querySelectorAll('a[href], button'));
+      applyBtn = candidates.find(el => {
+        const text = (el.textContent?.trim() || "").toLowerCase();
+        return text === "apply" || text === "apply now" || text === "apply for this job" || text === "apply for job";
+      });
     }
 
-    LOG("Clicking Apply button");
+    if (!applyBtn) {
+      LOG("No Apply button found on posting page");
+      return false;
+    }
+
+    LOG("Clicking Apply button:", applyBtn.textContent?.trim());
     applyBtn.click();
     await sleep(2000);
 
-    // Step 2: Handle the Apply modal
+    // Handle the Apply / Apply Manually modal if one appeared
     await handleApplyModal();
+    return true;
   }
 
   async function handleApplyModal() {
