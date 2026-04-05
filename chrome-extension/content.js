@@ -1192,29 +1192,33 @@
   // Initialize
   createFloatingUI();
 
-  // Restore previously scanned jobs from chrome.storage (survives SPA navigation & re-injection)
-  restoreState().then(() => {
-    if (scrapedJobs.length > 0) {
+  // Only restore previous state if a batch is actively in progress.
+  // On a fresh page load or Scan Page click, always start clean.
+  chrome.storage.local.get(["_aa_batchProgress", "_aa_scrapedJobs", "_aa_selectedIds"], (result) => {
+    const bp = result._aa_batchProgress;
+    const batchActive = bp && bp.active;
+
+    if (batchActive) {
+      // Batch is running — restore jobs so the UI stays consistent mid-apply
+      if (result._aa_scrapedJobs && Array.isArray(result._aa_scrapedJobs)) {
+        scrapedJobs = result._aa_scrapedJobs;
+        selectedJobIds = new Set(result._aa_selectedIds || []);
+      }
       renderJobList();
       updateStartButton();
 
-      // Check if batch is still active — auto-open panel and show progress overlay
-      chrome.storage.local.get(["_aa_batchProgress"], (result) => {
-        const bp = result._aa_batchProgress;
-        if (bp && bp.active) {
-          // Auto-expand the panel so user sees status
-          const toggle = document.getElementById("autoapply-toggle");
-          const expanded = document.getElementById("autoapply-expanded");
-          if (toggle && expanded) {
-            toggle.style.display = "none";
-            expanded.style.display = "block";
-          }
-          showProgressOverlay(bp.current, bp.total, { title: bp.jobTitle, company: bp.company, location: bp.location });
-          updateStatus(`In progress: Job ${bp.current}/${bp.total} — ${bp.jobTitle}`);
-        } else {
-          updateStatus(`Restored ${scrapedJobs.length} jobs from previous scan`);
-        }
-      });
+      // Auto-expand the panel and show progress overlay
+      const toggle = document.getElementById("autoapply-toggle");
+      const expanded = document.getElementById("autoapply-expanded");
+      if (toggle && expanded) {
+        toggle.style.display = "none";
+        expanded.style.display = "block";
+      }
+      showProgressOverlay(bp.current, bp.total, { title: bp.jobTitle, company: bp.company, location: bp.location });
+      updateStatus(`In progress: Job ${bp.current}/${bp.total} — ${bp.jobTitle}`);
+    } else {
+      // No active batch — start fresh. Clear any stale stored jobs.
+      chrome.storage.local.remove(["_aa_scrapedJobs", "_aa_selectedIds"]);
     }
   });
 })();
