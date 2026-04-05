@@ -13,7 +13,7 @@
  */
 
 (() => {
-  const SCRIPT_VERSION = "2.3.0";
+  const SCRIPT_VERSION = "2.4.0";
 
   // Version-aware injection guard: always re-inject when version changes
   if (window.__autoapply_injected === SCRIPT_VERSION) return;
@@ -329,6 +329,18 @@
    * Returns the type: "external" | "easy_apply" | null
    */
   async function clickApplyButton() {
+    // Check if already applied to this job
+    const detailPanel = document.querySelector('.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"]');
+    const detailText = (detailPanel?.innerText || document.body.innerText).toLowerCase();
+    if (detailText.includes("applied") && (detailText.includes("see application") || detailText.includes("ago"))) {
+      // Check more carefully — look for "Applied X ago" pattern near the top
+      const appliedMatch = detailText.match(/applied\s+\d+\s+(day|week|month|hour|minute)/);
+      if (appliedMatch) {
+        console.log("AutoApply: Already applied to this job — skipping");
+        return "already_applied";
+      }
+    }
+
     // Look for apply buttons in the detail panel (right side)
     const allButtons = document.querySelectorAll("button, a");
 
@@ -340,15 +352,19 @@
       const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
       const href = (btn.getAttribute("href") || "").toLowerCase();
 
-      // Skip if it's inside the job list sidebar (has dismiss buttons nearby)
-      if (btn.closest && btn.closest('[class*="jobs-search"]')) continue;
+      // Skip if it's inside the job list sidebar (left panel), NOT the detail panel (right)
+      if (btn.closest && btn.closest('.jobs-search-results-list, .scaffold-layout__list')) continue;
+      // Skip filter buttons (e.g. "Easy Apply" filter in the top toolbar)
+      if (ariaLabel.includes("filter")) continue;
       // Skip tiny or hidden buttons
       if (btn.offsetWidth < 30 || btn.offsetHeight < 15) continue;
       // Skip "Save" / "Share" / "Report" buttons
       if (text.includes("save") || text.includes("share") || text.includes("report")) continue;
+      // Skip our own extension buttons
+      if (btn.closest && btn.closest('#autoapply-panel, #autoapply-confirm-modal, #autoapply-progress-overlay')) continue;
 
-      // Detect Easy Apply first (check both text and aria-label)
-      if (text.includes("easy apply") || ariaLabel.includes("easy apply")) {
+      // Detect Easy Apply (actual Apply button, not the filter)
+      if (text.includes("easy apply") && !ariaLabel.includes("filter")) {
         bestApplyBtn = btn;
         bestType = "easy_apply";
         continue; // Keep looking for an external Apply button which takes priority
@@ -358,8 +374,10 @@
       if ((text === "apply" || text === "apply now" ||
            ariaLabel.includes("apply to") || ariaLabel.includes("apply for")) &&
           !text.includes("easy")) {
-        // Prefer buttons that are links (external apply)
-        if (btn.tagName === "A" || href || btn.querySelector("svg") || ariaLabel.includes("opens")) {
+        // Prefer buttons that link to external company website
+        if (btn.tagName === "A" || href || btn.querySelector("svg") ||
+            ariaLabel.includes("opens") || ariaLabel.includes("company website") ||
+            ariaLabel.includes("on company")) {
           bestApplyBtn = btn;
           bestType = "external";
           break; // External apply takes priority — stop looking
@@ -380,6 +398,7 @@
     }
 
     // External apply — click it
+    console.log("AutoApply: Clicking external Apply button: " + (bestApplyBtn.getAttribute("aria-label") || bestApplyBtn.textContent.trim()));
     bestApplyBtn.click();
     await new Promise((r) => setTimeout(r, 1500));
     return "external";
@@ -774,6 +793,10 @@
         updateJobStatus(job.id, "skipped");
         skippedCount++;
         updateStatus(`Skipped (Easy Apply): ${job.title}`);
+      } else if (applyType === "already_applied") {
+        updateJobStatus(job.id, "skipped");
+        skippedCount++;
+        updateStatus(`Already applied: ${job.title}`);
       } else {
         updateJobStatus(job.id, "failed");
       }

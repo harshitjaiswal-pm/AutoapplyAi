@@ -62,14 +62,19 @@
 
       await fillGenericForm(tailoredData.tailoredResult, pendingJob);
 
-      // Request resume PDF download
-      chrome.runtime.sendMessage({
-        type: "DOWNLOAD_RESUME",
-        job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
-      });
+      // Attempt programmatic resume upload, fall back to download
+      const uploaded = await attemptResumeUpload();
+      if (!uploaded) {
+        chrome.runtime.sendMessage({
+          type: "DOWNLOAD_RESUME",
+          job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
+        });
+      }
 
       showBanner(
-        "AutoApply: Fields filled! Upload the downloaded resume PDF and review before submitting.",
+        uploaded
+          ? "AutoApply: Form filled & resume uploaded! Review and submit."
+          : "AutoApply: Fields filled! Upload the downloaded resume PDF and review before submitting.",
         "success"
       );
       chrome.storage.local.remove(["pendingApplication"]);
@@ -313,6 +318,82 @@
     }
 
     return false;
+  }
+
+  async function attemptResumeUpload() {
+    const stored = await chrome.storage.local.get(["tailoredResumePdf"]);
+    if (!stored.tailoredResumePdf) {
+      console.log("AutoApply: No tailored resume PDF in storage");
+      return false;
+    }
+
+    // Find file input — prefer ones with resume/cv in name/label
+    let fileInput = document.querySelector('input[type="file"][name*="resume"], input[type="file"][name*="cv"]');
+    if (!fileInput) {
+      // Try to find any file input near a "resume" or "cv" label
+      const fileInputs = document.querySelectorAll('input[type="file"]');
+      for (const fi of fileInputs) {
+        const label = getFieldLabel(fi).toLowerCase();
+        if (label.includes("resume") || label.includes("cv") || label.includes("upload")) {
+          fileInput = fi;
+          break;
+        }
+      }
+      // Fall back to first file input
+      if (!fileInput && fileInputs.length > 0) {
+        fileInput = fileInputs[0];
+      }
+    }
+
+    if (!fileInput) {
+      console.log("AutoApply: No file input found for resume upload");
+      return false;
+    }
+
+    try {
+      const binaryStr = atob(stored.tailoredResumePdf);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const file = new File([blob], "Resume.pdf", { type: "application/pdf" });
+
+      // Strategy 1: React onChange handler
+      const reactPropsKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
+      if (reactPropsKey && fileInput[reactPropsKey]?.onChange) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const fakeEvent = {
+          target: { files: dt.files },
+          currentTarget: { files: dt.files },
+          preventDefault: () => {},
+          stopPropagation: () => {},
+          nativeEvent: new Event("change"),
+          type: "change",
+          bubbles: true,
+        };
+        fileInput[reactPropsKey].onChange(fakeEvent);
+        console.log("AutoApply: Resume uploaded via React onChange handler");
+        return true;
+      }
+
+      // Strategy 2: DataTransfer + change event
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      Object.defineProperty(fileInput, "files", {
+        value: dataTransfer.files,
+        writable: true,
+        configurable: true,
+      });
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      console.log("AutoApply: Resume uploaded via fallback (defineProperty + change event)");
+      return true;
+
+    } catch (err) {
+      console.error("AutoApply: Resume upload failed:", err.message);
+      return false;
+    }
   }
 
   function getFieldLabel(element) {
