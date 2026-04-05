@@ -265,16 +265,9 @@
 
     if (uploaded) {
       // Programmatic upload succeeded — proceed automatically
-      await sleep(1500);
-      showBanner("Resume uploaded! Continuing application...", "ai");
-      await fillStep2(tailoredData?.tailoredResult, pendingJob);
-      await advanceToStep(3);
-      await sleep(1000);
-      await fillStep3(tailoredData?.tailoredResult, pendingJob);
-      await advanceToStep(4);
-      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
-      watchForSubmit(pendingJob);
-      chrome.storage.local.remove(["pendingApplication"]);
+      await sleep(2000); // Give Workday time to register the upload
+      showBanner("Resume uploaded! Filling remaining details...", "ai");
+      await continueFromStep2(tailoredData, pendingJob);
       return;
     }
 
@@ -302,20 +295,100 @@
     }
 
     // User uploaded — take over and finish the application
-    showBanner("Resume detected! Taking over and finishing the application...", "ai");
+    showBanner("Resume detected! Taking over the rest of the application...", "ai");
     LOG("Resume upload detected — advancing through remaining steps");
+    await sleep(2000); // Let Workday fully process the upload before advancing
 
-    await sleep(1500); // Let Workday process the upload
+    await continueFromStep2(tailoredData, pendingJob);
+  }
 
-    await fillStep2(tailoredData?.tailoredResult, pendingJob);
-    await advanceToStep(3);
-    await sleep(1000);
-    await fillStep3(tailoredData?.tailoredResult, pendingJob);
-    await advanceToStep(4);
+  /**
+   * Drive the application from Step 2 through to the Review page.
+   * Called after the resume is confirmed uploaded (either programmatically or by the user).
+   * Checks the advanceToStep() return value at each transition so we never show the
+   * Review banner on the wrong page.
+   */
+  async function continueFromStep2(tailoredData, pendingJob) {
+    // ── Step 2 → Step 3 ───────────────────────────────────────────────────────
+    showBanner("Filling your experience details...", "ai", { subtext: "Advancing to Application Questions..." });
+    await fillStep2ExtraFields(tailoredData?.tailoredResult, pendingJob); // fill LinkedIn, website etc.
 
-    showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+    const to3 = await advanceToStep(3);
+    if (!to3) {
+      // Workday blocked the Next click — could be upload not counted yet
+      showBanner("Please ensure your resume is uploaded, then click Next.", "user",
+        { subtext: "AutoApply will continue automatically on the next step." });
+      // Watch for the user to manually advance to Step 3
+      await waitForStep(3, 300000);
+    }
+
+    // ── Step 3 (Application Questions) ───────────────────────────────────────
+    const onStep3 = await waitForStep(3, 15000);
+    if (!onStep3) {
+      LOG("Never landed on Step 3 — skipping question fill");
+    } else {
+      showBanner("Filling application questions...", "ai");
+      await sleep(800);
+      await fillStep3(tailoredData?.tailoredResult, pendingJob);
+    }
+
+    // ── Step 3 → Step 4 ───────────────────────────────────────────────────────
+    showBanner("Advancing to review page...", "ai");
+    const to4 = await advanceToStep(4);
+    if (!to4) {
+      showBanner("Please review and fix any highlighted fields, then click Next.", "user");
+      await waitForStep(4, 300000);
+    }
+
+    // ── Step 4 (Review) ───────────────────────────────────────────────────────
+    await waitForStep(4, 15000);
+    showBanner("Review your application and click Submit when ready.", "user",
+      { subtext: "AutoApply stops here — you stay in control of the final submit." });
     watchForSubmit(pendingJob);
     chrome.storage.local.remove(["pendingApplication"]);
+  }
+
+  /**
+   * Wait until getCurrentStep() returns the expected step number.
+   * Returns true when confirmed, false on timeout.
+   */
+  async function waitForStep(expectedStep, timeoutMs = 15000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (getCurrentStep() === expectedStep) return true;
+      await sleep(500);
+    }
+    LOG(`waitForStep(${expectedStep}) timed out`);
+    return false;
+  }
+
+  /**
+   * Fill the optional extra fields on Step 2 (LinkedIn, website) WITHOUT
+   * re-triggering the resume upload (that's already done).
+   */
+  async function fillStep2ExtraFields(tailoredResult, job) {
+    const profile = await chrome.storage.local.get(["userProfile", "parsedResume"]);
+    const user = profile.userProfile || {};
+    const resume = profile.parsedResume || {};
+
+    // Job title / company (some Workday instances show these on Step 2)
+    fillFormField("formField-jobTitle", resume.workExperience?.[0]?.title || "");
+    fillFormField("formField-company", resume.workExperience?.[0]?.company || "");
+
+    // LinkedIn
+    const linkedinField = document.querySelector('[data-automation-id*="linkedin" i]') ||
+                          document.querySelector('[data-automation-id*="LinkedIn"]');
+    if (linkedinField) {
+      const input = linkedinField.querySelector("input");
+      if (input && !input.value && user.linkedin) setWorkdayValue(input, user.linkedin);
+    }
+
+    // Website / portfolio
+    if (user.website || user.portfolio) {
+      fillByLabelText(["website", "portfolio", "personal site"], user.website || user.portfolio);
+    }
+
+    await sleep(300);
   }
 
   /**
@@ -633,45 +706,8 @@
   /* ═══════════════════ STEP 2: MY EXPERIENCE ═══════════════════ */
 
   async function fillStep2(tailoredResult, job) {
-    LOG("Step 2 — My Experience (resume upload step)");
-
-    await sleep(500);
-
-    // Try to upload resume programmatically
-    await uploadResumeProgrammatically();
-
-    // Look for any text inputs on this step
-    const profile = await chrome.storage.local.get(["userProfile", "parsedResume"]);
-    const user = profile.userProfile || {};
-    const resume = profile.parsedResume || {};
-
-    // Batch text field filling for Step 2
-    const step2Fields = [
-      { id: "formField-jobTitle", value: resume.workExperience?.[0]?.title || "" },
-      { id: "formField-company", value: resume.workExperience?.[0]?.company || "" },
-    ];
-
-    for (const fieldDef of step2Fields) {
-      fillFormField(fieldDef.id, fieldDef.value);
-    }
-
-    await sleep(200);
-
-    // LinkedIn URL field (sometimes on Step 2)
-    const linkedinField = document.querySelector('[data-automation-id*="linkedin" i]') ||
-                          document.querySelector('[data-automation-id*="LinkedIn"]');
-    if (linkedinField) {
-      const input = linkedinField.querySelector("input");
-      if (input && !input.value && user.linkedin) {
-        setWorkdayValue(input, user.linkedin);
-      }
-    }
-
-    // Try filling website/portfolio field
-    if (user.website || user.portfolio) {
-      fillByLabelText(["website", "portfolio", "personal site"], user.website || user.portfolio);
-    }
-
+    // Kept for backward-compat — delegates to fillStep2ExtraFields
+    await fillStep2ExtraFields(tailoredResult, job);
     LOG("Step 2 filled");
   }
 
