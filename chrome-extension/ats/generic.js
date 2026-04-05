@@ -211,6 +211,14 @@
       { labels: ["email", "e-mail", "email address"], value: user.email },
       { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
       { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
+      { labels: ["github", "github url", "github profile"], value: user.github },
+      { labels: ["portfolio", "website", "personal website", "portfolio url"], value: user.portfolio },
+      { labels: ["preferred name", "nickname", "what should we call you"], value: user.preferredName },
+      { labels: ["pronoun", "pronouns", "preferred pronoun"], value: user.pronouns },
+      { labels: ["city", "location", "address", "city, province", "city, state"], value: user.province ? `Vancouver, ${user.province}, Canada` : "" },
+      { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
+      { labels: ["sponsorship", "visa sponsorship", "require sponsorship", "work authorization"], value: user.requireSponsorship },
+      { labels: ["work authorization", "authorized to work", "legally authorized", "eligibility"], value: user.workAuthorization },
     ];
 
     for (const mapping of fieldMappings) {
