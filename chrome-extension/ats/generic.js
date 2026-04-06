@@ -104,7 +104,23 @@
       }
       console.log(`AutoApply: Child frame filled ${filled} fields`);
 
-      // Step 4: Signal main frame with result
+      // Step 4: Attempt resume upload, fall back to download
+      const uploaded = await attemptResumeUpload();
+      if (!uploaded) {
+        // Download to user's Downloads folder so they can drag & drop it in
+        const jobData = stored.pendingApplication;
+        if (jobData) {
+          chrome.runtime.sendMessage({
+            type: "DOWNLOAD_RESUME",
+            job: { company: jobData.company, jobTitle: jobData.jobTitle },
+          });
+          console.log("AutoApply: Child frame triggered resume download");
+        }
+      } else {
+        console.log("AutoApply: Child frame uploaded resume programmatically");
+      }
+
+      // Step 5: Signal main frame with result
       await chrome.storage.local.set({ _ashby_iframe_filled: filled });
     })();
     return; // ← don't run main init() flow
@@ -551,7 +567,8 @@
           showBanner("Opening Ashby form...", "ai", { subtext: "Filling your details in the embedded form..." });
           await activateAshbyTab();
 
-          // Wait for child frame to set _ashby_iframe_filled in storage (up to 25s)
+          // Wait for child frame to set _ashby_iframe_filled in storage (up to 35s)
+          // Child frame timing: 1.5s sleep + up to 20s form poll + fill + resume = ~25s worst case
           const iframeFilled = await new Promise((resolve) => {
             const listener = (changes) => {
               if ("_ashby_iframe_filled" in changes) {
@@ -563,7 +580,7 @@
             setTimeout(() => {
               chrome.storage.onChanged.removeListener(listener);
               resolve(-1); // timeout — unknown result
-            }, 25000);
+            }, 35000);
           });
 
           chrome.storage.local.remove(["_ashby_iframe_filled"]);
