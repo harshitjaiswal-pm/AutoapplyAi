@@ -23,42 +23,48 @@
    * Returns true if the current page looks like an application form.
    * Covers: standard forms, Ashby tab-based forms, iframes with forms.
    */
+  /**
+   * Returns true only when a VISIBLE application form is currently showing.
+   * Key subtlety: Ashby renders both Overview and Application tab content in the DOM
+   * simultaneously — we must only count VISIBLE inputs to avoid false positives when
+   * the Application tab is inactive.
+   */
   function isOnApplicationForm() {
-    // Broad input selector — covers inputs WITHOUT an explicit type attribute (Ashby),
-    // inputs with type="search", and all standard text-entry inputs.
-    // Only excludes truly non-text inputs.
-    const inputs = document.querySelectorAll(
+    // Count only inputs that are actually visible on screen
+    const allInputs = document.querySelectorAll(
       'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
       ':not([type="file"]):not([type="submit"]):not([type="button"])' +
       ':not([type="reset"]):not([type="image"]):not([type="range"]):not([type="color"]), textarea'
     );
-    if (inputs.length >= 2) return true;
-
-    // Explicit <form> with at least one input
-    const forms = document.querySelectorAll("form");
-    for (const f of forms) {
-      if (f.querySelector("input, textarea, select")) return true;
+    let visibleCount = 0;
+    for (const el of allInputs) {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
+      // Check that the element (or an ancestor) is not hidden
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      visibleCount++;
+      if (visibleCount >= 2) return true;
     }
 
-    // Ashby / custom ATS: an "Application" tab that is currently active
-    const activeTabs = document.querySelectorAll(
-      '[role="tab"][aria-selected="true"], [class*="tab"][class*="active"], [class*="tab--active"]'
-    );
-    for (const tab of activeTabs) {
-      if ((tab.textContent || "").toLowerCase().includes("application")) return true;
-    }
-
-    // Ashby "Application Details" heading — visible when the Application tab is open
+    // Ashby "Application Details" heading — only visible when that tab is open
     const headings = document.querySelectorAll("h1, h2, h3, h4, h5, h6");
     for (const h of headings) {
       const text = (h.textContent || "").trim().toLowerCase();
-      if (text === "application details" || text === "application form" ||
-          text.startsWith("application details") || text.startsWith("your application")) return true;
+      if (text === "application details" || text.startsWith("application details") ||
+          text === "application form" || text.startsWith("your application")) {
+        const style = window.getComputedStyle(h);
+        if (style.display !== "none" && style.visibility !== "hidden") return true;
+      }
     }
 
-    // Any div/section that looks like a labelled form section (Ashby pattern)
-    const formLabels = document.querySelectorAll('label');
-    if (formLabels.length >= 3) return true; // 3+ labels = very likely a form
+    // Explicit <form> with visible inputs
+    const forms = document.querySelectorAll("form");
+    for (const f of forms) {
+      const style = window.getComputedStyle(f);
+      if (style.display === "none" || style.visibility === "hidden") continue;
+      if (f.querySelector("input:not([type='hidden']), textarea, select")) return true;
+    }
 
     // Ashby iframe embed
     const frames = document.querySelectorAll("iframe");
@@ -252,85 +258,77 @@
 
     const pendingJob = stored.pendingApplication;
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
-    showBanner("Preparing application...", "ai");
+    showBanner("Opening application...", "ai");
 
     // Detect Ashby embedded pages — different strategy (no scrolling)
     const isAshbyPage =
       window.location.href.includes("ashby_jid=") ||
       window.location.href.includes("ashbyhq.com");
 
+    // ── Fire tailoring immediately in the background ──
+    // We don't wait for it here — form fills happen in parallel so there's no
+    // visible delay. We only await the result when we need it for resume upload.
+    const pageJD = scrapeGenericJD();
+    const jobDescription = pageJD || pendingJob.jobDescription;
+    const tailoringPromise = sendMessageWithTimeout({
+      type: "TAILOR_AND_FILL",
+      job: { ...pendingJob, jobDescription },
+    }, 90000).then(r => { if (r?.error) console.error("AutoApply: Tailoring error:", r.error); return r; })
+             .catch(err => { console.error("AutoApply: Tailoring failed:", err.message); return null; });
+
     try {
       // ── Step 0: Navigate to the application form ──
-      if (!isOnApplicationForm()) {
-        console.log("AutoApply: Not on application form —", isAshbyPage ? "Ashby path" : "generic path");
-        showBanner("Opening application form...", "ai");
-
-        if (isAshbyPage) {
-          // Ashby: just find and click the Application tab — NO page scroll
-          // Scrolling on Ashby/SPA pages triggers router navigation and crashes the script
+      if (isAshbyPage) {
+        // Ashby: always explicitly activate the Application tab.
+        // The DOM contains both tab panels simultaneously — hidden inputs from the
+        // inactive tab can fool form detection, so we always go through tab activation.
+        if (!isOnApplicationForm()) {
+          showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
           const activated = await activateAshbyTab();
           if (!activated) {
             showBanner("Click the 'Application' tab to open the form.", "user",
-              { subtext: "AutoApply will detect the form and continue automatically." });
+              { subtext: "AutoApply will continue automatically once the form is visible." });
           }
-        } else {
-          // Generic: scroll page to find Apply button, then click it
-          const clicked = await clickApplyOnPosting();
-          if (!clicked) {
-            showBanner("Click the Apply button to open the application form.", "user",
-              { subtext: "AutoApply will detect the form and continue automatically." });
-          } else {
-            showBanner("Waiting for application form to load...", "ai");
+          const formReady = await waitForApplicationForm(15000);
+          if (!formReady) {
+            showBanner("Could not detect application form — please click the 'Application' tab.", "user");
+            return;
           }
+          await sleep(500);
         }
-
-        // Wait for the form (covers both: auto-click and manual navigation)
+      } else if (!isOnApplicationForm()) {
+        // Generic non-Ashby page: scroll and find Apply button
+        showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
+        const clicked = await clickApplyOnPosting();
+        if (!clicked) {
+          showBanner("Click the Apply button to open the application form.", "user",
+            { subtext: "AutoApply will detect the form and continue automatically." });
+        } else {
+          showBanner("Waiting for application form to load...", "ai",
+            { subtext: "Tailoring resume in background..." });
+        }
         const formReady = await waitForApplicationForm(20000);
         if (!formReady) {
           showBanner("Could not detect application form — please navigate to it manually.", "user");
           return;
         }
-
-        // Give the form an extra moment to fully render
-        await sleep(800);
-        showBanner("Application form detected — filling your details...", "ai");
+        await sleep(500);
       }
 
-      // ── Step 1: Scrape JD ──
-      // Try to scrape JD from whatever page we're on
-      const pageJD = scrapeGenericJD();
-      const jobDescription = pageJD || pendingJob.jobDescription;
+      // ── Step 1: Fill basic fields immediately (no tailoring needed) ──
+      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+      await fillBasicProfile();
 
-      if (!jobDescription || jobDescription.length < 30) {
-        showBanner("No job description found — filling with base profile data.", "ai");
+      // ── Step 2: Await tailoring result for additional fields + resume upload ──
+      showBanner("Completing fields with tailored data...", "ai", { subtext: "Almost ready..." });
+      const tailoredData = await tailoringPromise;
+
+      if (tailoredData?.tailoredResult) {
+        console.log("AutoApply: Got tailored result, filling additional fields...");
+        await fillGenericForm(tailoredData.tailoredResult, pendingJob);
+      } else {
+        console.warn("AutoApply: No tailored data — basic profile already filled");
       }
-
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "This may take 15–30 seconds." });
-
-      // Send to background with a timeout
-      const tailoredData = await sendMessageWithTimeout({
-        type: "TAILOR_AND_FILL",
-        job: { ...pendingJob, jobDescription },
-      }, 60000); // 60 second timeout
-
-      if (tailoredData?.error) {
-        console.error("AutoApply: Tailoring error:", tailoredData.error);
-        showBanner("Tailoring had an issue — filling with base profile data.", "error", { subtext: tailoredData.error });
-        // Still try to fill basic profile info
-        await fillBasicProfile();
-        return;
-      }
-
-      if (!tailoredData?.tailoredResult) {
-        showBanner("Tailoring returned no data — filling with base profile data.", "error");
-        await fillBasicProfile();
-        return;
-      }
-
-      showBanner("Filling form fields...", "ai");
-      console.log("AutoApply: Got tailored result, match score:", tailoredData.matchScore);
-
-      await fillGenericForm(tailoredData.tailoredResult, pendingJob);
 
       // Attempt programmatic resume upload, fall back to download
       const uploaded = await attemptResumeUpload();
