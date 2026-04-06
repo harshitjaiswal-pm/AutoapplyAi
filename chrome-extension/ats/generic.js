@@ -18,62 +18,152 @@
   /* ─────────────── FORM VS POSTING DETECTION ─────────────── */
 
   /**
-   * Returns true if the current page looks like an application form
-   * (has text inputs / email fields / a visible form), as opposed to
-   * a job posting page that just has an "Apply" button.
+   * Returns true if the current page looks like an application form.
+   * Covers: standard forms, Ashby tab-based forms, iframes with forms.
    */
   function isOnApplicationForm() {
-    // A real form has multiple interactive inputs
+    // Standard: 2+ visible text/email/tel inputs
     const inputs = document.querySelectorAll(
       'input[type="text"], input[type="email"], input[type="tel"], textarea'
     );
     if (inputs.length >= 2) return true;
 
-    // Or an explicit <form> with at least one input
+    // Explicit <form> with at least one input
     const forms = document.querySelectorAll("form");
     for (const f of forms) {
       if (f.querySelector("input, textarea, select")) return true;
+    }
+
+    // Ashby / custom ATS: an "Application" tab that is currently active
+    const activeTabs = document.querySelectorAll(
+      '[role="tab"][aria-selected="true"], [class*="tab"][class*="active"], [class*="tab--active"]'
+    );
+    for (const tab of activeTabs) {
+      if ((tab.textContent || "").toLowerCase().includes("application")) return true;
+    }
+
+    // Ashby iframe embed
+    const frames = document.querySelectorAll("iframe");
+    for (const fr of frames) {
+      try {
+        const doc = fr.contentDocument || fr.contentWindow?.document;
+        if (doc && doc.querySelector('input[type="email"], input[type="text"]')) return true;
+      } catch (_) { /* cross-origin iframe — skip */ }
     }
 
     return false;
   }
 
   /**
-   * Find and click the "Apply" / "Apply Now" button on a job posting page.
+   * Find and click the apply / start-application button on a job posting page.
+   * Covers ALL known variants across Ashby, Greenhouse custom, Lever custom,
+   * iCIMS, Workable, SmartRecruiters, BambooHR, and generic career pages.
    * Returns true if a button was clicked.
    */
   async function clickApplyOnPosting() {
-    const applyTexts = ["apply now", "apply for this job", "apply for job", "apply today", "apply"];
+    // ── Exact & high-confidence matches (checked first) ──────────────────────
+    const exactMatches = new Set([
+      "apply", "apply now", "apply today", "apply here",
+      "apply for this job", "apply for this role", "apply for this position",
+      "apply for job", "apply for role", "apply for position",
+      "apply to this job", "apply to this role", "apply to this position",
+      "apply with linkedin", "apply externally",
+      "i'm interested", "im interested", "i am interested",
+      "interested in this role", "express interest",
+      "start application", "start my application", "begin application",
+      "submit application", "submit your application",
+      "apply for opening", "apply to opening",
+      "apply online", "apply via website",
+    ]);
 
-    // 1. Look for <a> or <button> whose visible text matches
-    const candidates = Array.from(document.querySelectorAll('a[href], button'));
+    // ── Scroll the full page first so off-screen buttons become reachable ──
+    await scrollPageToFindApplyButton();
+
+    const candidates = Array.from(document.querySelectorAll('a[href], button, [role="button"]'));
+
+    // Pass 1: exact text match
     for (const el of candidates) {
-      const text = el.textContent?.trim().toLowerCase() || "";
-      if (applyTexts.includes(text)) {
-        console.log("AutoApply: Clicking Apply button:", el.tagName, el.textContent?.trim());
+      const text = (el.textContent?.trim() || "").toLowerCase().replace(/\s+/g, " ");
+      if (exactMatches.has(text)) {
+        console.log("AutoApply: Clicking exact Apply button:", el.textContent?.trim());
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        await sleep(300);
         el.click();
         return true;
       }
     }
 
-    // 2. Broader match — button/link that starts with "apply"
+    // Pass 2: starts-with "apply" or "start application" (catches "Apply for Senior PM")
     for (const el of candidates) {
-      const text = el.textContent?.trim().toLowerCase() || "";
-      if (text.startsWith("apply")) {
-        console.log("AutoApply: Clicking broad Apply button:", el.textContent?.trim());
+      const text = (el.textContent?.trim() || "").toLowerCase();
+      if (text.startsWith("apply") || text.startsWith("start application") ||
+          text.startsWith("i'm interested") || text.startsWith("im interested")) {
+        console.log("AutoApply: Clicking prefix Apply button:", el.textContent?.trim());
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        await sleep(300);
+        el.click();
+        return true;
+      }
+    }
+
+    // Pass 3: Ashby "Application" tab — click it to reveal the form
+    const tabs = document.querySelectorAll('[role="tab"], [class*="tab"]');
+    for (const tab of tabs) {
+      const text = (tab.textContent || "").trim().toLowerCase();
+      if (text === "application" || text === "apply" || text === "application form") {
+        console.log("AutoApply: Clicking Ashby/tab Application tab:", tab.textContent?.trim());
+        tab.scrollIntoView({ behavior: "smooth", block: "center" });
+        await sleep(300);
+        tab.click();
+        return true;
+      }
+    }
+
+    // Pass 4: aria-label contains apply variants
+    for (const el of candidates) {
+      const label = (el.getAttribute("aria-label") || "").toLowerCase();
+      if (label.includes("apply") || label.includes("application")) {
+        console.log("AutoApply: Clicking aria-label Apply button:", el.getAttribute("aria-label"));
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        await sleep(300);
         el.click();
         return true;
       }
     }
 
     return false;
+  }
+
+  /**
+   * Scroll the page slowly to the bottom so lazily-rendered Apply buttons
+   * and forms become visible in the DOM before we query for them.
+   */
+  async function scrollPageToFindApplyButton() {
+    const totalHeight = document.body.scrollHeight;
+    const step = Math.min(600, totalHeight / 6);
+    let pos = window.scrollY;
+
+    while (pos < totalHeight) {
+      pos += step;
+      window.scrollTo({ top: pos, behavior: "smooth" });
+      await sleep(300);
+
+      // Early-exit: found a form or apply button already
+      if (isOnApplicationForm()) return;
+      const quick = Array.from(document.querySelectorAll('a[href], button, [role="button"]'))
+        .some(el => (el.textContent?.trim() || "").toLowerCase().startsWith("apply") ||
+                    (el.textContent?.trim() || "").toLowerCase().includes("i'm interested"));
+      if (quick) return;
+    }
+    // Scroll back to top so the banner is visible
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   /**
    * Wait until the page transitions to an application form,
    * or until the timeout elapses. Returns true if form found.
    */
-  async function waitForApplicationForm(timeoutMs = 15000) {
+  async function waitForApplicationForm(timeoutMs = 20000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (isOnApplicationForm()) return true;
