@@ -200,6 +200,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               currentTarget: { files: dt.files },
               preventDefault: () => {},
               stopPropagation: () => {},
+              persist: () => {},
               nativeEvent: new Event("change"),
               type: "change",
               bubbles: true,
