@@ -1519,6 +1519,20 @@
         ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
         : "";
 
+      // ── Action buttons (error and user-turn states get quick actions)
+      const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
+      let actionRow = "";
+      if (type === "error") {
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
+          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+        </div>`;
+      } else if (type === "user") {
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+          <button id="aa-btn-skip" style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+        </div>`;
+      }
+
       banner.style.background = cfg.bg;
       banner.style.color = "#fff";
       banner.innerHTML = `
@@ -1527,7 +1541,21 @@
           ${progressBar}
           <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
           ${subtextRow}
+          ${actionRow}
         </div>`;
+
+      // Wire up action buttons
+      document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
+        LOG("Retry clicked — re-running state machine");
+        banner.remove();
+        window.__autoapply_ats_injected = false; // clear guard so init can re-run
+        startStateMachine();
+      });
+      document.getElementById("aa-btn-skip")?.addEventListener("click", () => {
+        LOG("Skip clicked — clearing pending application");
+        chrome.storage.local.remove(["pendingApplication"]);
+        showBanner("Job skipped. You can close this tab.", "success");
+      });
 
       // Start ticking after DOM is updated
       if (isAi && timerStart) {

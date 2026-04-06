@@ -27,6 +27,7 @@
   let currentJobIndex = 0;
   let appliedCount = 0;
   let skippedCount = 0;
+  let skipRequested = false; // Set true to abort current job and advance to next
 
   /** Persist scrapedJobs & selectedJobIds to chrome.storage so they survive re-renders */
   function persistState() {
@@ -679,10 +680,12 @@
     if (selectedJobs.length === 0) return;
 
     isApplying = true;
+    skipRequested = false;
     appliedCount = 0;
     skippedCount = 0;
     currentJobIndex = 0;
     renderJobList();
+    updateActionBar();
 
     // Get resume from storage (user should have uploaded it via the pipeline page)
     const stored = await new Promise((resolve) => {
@@ -699,6 +702,7 @@
 
     for (let i = 0; i < selectedJobs.length; i++) {
       if (!isApplying) break; // User stopped
+      if (skipRequested) { skipRequested = false; continue; } // User skipped before this job started
 
       currentJobIndex = i;
       const job = selectedJobs[i];
@@ -707,16 +711,20 @@
       // Step 1: Click job card to load JD
       showProgressOverlay(jobNumber, selectedJobs.length, job);
       updateJobStatus(job.id, "applying", "Loading job details...");
+      updateActionBar();
 
       const clicked = await clickJobCard(job);
-      if (!clicked) {
-        updateJobStatus(job.id, "failed");
+      if (!clicked || skipRequested) {
+        skipRequested = false;
+        updateJobStatus(job.id, skipRequested ? "skipped" : "failed");
         continue;
       }
 
       updateJobStatus(job.id, "applying", "Reading job description...");
       await scrollDetailPanel();
       await new Promise((r) => setTimeout(r, 800));
+      if (skipRequested) { skipRequested = false; updateJobStatus(job.id, "skipped"); skippedCount++; continue; }
+
       const jobDescription = scrapeJobDescription();
 
       // Step 2: Tailor the resume in background (non-blocking preview)
@@ -815,9 +823,77 @@
 
   function stopApplying() {
     isApplying = false;
+    skipRequested = false;
     hideProgressOverlay();
     chrome.storage.local.set({ _aa_batchProgress: { active: false } });
     updateStatus("Stopped by user.", "error");
+    updateActionBar();
+  }
+
+  /** Signal the batch loop to abandon the current job and move to the next one. */
+  function requestSkip() {
+    skipRequested = true;
+    const applyingJob = scrapedJobs.find(j => j.status === "applying");
+    if (applyingJob) {
+      updateJobStatus(applyingJob.id, "skipped");
+      skippedCount++;
+    }
+    updateStatus("Skipping current job...");
+    updateActionBar();
+  }
+
+  /** Re-scan the page for new job cards, clearing prior results. */
+  function requestReScan() {
+    scrapedJobs = scrapeJobCards();
+    selectedJobIds.clear();
+    persistState();
+    renderJobList();
+    updateStatus(`Found ${scrapedJobs.length} jobs on this page`);
+    updateActionBar();
+  }
+
+  /**
+   * Render context-aware quick-action buttons above the Stop button.
+   * Called from updateJobStatus, stopApplying, and renderJobList.
+   */
+  function updateActionBar() {
+    const bar = document.getElementById("autoapply-action-bar");
+    if (!bar) return;
+
+    if (!isApplying) {
+      // Not in a batch — show Re-Scan shortcut if jobs are stale
+      bar.style.display = scrapedJobs.length > 0 ? "flex" : "none";
+      bar.innerHTML = scrapedJobs.length > 0 ? `
+        <button id="aa-action-rescan" style="
+          flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
+          padding:6px 10px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
+        ">🔍 Re-Scan Page</button>` : "";
+      const rescanBtn = document.getElementById("aa-action-rescan");
+      if (rescanBtn) rescanBtn.addEventListener("click", requestReScan);
+      return;
+    }
+
+    // During a batch run — show skip + optional retry
+    const applyingJob = scrapedJobs.find(j => j.status === "applying");
+    const hasFailedJob = scrapedJobs.some(j => j.status === "failed");
+
+    bar.style.display = "flex";
+    bar.innerHTML = `
+      <button id="aa-action-skip" style="
+        flex:1; background:#FEF3C7; border:1px solid #FCD34D; border-radius:6px;
+        padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#92400E;
+        ${applyingJob ? "" : "opacity:0.4;pointer-events:none;"}
+      ">⏭ Skip Job</button>
+      <button id="aa-action-rescan" style="
+        flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
+        padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
+      ">🔍 Re-Scan</button>
+    `;
+
+    document.getElementById("aa-action-skip")?.addEventListener("click", () => {
+      if (applyingJob) requestSkip();
+    });
+    document.getElementById("aa-action-rescan")?.addEventListener("click", requestReScan);
   }
 
   /* ─────────────────────── UI ─────────────────────── */
@@ -1010,6 +1086,12 @@
             </p>
           </div>
 
+          <!-- Action bar: shown during apply runs with context-sensitive quick actions -->
+          <div id="autoapply-action-bar" style="
+            display: none; padding: 8px 12px; border-top: 1px solid #E5E5E5;
+            background: #FAFAFA; gap: 6px; flex-wrap: wrap;
+          "></div>
+
           <div style="padding: 12px 16px; border-top: 1px solid #E5E5E5;">
             <button id="autoapply-start" style="
               width: 100%; background: #4F46E5; color: white; border: none; border-radius: 8px;
@@ -1019,7 +1101,7 @@
             <button id="autoapply-stop" style="
               display: none; width: 100%; background: #EF4444; color: white; border: none;
               border-radius: 8px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer;
-            ">Stop</button>
+            ">⏹ Stop All</button>
 
             <div style="margin-top: 8px; display: flex; gap: 8px;">
               <input id="autoapply-url" type="text" placeholder="AutoApply URL" style="
@@ -1205,6 +1287,7 @@
     }
 
     updateStartButton();
+    updateActionBar();
   }
 
   function updateStartButton() {
