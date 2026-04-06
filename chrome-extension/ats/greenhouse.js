@@ -15,6 +15,54 @@
 
   console.log("AutoApply: Greenhouse ATS script loaded on", window.location.href);
 
+  // ── Cross-origin iframe detection ──
+  // When boards.greenhouse.io is embedded as an iframe in a company career page
+  // (e.g. asana.com/jobs/apply/...?gh_jid=...) the parent frame cannot access
+  // this iframe's DOM. We handle filling independently here instead.
+  const isChildFrame = (window !== window.top);
+  if (isChildFrame) {
+    try {
+      // If same-origin parent, they can access us — skip to avoid double fill
+      const _check = window.top.document;
+      console.log("AutoApply: GH same-origin child frame — parent handles fill");
+      return;
+    } catch (e) {
+      // Cross-origin parent — we must fill ourselves
+    }
+    console.log("AutoApply: GH cross-origin child frame — filling independently");
+    (async () => {
+      let stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
+      if (!stored.pendingApplication) {
+        // Wait up to 60s for pendingApplication to be set
+        await new Promise((resolve) => {
+          const listener = (changes) => {
+            if (changes.pendingApplication?.newValue) {
+              chrome.storage.onChanged.removeListener(listener);
+              resolve();
+            }
+          };
+          chrome.storage.onChanged.addListener(listener);
+          setTimeout(resolve, 60000);
+        });
+        stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
+      }
+      if (!stored.pendingApplication) return;
+
+      // Wait for the Greenhouse form to render in this iframe (up to 20s)
+      const formReady = await waitForGreenhouseForm(20000);
+      if (!formReady) {
+        console.warn("AutoApply: GH child frame timed out waiting for form");
+        return;
+      }
+
+      const user = stored.userProfile || {};
+      fillAllFields(user, null);
+      await attemptResumeUpload();
+      console.log("AutoApply: GH child frame filled form");
+    })();
+    return; // don't run main init() flow
+  }
+
   showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   setTimeout(() => init(), 1500);
 
@@ -150,6 +198,21 @@
       }
     }
     return "";
+  }
+
+  /* ─────────────── FORM READINESS POLL ─────────────── */
+
+  /**
+   * Polls until the Greenhouse application form is visible in the current document.
+   * Used by the child-frame flow to wait for the form to render before filling.
+   */
+  async function waitForGreenhouseForm(timeoutMs = 15000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (isOnGreenhouseApplicationForm()) return true;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    return false;
   }
 
   /* ─────────────── POSTING VS FORM DETECTION ─────────────── */
