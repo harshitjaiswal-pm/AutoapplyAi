@@ -31,6 +31,13 @@
       // Cross-origin — we must fill ourselves (parent cannot access our DOM)
     }
 
+    // Only run child-frame fill for actual Ashby embed pages.
+    // Other cross-origin iframes (Drift chat, GTM, analytics, etc.) must be skipped.
+    if (!window.location.href.includes("ashbyhq.com")) {
+      console.log("AutoApply: Skipping non-Ashby cross-origin frame:", window.location.href.substring(0, 80));
+      return;
+    }
+
     console.log("AutoApply: Cross-origin child frame — filling independently:", window.location.href);
     (async () => {
       let stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
@@ -54,24 +61,51 @@
       // Save user data now — pendingApplication may be cleared by the main frame while we wait
       const user = stored.userProfile || {};
 
-      // Poll until Ashby's React app has rendered the form (up to 15s)
-      // 1500ms was not enough — React renders asynchronously after document_idle
-      console.log("AutoApply: Child frame waiting for Ashby form to render...");
-      const formReady = await waitForAshbyForm(15000);
+      // Step 1: If we're on the Ashby overview page, click "Apply for this Job"
+      // (Ashby embed shows the job description first; the form is one click away)
+      await sleep(1500); // let Ashby overview render first
+      const applyBtnCandidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+      for (const btn of applyBtnCandidates) {
+        const text = (btn.textContent || "").trim().toLowerCase();
+        if (text === "apply for this job" || text === "apply now" || text === "apply") {
+          console.log("AutoApply: Child frame clicking apply button:", btn.textContent.trim());
+          btn.click();
+          await sleep(500);
+          break;
+        }
+      }
+
+      // Step 2: Poll until Ashby's React form renders (up to 20s)
+      console.log("AutoApply: Child frame waiting for application form to render...");
+      const formReady = await waitForAshbyForm(20000);
       if (!formReady) {
-        console.warn("AutoApply: Child frame: form did not appear within 15s");
+        // ── Diagnostic dump — tells us WHY the form wasn't found ──
+        const allInputs   = queryAllDeep("input").length;
+        const allLabels   = queryAllDeep("label").length;
+        const allEditable = queryAllDeep("[contenteditable], [role='textbox']").length;
+        const subFrames   = Array.from(document.querySelectorAll("iframe"));
+        console.warn(`AutoApply: Child frame timed out. DOM: ${allInputs} inputs, ${allLabels} labels, ${allEditable} editables, ${subFrames.length} sub-iframes`);
+        subFrames.forEach((fr, i) => {
+          try { const d = fr.contentDocument; console.warn(`  sub-iframe[${i}] same-origin, inputs: ${d?.querySelectorAll("input").length}`); }
+          catch (e) { console.warn(`  sub-iframe[${i}] cross-origin: ${fr.src?.substring(0,80)}`); }
+        });
+        console.warn("AutoApply: Child frame body HTML:", document.body?.innerHTML?.substring(0, 4000));
+        await chrome.storage.local.set({ _ashby_iframe_filled: 0 });
         return;
       }
-      await sleep(500); // brief settle after detection
+      await sleep(500); // brief settle
 
+      // Step 3: Fill the form
       console.log("AutoApply: Child frame: form detected, filling fields...");
       let filled = fillBasicProfileInDoc(user, document);
       if (filled === 0) {
-        // React may still be mid-render — retry once after another 2s
-        await sleep(2000);
+        await sleep(2000); // React still settling — retry once
         filled = fillBasicProfileInDoc(user, document);
       }
       console.log(`AutoApply: Child frame filled ${filled} fields`);
+
+      // Step 4: Signal main frame with result
+      await chrome.storage.local.set({ _ashby_iframe_filled: filled });
     })();
     return; // ← don't run main init() flow
   }
@@ -512,14 +546,41 @@
       if (isAshbyPage) {
         if (hasAshbyIframe) {
           // Form is inside the cross-origin Ashby iframe — child frame fills it.
-          // Main frame just shows status banners.
+          // Main frame shows status and waits for the child to signal completion.
+          await chrome.storage.local.remove(["_ashby_iframe_filled"]); // clear any stale result
           showBanner("Opening Ashby form...", "ai", { subtext: "Filling your details in the embedded form..." });
           await activateAshbyTab();
-          // Wait for child frame to finish (it polls up to 15s + 500ms settle + 2s retry)
-          await sleep(18000);
-          showBanner("Form filled — review and submit when ready.", "user",
-            { subtext: "AutoApply stops here — you stay in control of the final submit." });
-          chrome.storage.local.remove(["pendingApplication"]);
+
+          // Wait for child frame to set _ashby_iframe_filled in storage (up to 25s)
+          const iframeFilled = await new Promise((resolve) => {
+            const listener = (changes) => {
+              if ("_ashby_iframe_filled" in changes) {
+                chrome.storage.onChanged.removeListener(listener);
+                resolve(changes._ashby_iframe_filled.newValue || 0);
+              }
+            };
+            chrome.storage.onChanged.addListener(listener);
+            setTimeout(() => {
+              chrome.storage.onChanged.removeListener(listener);
+              resolve(-1); // timeout — unknown result
+            }, 25000);
+          });
+
+          chrome.storage.local.remove(["_ashby_iframe_filled"]);
+          // NOTE: pendingApplication is intentionally kept so Try Again works.
+          // It will be cleared when the user clicks Skip Job.
+
+          if (iframeFilled > 0) {
+            showBanner(`Form filled (${iframeFilled} fields) — review and submit when ready.`, "user",
+              { subtext: "AutoApply stops here — you stay in control of the final submit." });
+          } else if (iframeFilled === 0) {
+            showBanner("Could not fill form — check console logs. Click Try Again to retry.", "user",
+              { subtext: "Open DevTools (F12 → Console) and share the logs to diagnose." });
+          } else {
+            // Timeout — still filling in background
+            showBanner("Still filling in background — check the form in a moment.", "user",
+              { subtext: "AutoApply may still be filling. Scroll down to see the form." });
+          }
           return;
         }
 
