@@ -544,13 +544,14 @@ async function injectATSScript(tabId, url) {
 
   let scriptFile = "ats/generic.js";
   if (urlLower.includes("greenhouse.io") || urlLower.includes("gh_jid=")) {
-    // greenhouse.io hosted OR company-domain Greenhouse embed (e.g. buildops.com/careers/?gh_jid=...)
+    // greenhouse.io hosted OR company-domain Greenhouse embed
     scriptFile = "ats/greenhouse.js";
   } else if (urlLower.includes("lever.co") || urlLower.includes("jobs.lever")) {
     scriptFile = "ats/lever.js";
   } else if (urlLower.includes("myworkdayjobs.com")) {
     scriptFile = "ats/workday.js";
-  } else if (urlLower.includes("ashbyhq.com")) {
+  } else if (urlLower.includes("ashbyhq.com") || urlLower.includes("ashby_jid=")) {
+    // ashbyhq.com hosted OR company-domain Ashby embed (e.g. loopio.com/careers/?ashby_jid=...)
     scriptFile = "ats/generic.js";
   } else if (urlLower.includes("icims.com")) {
     scriptFile = "ats/generic.js";
