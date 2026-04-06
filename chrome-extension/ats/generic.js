@@ -50,9 +50,27 @@
         stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
       }
       if (!stored.pendingApplication) return;
-      await sleep(1500); // wait for React to render form
+
+      // Save user data now — pendingApplication may be cleared by the main frame while we wait
       const user = stored.userProfile || {};
-      const filled = fillBasicProfileInDoc(user, document);
+
+      // Poll until Ashby's React app has rendered the form (up to 15s)
+      // 1500ms was not enough — React renders asynchronously after document_idle
+      console.log("AutoApply: Child frame waiting for Ashby form to render...");
+      const formReady = await waitForAshbyForm(15000);
+      if (!formReady) {
+        console.warn("AutoApply: Child frame: form did not appear within 15s");
+        return;
+      }
+      await sleep(500); // brief settle after detection
+
+      console.log("AutoApply: Child frame: form detected, filling fields...");
+      let filled = fillBasicProfileInDoc(user, document);
+      if (filled === 0) {
+        // React may still be mid-render — retry once after another 2s
+        await sleep(2000);
+        filled = fillBasicProfileInDoc(user, document);
+      }
       console.log(`AutoApply: Child frame filled ${filled} fields`);
     })();
     return; // ← don't run main init() flow
@@ -481,11 +499,31 @@
     }, 90000).then(r => { if (r?.error) console.error("AutoApply: Tailoring error:", r.error); return r; })
              .catch(err => { console.error("AutoApply: Tailoring failed:", err.message); return null; });
 
+    // Detect if Ashby form is in a cross-origin iframe (the common embed pattern).
+    // In that case, the child frame's generic.js handles the fill — this main-frame
+    // instance only manages the banner and waits for tailoring.
+    const hasAshbyIframe = Array.from(document.querySelectorAll("iframe")).some(fr => {
+      const src = (fr.src || "").toLowerCase();
+      return src.includes("ashbyhq.com");
+    });
+
     try {
       // ── Step 0: Navigate to the application form ──
       if (isAshbyPage) {
-        // Ashby uses non-standard rendering (contenteditable, custom placeholders, etc.)
-        // Detection via querySelector is unreliable — skip it and go straight to fill.
+        if (hasAshbyIframe) {
+          // Form is inside the cross-origin Ashby iframe — child frame fills it.
+          // Main frame just shows status banners.
+          showBanner("Opening Ashby form...", "ai", { subtext: "Filling your details in the embedded form..." });
+          await activateAshbyTab();
+          // Wait for child frame to finish (it polls up to 15s + 500ms settle + 2s retry)
+          await sleep(18000);
+          showBanner("Form filled — review and submit when ready.", "user",
+            { subtext: "AutoApply stops here — you stay in control of the final submit." });
+          chrome.storage.local.remove(["pendingApplication"]);
+          return;
+        }
+
+        // Ashby rendered directly in main DOM (not in iframe)
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
 
         // Ensure Application tab is active
@@ -495,8 +533,6 @@
         await sleep(2500);
 
         // No detection gate. Fall straight through to filling.
-        // fillAshbyForm() uses a broad multi-strategy approach that handles
-        // contenteditable, role=textbox, aria-placeholder, and standard inputs.
       } else if (!isOnApplicationForm()) {
         // Generic non-Ashby page: scroll and find Apply button
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
