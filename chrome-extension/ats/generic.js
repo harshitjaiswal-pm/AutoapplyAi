@@ -95,7 +95,9 @@
     // ── Scroll the full page first so off-screen buttons become reachable ──
     await scrollPageToFindApplyButton();
 
-    const candidates = Array.from(document.querySelectorAll('a[href], button, [role="button"]'));
+    // Exclude elements inside nav/header — avoids clicking site navigation links
+    const candidates = Array.from(document.querySelectorAll('a[href], button, [role="button"]'))
+      .filter(el => !el.closest('nav, header, [role="navigation"], [class*="navbar"], [class*="site-header"]'));
 
     // Pass 1: exact text match
     for (const el of candidates) {
@@ -181,8 +183,49 @@
                     (el.textContent?.trim() || "").toLowerCase().includes("i'm interested"));
       if (quick) return;
     }
-    // Scroll back to top so the banner is visible
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // Do NOT scroll back to top — on SPAs (Ashby, Lever custom, etc.) this
+    // triggers router navigation and kills the content script.
+  }
+
+  /**
+   * Find the "Application" tab on Ashby-embedded pages and click it if not already active.
+   * Does NOT scroll the page — safe to call on SPAs.
+   * Returns true if the tab was found (whether clicked or already active).
+   */
+  async function activateAshbyTab() {
+    const tabSelectors = [
+      '[role="tab"]',
+      '[class*="tab"]',
+      'button',
+      'a',
+    ];
+
+    for (const sel of tabSelectors) {
+      const els = document.querySelectorAll(sel);
+      for (const el of els) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text === "application" || text === "apply" || text === "application form") {
+          const alreadyActive =
+            el.getAttribute("aria-selected") === "true" ||
+            el.getAttribute("aria-current") === "true" ||
+            el.classList.contains("active") ||
+            el.classList.contains("selected");
+
+          if (alreadyActive) {
+            console.log("AutoApply: Ashby Application tab already active");
+            return true; // form should already be showing
+          }
+
+          console.log("AutoApply: Clicking Ashby Application tab:", el.textContent?.trim());
+          el.click();
+          await sleep(600); // give React time to render the form
+          return true;
+        }
+      }
+    }
+
+    console.log("AutoApply: Could not find Ashby Application tab");
+    return false;
   }
 
   /**
@@ -209,22 +252,37 @@
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
     showBanner("Preparing application...", "ai");
 
+    // Detect Ashby embedded pages — different strategy (no scrolling)
+    const isAshbyPage =
+      window.location.href.includes("ashby_jid=") ||
+      window.location.href.includes("ashbyhq.com");
+
     try {
-      // ── Step 0: If we're on a job posting page (not the form yet), click Apply ──
+      // ── Step 0: Navigate to the application form ──
       if (!isOnApplicationForm()) {
-        console.log("AutoApply: Not on application form — looking for Apply button");
+        console.log("AutoApply: Not on application form —", isAshbyPage ? "Ashby path" : "generic path");
         showBanner("Opening application form...", "ai");
 
-        const clicked = await clickApplyOnPosting();
-        if (!clicked) {
-          // No Apply button found — tell user to click it manually
-          showBanner("Click the Apply button to open the application form.", "user",
-            { subtext: "AutoApply will detect the form and continue automatically." });
+        if (isAshbyPage) {
+          // Ashby: just find and click the Application tab — NO page scroll
+          // Scrolling on Ashby/SPA pages triggers router navigation and crashes the script
+          const activated = await activateAshbyTab();
+          if (!activated) {
+            showBanner("Click the 'Application' tab to open the form.", "user",
+              { subtext: "AutoApply will detect the form and continue automatically." });
+          }
         } else {
-          showBanner("Waiting for application form to load...", "ai");
+          // Generic: scroll page to find Apply button, then click it
+          const clicked = await clickApplyOnPosting();
+          if (!clicked) {
+            showBanner("Click the Apply button to open the application form.", "user",
+              { subtext: "AutoApply will detect the form and continue automatically." });
+          } else {
+            showBanner("Waiting for application form to load...", "ai");
+          }
         }
 
-        // Wait for the form regardless (covers both: auto-click or manual click)
+        // Wait for the form (covers both: auto-click and manual navigation)
         const formReady = await waitForApplicationForm(20000);
         if (!formReady) {
           showBanner("Could not detect application form — please navigate to it manually.", "user");
@@ -232,7 +290,7 @@
         }
 
         // Give the form an extra moment to fully render
-        await sleep(1000);
+        await sleep(800);
         showBanner("Application form detected — filling your details...", "ai");
       }
 
