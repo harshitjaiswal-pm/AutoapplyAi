@@ -508,6 +508,8 @@
       { labels: ["email", "e-mail", "email address"], value: user.email },
       { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
       { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
+      { labels: ["preferred name", "nickname", "display name", "what should we call you"], value: user.preferredName || user.firstName },
+      { labels: ["pronouns", "pronoun", "preferred pronoun"], value: user.pronouns },
     ];
 
     for (const mapping of otherMappings) {
@@ -627,7 +629,7 @@
     // Strategy 1: match <label> elements
     const labels = document.querySelectorAll("label");
     for (const label of labels) {
-      const labelText = label.textContent?.trim().toLowerCase().replace(/\*$/, "").trim() || "";
+      const labelText = (label.textContent || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
       if (labelTexts.some((t) => labelText.includes(t) || labelText === t)) {
         const forId = label.getAttribute("for");
         let input = forId ? document.getElementById(forId) : null;
@@ -682,7 +684,7 @@
     // where label is rendered as a separate element without 'for' attribute)
     const allTexts = document.querySelectorAll("span, p, div, h3, h4, h5, h6, strong, b");
     for (const textEl of allTexts) {
-      const text = textEl.textContent?.trim().toLowerCase().replace(/\*$/, "").trim() || "";
+      const text = (textEl.textContent || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
       if (text.length > 50) continue; // Skip long text blocks
       if (!labelTexts.some((t) => text === t || text.includes(t))) continue;
 
