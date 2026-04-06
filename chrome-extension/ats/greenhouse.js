@@ -29,6 +29,25 @@
     console.log("AutoApply: Processing Greenhouse application for", pendingJob.jobTitle);
     showBanner("Preparing your application...", "ai");
 
+    // ── Step 0: Navigate to the application form if we're on the posting page ──
+    // job-boards.greenhouse.io/{co}/jobs/{id} shows the JD only — the actual
+    // form is a click or navigation away. Detect this early and redirect so the
+    // content script re-runs on the form page (still with pendingApplication set).
+    if (!isOnGreenhouseApplicationForm()) {
+      console.log("AutoApply: On Greenhouse posting page — navigating to application form");
+      showBanner("Opening application form...", "ai", { subtext: "Navigating to the application..." });
+      const navigated = await clickGreenhouseApplyButton();
+      if (!navigated) {
+        showBanner(
+          "⚠️ Couldn't find the Apply button — please click it manually.",
+          "user",
+          { subtext: "Once on the application form, AutoApply will fill it automatically." }
+        );
+      }
+      // Stop here — the page will navigate and the content script re-runs on the form
+      return;
+    }
+
     try {
       // Scrape JD from Greenhouse (more complete than LinkedIn)
       const pageJD = scrapeGreenhouseJD();
@@ -131,6 +150,71 @@
       }
     }
     return "";
+  }
+
+  /* ─────────────── POSTING VS FORM DETECTION ─────────────── */
+
+  /**
+   * Returns true when the current page is the Greenhouse APPLICATION FORM
+   * (has visible input fields). Returns false on the JOB POSTING page.
+   *
+   * Greenhouse patterns:
+   *  - Posting:  job-boards.greenhouse.io/{co}/jobs/{id}
+   *              boards.greenhouse.io/{co}/jobs/{id}
+   *  - Form:     job-boards.greenhouse.io/{co}/jobs/{id}/application
+   *              boards.greenhouse.io/{co}/jobs/{id} (same URL, form inlined after Apply click)
+   */
+  function isOnGreenhouseApplicationForm() {
+    // URL signal: form URLs include /application or /applications
+    if (/\/application(s)?(\/|$|\?)/i.test(window.location.href)) return true;
+
+    // DOM signal: Greenhouse form has first_name / email inputs visible
+    const formInputSelectors = [
+      'input[id="first_name"]', 'input[id="last_name"]', 'input[id="email"]',
+      'input[name*="first_name"]', 'input[name*="last_name"]', 'input[name*="email"]',
+      'input[autocomplete="given-name"]', 'input[autocomplete="email"]',
+    ];
+    for (const sel of formInputSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null) return true;
+    }
+
+    // Greenhouse "Submit Application" button id
+    const submitBtn = document.querySelector('#submit_app');
+    if (submitBtn && submitBtn.offsetParent !== null) return true;
+
+    return false;
+  }
+
+  /**
+   * Finds and clicks the Apply button on a Greenhouse job posting page,
+   * or falls back to direct URL construction.
+   * Returns true if a navigation was triggered.
+   */
+  async function clickGreenhouseApplyButton() {
+    // Search for the Apply button by visible text
+    const allClickable = Array.from(document.querySelectorAll('button, a[href], [role="button"]'));
+    for (const el of allClickable) {
+      const text = (el.textContent || '').trim().toLowerCase();
+      if (text === 'apply' || text === 'apply for this job' ||
+          text === 'apply now' || text === 'apply for position') {
+        console.log("AutoApply: Clicking Greenhouse apply button:", el.textContent.trim());
+        el.click();
+        return true;
+      }
+    }
+
+    // Fallback: navigate directly to the canonical application URL.
+    // job-boards.greenhouse.io/{co}/jobs/{id}  →  /application
+    const baseUrl = window.location.href.split('?')[0].replace(/\/$/, '');
+    if (/\/jobs\/\d+$/.test(baseUrl)) {
+      const formUrl = baseUrl + '/application';
+      console.log("AutoApply: No Apply button found — navigating directly to:", formUrl);
+      window.location.href = formUrl;
+      return true;
+    }
+
+    return false;
   }
 
   /* ─────────────── FORM FILLING ─────────────── */
