@@ -12,6 +12,8 @@
   window.__autoapply_ats_injected = true;
 
   console.log("AutoApply: Generic ATS script loaded on", window.location.href);
+  try { AALog && AALog.state("ats.generic.loaded", { url: window.location.href, isChildFrame: window !== window.top }); } catch(_){}
+  try { AALog && AALog.state("ats.loaded", { url: window.location.href, isChildFrame: window !== window.top }); } catch(_){}
 
   // ── Are we running inside an iframe? ──
   // If so, skip the full init() flow (banners, navigation, tailoring).
@@ -543,11 +545,20 @@
     // visible delay. We only await the result when we need it for resume upload.
     const pageJD = scrapeGenericJD();
     const jobDescription = pageJD || pendingJob.jobDescription;
+    try { AALog && AALog.api("ats.tailor.request", { company: pendingJob.company, jobTitle: pendingJob.jobTitle, jdLen: (jobDescription || "").length, jdSource: pageJD ? "ats-page" : "linkedin" }); } catch(_){}
+    const _tailorStart = Date.now();
     const tailoringPromise = sendMessageWithTimeout({
       type: "TAILOR_AND_FILL",
       job: { ...pendingJob, jobDescription },
-    }, 90000).then(r => { if (r?.error) console.error("AutoApply: Tailoring error:", r.error); return r; })
-             .catch(err => { console.error("AutoApply: Tailoring failed:", err.message); return null; });
+    }, 90000).then(r => {
+      if (r?.error) { console.error("AutoApply: Tailoring error:", r.error); try { AALog && AALog.error("ats.tailor.error", { error: r.error, ms: Date.now() - _tailorStart }); } catch(_){} }
+      else { try { AALog && AALog.api("ats.tailor.response", { ms: Date.now() - _tailorStart, keys: r?.tailoredResult ? Object.keys(r.tailoredResult) : [], hasResult: !!r?.tailoredResult }); } catch(_){} }
+      return r;
+    }).catch(err => {
+      console.error("AutoApply: Tailoring failed:", err.message);
+      try { AALog && AALog.error("ats.tailor.exception", { message: err.message, ms: Date.now() - _tailorStart }); } catch(_){}
+      return null;
+    });
 
     // Detect if Ashby form is in a cross-origin iframe (the common embed pattern).
     // In that case, the child frame's generic.js handles the fill — this main-frame
@@ -632,7 +643,9 @@
 
       // ── Step 1: Fill basic fields immediately (no tailoring needed) ──
       showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+      try { AALog && AALog.form("ats.fillBasic.start", { url: location.href }); } catch(_){}
       const basicFilled = await fillBasicProfile();
+      try { AALog && AALog.form("ats.fillBasic.done", { fieldsFilled: basicFilled }); } catch(_){}
 
       if (basicFilled === 0 && isAshbyPage) {
         // Nothing was filled — Ashby may be using non-standard elements.
@@ -650,13 +663,18 @@
 
       if (tailoredData?.tailoredResult) {
         console.log("AutoApply: Got tailored result, filling additional fields...");
+        try { AALog && AALog.form("ats.fillTailored.start", { keys: Object.keys(tailoredData.tailoredResult || {}) }); } catch(_){}
         await fillGenericForm(tailoredData.tailoredResult, pendingJob);
+        try { AALog && AALog.form("ats.fillTailored.done", {}); } catch(_){}
       } else {
         console.warn("AutoApply: No tailored data — basic profile already filled");
+        try { AALog && AALog.error("ats.fillTailored.noData", {}); } catch(_){}
       }
 
       // Attempt programmatic resume upload, fall back to download
+      try { AALog && AALog.form("ats.resumeUpload.start", {}); } catch(_){}
       const uploaded = await attemptResumeUpload();
+      try { AALog && AALog.form("ats.resumeUpload.result", { uploaded }); } catch(_){}
       if (!uploaded) {
         chrome.runtime.sendMessage({
           type: "DOWNLOAD_RESUME",
@@ -673,6 +691,7 @@
 
     } catch (err) {
       console.error("AutoApply: Generic ATS error", err);
+      try { AALog && AALog.error("ats.generic.exception", { message: err.message, stack: err.stack }); } catch(_){}
       showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
       // Still try to fill basic profile info even if tailoring fails
       await fillBasicProfile();
@@ -857,6 +876,7 @@
         { labels: ["preferred name", "nickname", "what should we call you"], value: user.preferredName },
         { labels: ["pronoun", "pronouns", "preferred pronoun"], value: user.pronouns },
         { labels: ["city", "location", "address", "city, province", "city, state"], value: user.province ? `Vancouver, ${user.province}, Canada` : "" },
+        { labels: ["current company", "current employer", "company name", "current organization", "employer"], value: user.currentCompany },
         { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
         { labels: ["sponsorship", "visa sponsorship", "require sponsorship", "work authorization"], value: user.requireSponsorship },
         { labels: ["work authorization", "authorized to work", "legally authorized", "eligibility"], value: user.workAuthorization },
@@ -883,7 +903,87 @@
       }
     }
 
+    // ── Custom question pass: fill any remaining unfilled textareas ──────────
+    // After standard profile/tailored fields, scan for unanswered open-ended
+    // questions (e.g. "Describe how you use AI tools in your work") and ask
+    // the backend to generate a targeted answer.
+    try {
+      const customFilled = await fillCustomQuestions(tailoredResult, job);
+      filled += customFilled;
+    } catch (cqErr) {
+      console.warn("AutoApply: Custom question fill failed:", cqErr.message);
+    }
+
     console.log(`AutoApply: Filled ${filled} fields total`);
+    return filled;
+  }
+
+  /**
+   * Detect unfilled textarea / contenteditable fields that look like open-ended
+   * custom questions (label text ≥ 20 chars), ask the backend to answer each
+   * one, and fill the answers.
+   */
+  async function fillCustomQuestions(tailoredResult, job) {
+    // Collect all textareas across accessible documents
+    const docs = getAccessibleDocuments();
+    const candidates = [];
+
+    for (const doc of docs) {
+      const textareas = queryAllDeep("textarea", doc);
+      for (const ta of textareas) {
+        if ((ta.value || "").trim()) continue; // already filled
+        const rawLabel = getFieldLabel(ta);
+        const label = rawLabel.toLowerCase();
+
+        // Skip known standard fields already handled above
+        const standardPrefixes = ["cover", "letter", "additional", "message", "comments", "note",
+          "email", "phone", "linkedin", "github", "portfolio", "name", "city", "location"];
+        if (standardPrefixes.some(p => label.includes(p))) continue;
+
+        // Only pick up labels that look like open-ended questions (≥ 20 chars)
+        if (rawLabel.length >= 20) {
+          candidates.push({ element: ta, label: rawLabel });
+        }
+      }
+    }
+
+    if (candidates.length === 0) return 0;
+
+    // Get the user's resume summary for context
+    const profile = await chrome.storage.local.get(["userProfile"]);
+    const user = profile.userProfile || {};
+    const resumeSummary = tailoredResult?.tailoredResume?.summary ||
+                          user.resumeSummary || "";
+
+    let filled = 0;
+    for (const { element, label } of candidates) {
+      try {
+        const resp = await new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(null), 12000);
+          chrome.runtime.sendMessage(
+            {
+              type: "ANSWER_CUSTOM_QUESTION",
+              question: label,
+              resumeSummary,
+              jobTitle: job?.jobTitle || "",
+              company: job?.company || "",
+            },
+            (r) => { clearTimeout(timer); resolve(r); }
+          );
+        });
+
+        const answer = resp?.answer;
+        if (answer && answer.length > 10) {
+          setNativeValue(element, answer);
+          console.log(`AutoApply: Filled custom question "${label.slice(0, 60)}" with AI answer`);
+          try { AALog && AALog.form("ats.fillCustomQuestion.done", { labelPreview: label.slice(0, 80), answerLen: answer.length }); } catch(_){}
+          filled++;
+        }
+      } catch (e) {
+        console.warn(`AutoApply: Failed to answer custom question "${label.slice(0, 40)}":`, e.message);
+      }
+    }
+
     return filled;
   }
 
@@ -1096,24 +1196,70 @@
 
     if (!fileInput) {
       console.log("AutoApply: No file input found for resume upload");
+      try { AALog && AALog.error("ats.resumeUpload.noInput", {
+        totalFileInputs: document.querySelectorAll('input[type="file"]').length,
+        url: location.href,
+      }); } catch(_){}
       return false;
     }
 
+    const inputLabel = getFieldLabel(fileInput).slice(0, 80);
+    const inputName  = (fileInput.name || fileInput.id || "").slice(0, 60);
+    try { AALog && AALog.form("ats.resumeUpload.inputFound", { label: inputLabel, name: inputName }); } catch(_){}
+
+    // ── Strategy 0 (PRIMARY): Run upload in MAIN world via background ──────────
+    // Content scripts run in an isolated world where React's __reactProps$
+    // expando properties (set by the page's main world) are NOT visible.
+    // By delegating to chrome.scripting.executeScript({world:"MAIN"}), the
+    // background can call React's onChange handler directly.
+    try {
+      const mainWorldResult = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve({ success: false, error: "timeout" }), 8000);
+        chrome.runtime.sendMessage(
+          { type: "UPLOAD_RESUME_MAIN_WORLD", base64Pdf: stored.tailoredResumePdf, filename: "Resume.pdf" },
+          (resp) => { clearTimeout(timer); resolve(resp || { success: false, error: "no response" }); }
+        );
+      });
+
+      if (mainWorldResult?.success) {
+        // Wait for React to process the change and verify via DOM
+        await new Promise(r => setTimeout(r, 900));
+        const uploadRoot = fileInput.closest('[role="presentation"], [class*="upload"], [class*="dropzone"], section') ||
+                           fileInput.parentElement?.parentElement;
+        const confirmed = uploadRoot && (
+          (uploadRoot.getAttribute("data-state") && uploadRoot.getAttribute("data-state") !== "default") ||
+          uploadRoot.textContent.includes("Resume.pdf") ||
+          uploadRoot.querySelector('[class*="filename"], [class*="file-name"], [class*="name"]')
+        );
+        if (confirmed) {
+          console.log(`AutoApply: Resume uploaded via main-world (strategy: ${mainWorldResult.strategy})`);
+          try { AALog && AALog.form("ats.resumeUpload.result", { success: true, strategy: mainWorldResult.strategy, label: inputLabel, verified: true }); } catch(_){}
+          return true;
+        }
+        console.log(`AutoApply: Main-world upload ran (${mainWorldResult.strategy}) but DOM confirmation not found — falling back to download`);
+        try { AALog && AALog.form("ats.resumeUpload.result", { success: false, strategy: mainWorldResult.strategy + "-unconfirmed", label: inputLabel }); } catch(_){}
+        return false;
+      }
+      console.log(`AutoApply: Main-world upload returned failure: ${mainWorldResult?.error}`);
+    } catch (stratErr) {
+      console.log(`AutoApply: Main-world strategy threw: ${stratErr.message}`);
+    }
+
+    // ── Strategy 1 (FALLBACK): React onChange from isolated world ───────────────
+    // May not find __reactProps$ from isolated world, but try anyway in case
+    // the browser version or React version makes it visible.
     try {
       const binaryStr = atob(stored.tailoredResumePdf);
       const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
       const blob = new Blob([bytes], { type: "application/pdf" });
       const file = new File([blob], "Resume.pdf", { type: "application/pdf" });
 
-      // Strategy 1: React onChange handler
       const reactPropsKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
       if (reactPropsKey && fileInput[reactPropsKey]?.onChange) {
         const dt = new DataTransfer();
         dt.items.add(file);
-        const fakeEvent = {
+        fileInput[reactPropsKey].onChange({
           target: { files: dt.files },
           currentTarget: { files: dt.files },
           preventDefault: () => {},
@@ -1121,28 +1267,18 @@
           nativeEvent: new Event("change"),
           type: "change",
           bubbles: true,
-        };
-        fileInput[reactPropsKey].onChange(fakeEvent);
-        console.log("AutoApply: Resume uploaded via React onChange handler");
+        });
+        console.log("AutoApply: Resume uploaded via React onChange (isolated world)");
+        try { AALog && AALog.form("ats.resumeUpload.result", { success: true, strategy: "react-onChange-isolated", label: inputLabel }); } catch(_){}
         return true;
       }
-
-      // Strategy 2: DataTransfer + change event
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
-      Object.defineProperty(fileInput, "files", {
-        value: dataTransfer.files,
-        writable: true,
-        configurable: true,
-      });
-      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-      console.log("AutoApply: Resume uploaded via fallback (defineProperty + change event)");
-      return true;
-
-    } catch (err) {
-      console.error("AutoApply: Resume upload failed:", err.message);
-      return false;
+    } catch (s1Err) {
+      console.log(`AutoApply: Strategy 1 threw: ${s1Err.message}`);
     }
+
+    console.log("AutoApply: All upload strategies failed — falling back to download");
+    try { AALog && AALog.error("ats.resumeUpload.allFailed", { label: inputLabel }); } catch(_){}
+    return false;
   }
 
   function getFieldLabel(element) {

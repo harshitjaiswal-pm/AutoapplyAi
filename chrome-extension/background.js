@@ -9,9 +9,69 @@
  * 5. Returns tailored data for form filling + downloads resume PDF
  */
 
+// Load the unified logger so AALog is available in the service worker too.
+try { importScripts("logger.js"); } catch (e) { console.error("AALog importScripts failed", e); }
+
+// Handle log batches forwarded from content scripts / popup. We persist them
+// via AALog's background write queue so all log writes are serialized in one
+// place. Must be registered before any other message handlers so it wins the
+// race (though the return-true contract means order doesn't strictly matter).
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.__aa_log_batch && Array.isArray(message.entries)) {
+    try {
+      // Tag entries with the sender tab id so we can correlate across frames.
+      const senderTag = sender && sender.tab ? { tabId: sender.tab.id, frameId: sender.frameId } : {};
+      const enriched = message.entries.map((e) => ({ ...e, sender: senderTag }));
+      // AALog in the background context has bgEnqueueWrite, but it's a closure
+      // inside the IIFE. Simpler path: call AALog.event for each so they go
+      // through the same pending/flush pipeline as native background logs.
+      // However AALog.event also re-logs to console. We want silent persist,
+      // so write directly through storage using the same serialised chain
+      // that AALog uses. Simplest: push through chrome.storage with a queue.
+      if (typeof __aa_persistForeignLogs === "function") {
+        __aa_persistForeignLogs(enriched);
+      }
+    } catch (err) {
+      console.error("AutoApply BG: log batch persist failed", err);
+    }
+    sendResponse && sendResponse({ ok: true });
+    return false;
+  }
+});
+
+// Serialised write for foreign log batches from content scripts. Delegates
+// to the shared write chain exposed by logger.js (self.__aa_enqueueLogWrite)
+// so background's own logs and foreign logs all serialise through one chain.
+function __aa_persistForeignLogs(entries) {
+  if (typeof self !== "undefined" && typeof self.__aa_enqueueLogWrite === "function") {
+    return self.__aa_enqueueLogWrite(entries);
+  }
+  // Fallback in the unlikely case logger.js isn't loaded: write directly.
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["_aa_logs"], (result) => {
+      const existing = Array.isArray(result._aa_logs) ? result._aa_logs : [];
+      const next = existing.concat(entries);
+      const MAX = 2000;
+      const trimmed = next.length > MAX ? next.slice(next.length - MAX) : next;
+      chrome.storage.local.set({ _aa_logs: trimmed }, resolve);
+    });
+  });
+}
+
 // Track whether we're expecting a new tab from an Apply click
 let expectingNewTab = false;
 let expectingTimeout = null;
+
+// Track tabs we've already injected into to prevent double-injection.
+// Cloudflare challenges and some ATSs cause the onUpdated event to fire
+// twice (challenge page load + real page load), so we need this guard in
+// addition to the window.__autoapply_ats_injected guard in the scripts.
+const injectedTabIds = new Map(); // tabId -> { url, timestamp }
+
+// Clear tab from injected tracking when it's closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedTabIds.delete(tabId);
+});
 
 // Known ATS domains for immediate tab detection
 const KNOWN_ATS_DOMAINS = [
@@ -63,6 +123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From LinkedIn content.js: Store job data before Apply click ── */
   if (message.type === "PREPARE_APPLICATION") {
+    try { AALog && AALog.state("bg.prepareApplication", { jobTitle: message.job?.jobTitle, company: message.job?.company }); } catch(_){}
     startKeepAlive(); // Keep alive while waiting for new tab + API calls
     chrome.storage.local.set({ pendingApplication: message.job }, () => {
       console.log("AutoApply BG: Stored pending application for", message.job.jobTitle);
@@ -81,12 +142,110 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* ── From LinkedIn content.js: Open ATS URL directly (fetched from job page) ── */
+  if (message.type === "OPEN_ATS_TAB") {
+    try { AALog && AALog.nav("bg.openAtsTab", { url: (message.url || "").slice(0, 120) }); } catch(_){}
+    if (message.url) {
+      chrome.tabs.create({ url: message.url, active: false });
+    }
+    sendResponse({ success: true });
+    return false;
+  }
+
+  /* ── From ATS content scripts: Upload resume PDF in the MAIN world ──
+   * Content scripts run in an isolated world — React's __reactProps$ expando
+   * properties are set by the page's main world and are NOT visible from the
+   * isolated world.  By using chrome.scripting.executeScript({ world:"MAIN" })
+   * from the background we can access them directly. ── */
+  if (message.type === "UPLOAD_RESUME_MAIN_WORLD") {
+    const tabId = sender.tab?.id;
+    if (!tabId) { sendResponse({ success: false, error: "No sender tab ID" }); return false; }
+    const { base64Pdf, filename } = message;
+    try { AALog && AALog.form("bg.uploadResumeMainWorld.start", { tabId, filename }); } catch(_){}
+
+    chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: (b64, fname) => {
+        try {
+          // Decode base64 → File object
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blob = new Blob([bytes], { type: "application/pdf" });
+          const file = new File([blob], fname, { type: "application/pdf" });
+
+          // Find the primary resume / CV file input
+          let fileInput = null;
+          const all = document.querySelectorAll('input[type="file"]');
+          for (const fi of all) {
+            const accept = (fi.accept || "").toLowerCase();
+            const labelEl = fi.closest("div, section, label")?.querySelector("label, [class*='label']");
+            const labelText = (labelEl?.textContent || "").toLowerCase();
+            if (accept.includes("pdf") || labelText.includes("resume") || labelText.includes("cv")) {
+              fileInput = fi;
+              break;
+            }
+          }
+          if (!fileInput && all.length > 0) fileInput = all[0];
+          if (!fileInput) return { success: false, error: "No file input found" };
+
+          // Strategy A — React onChange handler (only accessible in main world)
+          const reactKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
+          if (reactKey && fileInput[reactKey]?.onChange) {
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            fileInput[reactKey].onChange({
+              target: { files: dt.files },
+              currentTarget: { files: dt.files },
+              preventDefault: () => {},
+              stopPropagation: () => {},
+              nativeEvent: new Event("change"),
+              type: "change",
+              bubbles: true,
+            });
+            return { success: true, strategy: "react-onChange-main-world" };
+          }
+
+          // Strategy B — DataTransfer defineProperty + _valueTracker reset (main world)
+          const dt2 = new DataTransfer();
+          dt2.items.add(file);
+          Object.defineProperty(fileInput, "files", {
+            value: dt2.files, writable: true, configurable: true,
+          });
+          if (fileInput._valueTracker) fileInput._valueTracker.setValue("");
+          fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+          return { success: true, strategy: "dataTransfer-main-world" };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      },
+      args: [base64Pdf, filename],
+    }).then((results) => {
+      const r = results?.[0]?.result;
+      try { AALog && AALog.form("bg.uploadResumeMainWorld.done", { success: r?.success, strategy: r?.strategy, error: r?.error }); } catch(_){}
+      sendResponse({ success: r?.success || false, strategy: r?.strategy, error: r?.error });
+    }).catch((err) => {
+      try { AALog && AALog.error("bg.uploadResumeMainWorld.error", { error: err.message }); } catch(_){}
+      sendResponse({ success: false, error: err.message });
+    });
+    return true; // async sendResponse
+  }
+
   /* ── From ATS content scripts: Tailor resume and return data ── */
   if (message.type === "TAILOR_AND_FILL") {
+    const _t0 = Date.now();
+    try { AALog && AALog.api("bg.tailorAndFill.start", { company: message.job?.company, jobTitle: message.job?.jobTitle }); } catch(_){}
     startKeepAlive(); // Keep service worker alive during long API calls
     handleTailorAndFill(message.job)
-      .then((result) => { stopKeepAlive(); sendResponse(result); })
-      .catch((err) => { stopKeepAlive(); sendResponse({ error: err.message }); });
+      .then((result) => {
+        try { AALog && AALog.api("bg.tailorAndFill.done", { ms: Date.now() - _t0, hasResult: !!result?.tailoredResult, error: result?.error || null }); } catch(_){}
+        stopKeepAlive(); sendResponse(result);
+      })
+      .catch((err) => {
+        try { AALog && AALog.error("bg.tailorAndFill.exception", { message: err.message, stack: err.stack, ms: Date.now() - _t0 }); } catch(_){}
+        stopKeepAlive(); sendResponse({ error: err.message });
+      });
     return true;
   }
 
@@ -124,6 +283,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleDownloadResume(message.job);
     sendResponse({ success: true });
     return true;
+  }
+
+  /* ── From ATS content scripts: Generate an answer for a custom application question ── */
+  if (message.type === "ANSWER_CUSTOM_QUESTION") {
+    startKeepAlive();
+    const { question, resumeSummary, jobTitle, company } = message;
+    handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, company })
+      .then((answer) => { stopKeepAlive(); sendResponse({ answer }); })
+      .catch((err) => { stopKeepAlive(); sendResponse({ error: err.message }); });
+    return true; // async
   }
 
   /* ── From ATS scripts: Fill React Select dropdowns via main world ── */
@@ -540,6 +709,16 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
  * Falls back to generic.js if no specific ATS is detected.
  */
 async function injectATSScript(tabId, url) {
+  // Prevent double-injection into the same tab within 60 seconds.
+  // Cloudflare challenges cause onUpdated to fire multiple times for the same URL.
+  const prior = injectedTabIds.get(tabId);
+  if (prior && prior.url === url && Date.now() - prior.timestamp < 60000) {
+    console.log(`AutoApply BG: Tab ${tabId} already injected recently at same URL — skipping duplicate injection`);
+    try { AALog && AALog.nav("bg.inject.skipDuplicate", { tabId, url }); } catch(_){}
+    return;
+  }
+  injectedTabIds.set(tabId, { url, timestamp: Date.now() });
+  try { AALog && AALog.nav("bg.inject.start", { tabId, url }); } catch(_){}
   const urlLower = url.toLowerCase();
 
   let scriptFile = "ats/generic.js";
@@ -564,21 +743,24 @@ async function injectATSScript(tabId, url) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: injectIntoAllFrames },
-      files: [scriptFile],
+      files: ["logger.js", scriptFile],
     });
     console.log(`AutoApply BG: Injected ${scriptFile} into tab ${tabId} (allFrames=${injectIntoAllFrames})`);
+    try { AALog && AALog.nav("bg.inject.done", { tabId, scriptFile, allFrames: injectIntoAllFrames }); } catch(_){}
   } catch (err) {
     console.error("AutoApply BG: Failed to inject script:", err);
+    try { AALog && AALog.error("bg.inject.failed", { tabId, scriptFile, message: err.message }); } catch(_){}
     // Try with generic as fallback
     if (scriptFile !== "ats/generic.js") {
       try {
         await chrome.scripting.executeScript({
           target: { tabId },
-          files: ["ats/generic.js"],
+          files: ["logger.js", "ats/generic.js"],
         });
         console.log("AutoApply BG: Injected generic.js as fallback");
       } catch (err2) {
         console.error("AutoApply BG: Generic fallback also failed:", err2);
+        try { AALog && AALog.error("bg.inject.fallbackFailed", { tabId, message: err2.message }); } catch(_){}
       }
     }
   }
@@ -633,9 +815,11 @@ async function handleTailorAndFill(job) {
   // API returns { parsedJob: { title, company, ... } }
   const parsedJob = analyzeData.parsedJob || analyzeData;
   console.log("AutoApply BG: Step 1 done. Parsed job title:", parsedJob.title || parsedJob.jobTitle);
+  try { AALog && AALog.api("bg.api.analyzeJob.done", { title: parsedJob.title || parsedJob.jobTitle, keys: Object.keys(parsedJob || {}) }); } catch(_){}
 
   // Step 2: Tailor the resume
   console.log("AutoApply BG: Step 2/3 — Tailoring resume for", job.jobTitle);
+  try { AALog && AALog.api("bg.api.tailorResume.start", { jobTitle: job.jobTitle, company: job.company }); } catch(_){}
   let tailorRes;
   try {
     tailorRes = await fetch(`${apiUrl}/api/tailor-resume`, {
@@ -662,6 +846,7 @@ async function handleTailorAndFill(job) {
   // API returns { tailoredResult: { matchScore, tailoredResume, coverLetter, ... } }
   const tailoredResult = tailorData.tailoredResult || tailorData;
   console.log("AutoApply BG: Step 2 done. Match score:", tailoredResult.matchScore);
+  try { AALog && AALog.api("bg.api.tailorResume.done", { matchScore: tailoredResult.matchScore, keys: Object.keys(tailoredResult || {}) }); } catch(_){}
 
   // Step 3: Generate the resume PDF
   console.log("AutoApply BG: Step 3/3 — Generating PDF for", job.jobTitle);
@@ -686,17 +871,21 @@ async function handleTailorAndFill(job) {
       const jobNum = jobNumData._aa_currentJobNumber || "";
       const locationPart = job.location ? `_${job.location.split(",")[0].trim()}` : "";
       const prefix = jobNum ? `${jobNum}_` : "";
+      const filename = `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume.pdf`;
       await chrome.storage.local.set({
         tailoredResumePdf: base64,
-        tailoredResumeFilename: `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume.pdf`,
+        tailoredResumeFilename: filename,
       });
       console.log("AutoApply BG: Step 3 done. PDF generated.");
+      try { AALog && AALog.api("bg.api.exportResume.done", { filename, sizeBytes: arrayBuffer.byteLength }); } catch(_){}
     } else {
       const errBody = await pdfRes.text().catch(() => "");
       console.warn(`AutoApply BG: PDF export failed: ${pdfRes.status} — ${errBody.substring(0, 200)}`);
+      try { AALog && AALog.error("bg.api.exportResume.failed", { status: pdfRes.status, body: errBody.substring(0, 300) }); } catch(_){}
     }
   } catch (pdfErr) {
     console.warn("AutoApply BG: PDF export error:", pdfErr, "— continuing without PDF");
+    try { AALog && AALog.error("bg.api.exportResume.exception", { message: pdfErr.message }); } catch(_){}
   }
 
   await chrome.storage.local.set({
@@ -719,6 +908,7 @@ async function handleTailorAndFill(job) {
 async function fetch_analyze_job(job) {
   const apiUrl = (await chrome.storage.local.get(["autoapplyUrl"])).autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
   console.log("AutoApply BG: Step 1/3 — Analyzing JD for", job.jobTitle);
+  try { AALog && AALog.api("bg.api.analyzeJob.start", { jobTitle: job.jobTitle, company: job.company, jdLen: (job.jobDescription || "").length }); } catch(_){}
 
   try {
     const res = await fetch(`${apiUrl}/api/analyze-job`, {
@@ -729,7 +919,37 @@ async function fetch_analyze_job(job) {
     return res;
   } catch (fetchErr) {
     console.error("AutoApply BG: Network error on analyze-job:", fetchErr);
+    try { AALog && AALog.error("bg.api.analyzeJob.networkError", { message: fetchErr.message }); } catch(_){}
     throw new Error(`Network error calling analyze-job: ${fetchErr.message}`);
+  }
+}
+
+/**
+ * Generate a concise answer for an ATS custom question using the API.
+ * Calls /api/answer-custom-question with question + candidate context.
+ */
+async function handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, company }) {
+  const stored = await chrome.storage.local.get(["autoapplyUrl"]);
+  const apiUrl = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+  try { AALog && AALog.api("bg.api.answerCustomQuestion.start", { questionPreview: (question || "").slice(0, 80) }); } catch(_){}
+
+  try {
+    const res = await fetch(`${apiUrl}/api/answer-custom-question`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, resumeSummary, jobTitle, company }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const answer = data.answer || "";
+    try { AALog && AALog.api("bg.api.answerCustomQuestion.done", { answerLen: answer.length }); } catch(_){}
+    return answer;
+  } catch (err) {
+    try { AALog && AALog.error("bg.api.answerCustomQuestion.error", { error: err.message }); } catch(_){}
+    throw err;
   }
 }
 
@@ -804,7 +1024,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         url.includes("linkedin.com/jobs/collections")) {
       chrome.scripting.executeScript({
         target: { tabId },
-        files: ["content.js"],
+        files: ["logger.js", "content.js"],
       }).then(() => {
         console.log("AutoApply BG: Programmatically injected content.js into tab", tabId);
       }).catch((err) => {
