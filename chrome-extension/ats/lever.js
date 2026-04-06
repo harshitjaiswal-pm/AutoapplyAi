@@ -19,6 +19,7 @@
   const LOG = (msg, ...args) => console.log(`AutoApply Lever: ${msg}`, ...args);
   LOG("Script loaded on", window.location.href);
 
+  showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   setTimeout(() => init(), 2000);
 
   /* ── Helpers ── */

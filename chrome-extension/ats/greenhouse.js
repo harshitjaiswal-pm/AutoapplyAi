@@ -15,6 +15,7 @@
 
   console.log("AutoApply: Greenhouse ATS script loaded on", window.location.href);
 
+  showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   setTimeout(() => init(), 1500);
 
   async function init() {

@@ -29,6 +29,8 @@
   const LOG = (msg, ...args) => console.log(`AutoApply Workday: ${msg}`, ...args);
   LOG("Script loaded on", window.location.href);
 
+  // Show banner immediately — user sees feedback before the init delay fires
+  showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   // Start after a delay to let Workday render
   setTimeout(() => startStateMachine(), 2000);
 

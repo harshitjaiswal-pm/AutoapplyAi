@@ -13,6 +13,8 @@
 
   console.log("AutoApply: Generic ATS script loaded on", window.location.href);
 
+  // Show banner immediately so the user knows AutoApply is active on this page
+  showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   setTimeout(() => init(), 3000);
 
   /* ─────────────── FORM VS POSTING DETECTION ─────────────── */
