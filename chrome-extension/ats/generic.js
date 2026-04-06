@@ -20,7 +20,18 @@
   const isChildFrame = (window !== window.top);
 
   if (isChildFrame) {
-    console.log("AutoApply: Running inside child frame —", window.location.href);
+    // If this iframe is SAME-ORIGIN, the parent frame's generic.js can access
+    // our contentDocument via getAccessibleDocuments() and will fill us directly.
+    // Skip the child frame fill to avoid double-filling.
+    try {
+      const _parentCheck = window.top.document; // throws if cross-origin
+      console.log("AutoApply: Same-origin child frame — parent will fill via getAccessibleDocuments()");
+      return; // parent handles it
+    } catch (e) {
+      // Cross-origin — we must fill ourselves (parent cannot access our DOM)
+    }
+
+    console.log("AutoApply: Cross-origin child frame — filling independently:", window.location.href);
     (async () => {
       let stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
       if (!stored.pendingApplication) {
