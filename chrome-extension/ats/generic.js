@@ -343,34 +343,19 @@
     try {
       // ── Step 0: Navigate to the application form ──
       if (isAshbyPage) {
-        // Ashby: always try to activate the Application tab, then wait for Ashby-specific signals.
-        // We use waitForAshbyForm() which is much more reliable than the generic detection.
+        // Ashby uses non-standard rendering (contenteditable, custom placeholders, etc.)
+        // Detection via querySelector is unreliable — skip it and go straight to fill.
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
 
-        // Try to activate Application tab (safe — skips click if already active)
-        const activated = await activateAshbyTab();
+        // Ensure Application tab is active
+        await activateAshbyTab();
 
-        if (!activated) {
-          // Tab element not found at all — tell user to navigate manually
-          showBanner("Click the 'Application' tab to open the form.", "user",
-            { subtext: "AutoApply will continue filling once the form is visible." });
-        }
+        // Fixed wait — let React fully render after tab switch
+        await sleep(2500);
 
-        // Wait for Ashby-specific form signals (up to 12s)
-        const formReady = await waitForAshbyForm(12000);
-
-        if (!formReady) {
-          // Form still not detected — show nudge banner and wait longer for manual help
-          showBanner("👆 Click 'Application' tab above — AutoApply will fill it automatically.", "user",
-            { subtext: "Waiting for you to open the form..." });
-          const manuallyReady = await waitForAshbyForm(30000);
-          if (!manuallyReady) {
-            showBanner("Could not detect application form — please apply manually.", "user");
-            return;
-          }
-        }
-
-        await sleep(600); // final render settle
+        // No detection gate. Fall straight through to filling.
+        // fillAshbyForm() uses a broad multi-strategy approach that handles
+        // contenteditable, role=textbox, aria-placeholder, and standard inputs.
       } else if (!isOnApplicationForm()) {
         // Generic non-Ashby page: scroll and find Apply button
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
@@ -392,7 +377,17 @@
 
       // ── Step 1: Fill basic fields immediately (no tailoring needed) ──
       showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
-      await fillBasicProfile();
+      const basicFilled = await fillBasicProfile();
+
+      if (basicFilled === 0 && isAshbyPage) {
+        // Nothing was filled — Ashby may be using non-standard elements.
+        // Log what's in the DOM to help debug.
+        const inputCount = document.querySelectorAll('input:not([type="hidden"])').length;
+        const labelCount = document.querySelectorAll('label').length;
+        const editableCount = document.querySelectorAll('[contenteditable], [role="textbox"]').length;
+        console.warn(`AutoApply: 0 fields filled on Ashby page. DOM has: ${inputCount} inputs, ${labelCount} labels, ${editableCount} contenteditable/textbox elements`);
+        console.warn("AutoApply: Page HTML snippet:", document.body.innerHTML.substring(0, 2000));
+      }
 
       // ── Step 2: Await tailoring result for additional fields + resume upload ──
       showBanner("Completing fields with tailored data...", "ai", { subtext: "Almost ready..." });
@@ -520,6 +515,7 @@
     if (filled > 0) {
       showBanner(`Filled ${filled} fields — complete the rest manually and submit when ready.`, "user");
     }
+    return filled;
   }
 
   async function fillGenericForm(tailoredResult, job) {
@@ -699,9 +695,48 @@
         setNativeValue(input, value);
         return true;
       }
+
+      // Also check for contenteditable or role=textbox (Ashby, Draft.js, rich-text fields)
+      const editable = parent.querySelector('[contenteditable="true"], [contenteditable=""], [role="textbox"]');
+      if (editable && !editable.textContent.trim()) {
+        console.log(`AutoApply: Filling contenteditable near "${text}" with "${value.substring(0, 20)}..."`);
+        setEditableValue(editable, value);
+        return true;
+      }
+    }
+
+    // Strategy 4: aria-placeholder attribute (Ashby and other accessible form libs)
+    const ariaPlaceholders = document.querySelectorAll('[aria-placeholder], [placeholder]');
+    for (const el of ariaPlaceholders) {
+      const phText = (el.getAttribute("aria-placeholder") || el.getAttribute("placeholder") || "").toLowerCase();
+      if (labelTexts.some(t => phText.includes(t))) {
+        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+          if (!el.value) { setNativeValue(el, value); return true; }
+        } else if (el.contentEditable === "true" || el.getAttribute("role") === "textbox") {
+          if (!el.textContent.trim()) { setEditableValue(el, value); return true; }
+        }
+      }
     }
 
     return false;
+  }
+
+  /**
+   * Set value on a contenteditable or role=textbox element.
+   * Used for Ashby and other form frameworks that don't use native <input>.
+   */
+  function setEditableValue(element, value) {
+    element.focus();
+    // Clear and set via execCommand (works across most frameworks)
+    document.execCommand("selectAll", false, null);
+    document.execCommand("insertText", false, value);
+    // Also set textContent as fallback and fire events
+    if (!element.textContent.trim()) {
+      element.textContent = value;
+    }
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.blur();
   }
 
   async function attemptResumeUpload() {
