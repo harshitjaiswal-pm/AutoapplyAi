@@ -13,9 +13,127 @@
 
   console.log("AutoApply: Generic ATS script loaded on", window.location.href);
 
+  // ── Are we running inside an iframe? ──
+  // If so, skip the full init() flow (banners, navigation, tailoring).
+  // Just fill whatever form fields are in this frame's document, and
+  // listen for pendingApplication to be set if it isn't yet.
+  const isChildFrame = (window !== window.top);
+
+  if (isChildFrame) {
+    console.log("AutoApply: Running inside child frame —", window.location.href);
+    (async () => {
+      let stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
+      if (!stored.pendingApplication) {
+        // No pending application yet — wait for it via storage listener
+        await new Promise((resolve) => {
+          const listener = (changes) => {
+            if (changes.pendingApplication?.newValue) {
+              chrome.storage.onChanged.removeListener(listener);
+              resolve();
+            }
+          };
+          chrome.storage.onChanged.addListener(listener);
+          // Auto-resolve after 60s to avoid leaking listener
+          setTimeout(resolve, 60000);
+        });
+        stored = await chrome.storage.local.get(["pendingApplication", "userProfile"]);
+      }
+      if (!stored.pendingApplication) return;
+      await sleep(1500); // wait for React to render form
+      const user = stored.userProfile || {};
+      const filled = fillBasicProfileInDoc(user, document);
+      console.log(`AutoApply: Child frame filled ${filled} fields`);
+    })();
+    return; // ← don't run main init() flow
+  }
+
   // Show banner immediately so the user knows AutoApply is active on this page
   showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   setTimeout(() => init(), 3000);
+
+  /* ─────────────── SHADOW DOM + IFRAME HELPERS ─────────────── */
+
+  /**
+   * Like querySelectorAll but also searches inside open shadow roots recursively.
+   * Ashby and other modern ATS frameworks may render form elements inside
+   * web components (shadow DOM) that are invisible to plain querySelectorAll.
+   */
+  function queryAllDeep(selector, root = document) {
+    const results = [];
+    const visited = new WeakSet();
+    function traverse(node) {
+      if (!node || visited.has(node)) return;
+      visited.add(node);
+      try {
+        Array.from(node.querySelectorAll(selector)).forEach(el => results.push(el));
+        Array.from(node.querySelectorAll("*")).forEach(el => {
+          if (el.shadowRoot) traverse(el.shadowRoot);
+        });
+      } catch (e) { /* ignore inaccessible shadow roots */ }
+    }
+    traverse(root);
+    return results;
+  }
+
+  function queryDeep(selector, root = document) {
+    return queryAllDeep(selector, root)[0] || null;
+  }
+
+  /**
+   * Returns all document roots we can access: main document + same-origin iframes.
+   * Cross-origin iframes (e.g. jobs.ashbyhq.com inside loopio.com) are skipped
+   * here but handled separately via the manifest all_frames injection.
+   */
+  function getAccessibleDocuments() {
+    const docs = [document];
+    try {
+      Array.from(document.querySelectorAll("iframe")).forEach(fr => {
+        try {
+          const doc = fr.contentDocument || fr.contentWindow?.document;
+          if (doc && doc !== document && doc.readyState !== "uninitialized") {
+            docs.push(doc);
+          }
+        } catch (e) { /* cross-origin — handled by manifest all_frames injection */ }
+      });
+    } catch (e) { /* ignore */ }
+    return docs;
+  }
+
+  /**
+   * Detect if the current page is Ashby-powered.
+   * Checks both URL parameters AND DOM signals so this works even after
+   * an SPA navigation that removes the ashby_jid query parameter.
+   */
+  function detectAshbyPage() {
+    const href = window.location.href;
+    if (href.includes("ashby_jid=") || href.includes("ashbyhq.com")) return true;
+
+    // DOM: Ashby web component or embed marker
+    if (document.querySelector('ashby-application-form, [data-ashby-embed], [data-ashby]')) return true;
+
+    // DOM: iframe sourced from ashbyhq.com (cross-origin embed)
+    const frames = Array.from(document.querySelectorAll("iframe"));
+    for (const fr of frames) {
+      const src = (fr.src || "").toLowerCase();
+      if (src.includes("ashbyhq.com") || src.includes("ashby")) return true;
+    }
+
+    // DOM: "Type here..." placeholder — Ashby's fingerprint on text inputs
+    if (document.querySelector('input[placeholder*="here" i], input[placeholder*="type" i]')) return true;
+
+    // DOM: "Application Details" heading visible on screen (Ashby section header)
+    const headingEls = document.querySelectorAll("h1, h2, h3, h4, p, div, span, strong");
+    for (const el of headingEls) {
+      if (el.children.length > 3) continue;
+      const text = (el.textContent || "").trim().toLowerCase();
+      if (text === "application details" || text.startsWith("application details")) {
+        const s = window.getComputedStyle(el);
+        if (s.display !== "none" && s.visibility !== "hidden") return true;
+      }
+    }
+
+    return false;
+  }
 
   /* ─────────────── FORM VS POSTING DETECTION ─────────────── */
 
@@ -30,64 +148,65 @@
    * the Application tab is inactive.
    */
   function isOnApplicationForm() {
-    // ── Ashby-specific: "Type here..." placeholder is unique to Ashby form inputs ──
-    const ashbyInputs = document.querySelectorAll('input[placeholder*="here" i], input[placeholder*="type" i]');
-    if (ashbyInputs.length > 0) return true;
+    // ── Check all accessible document roots (main + same-origin iframes) ──
+    const docs = getAccessibleDocuments();
 
-    // ── Ashby-specific: look for "Application Details" in ANY element (not just headings) ──
-    // Ashby uses custom-styled divs, not semantic h-tags, for section headers.
-    const allEls = document.querySelectorAll('p, div, span, strong, h1, h2, h3, h4, h5, h6, section');
-    for (const el of allEls) {
-      if (el.children.length > 3) continue; // skip layout containers
-      const text = (el.textContent || "").trim().toLowerCase();
-      if (text === "application details" || text === "application form" ||
-          text.startsWith("application details")) {
+    for (const doc of docs) {
+      // ── Ashby-specific: "Type here..." placeholder is unique to Ashby form inputs ──
+      if (queryAllDeep('input[placeholder*="here" i], input[placeholder*="type" i]', doc).length > 0) return true;
+
+      // ── Ashby-specific: "Application Details" heading ──
+      const allEls = doc.querySelectorAll('p, div, span, strong, h1, h2, h3, h4, h5, h6, section');
+      for (const el of allEls) {
+        if (el.children.length > 3) continue;
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text === "application details" || text === "application form" ||
+            text.startsWith("application details")) {
+          const style = window.getComputedStyle(el);
+          if (style.display !== "none" && style.visibility !== "hidden") return true;
+        }
+      }
+
+      // ── Labels with common first-field names ──
+      const labels = queryAllDeep("label", doc);
+      for (const lbl of labels) {
+        const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
+        if (text === "full name" || text === "first name" || text === "email" ||
+            text === "email address" || text === "phone" || text === "resume") {
+          const style = window.getComputedStyle(lbl);
+          if (style.display !== "none" && style.visibility !== "hidden") return true;
+        }
+      }
+
+      // ── 2+ visible non-hidden inputs ──
+      const allInputs = queryAllDeep(
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
+        ':not([type="file"]):not([type="submit"]):not([type="button"])' +
+        ':not([type="reset"]):not([type="image"]):not([type="range"]):not([type="color"]), textarea',
+        doc
+      );
+      let visibleCount = 0;
+      for (const el of allInputs) {
         const style = window.getComputedStyle(el);
-        if (style.display !== "none" && style.visibility !== "hidden") return true;
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        visibleCount++;
+        if (visibleCount >= 2) return true;
+      }
+
+      // ── Explicit <form> with inputs ──
+      const forms = doc.querySelectorAll("form");
+      for (const f of forms) {
+        const style = window.getComputedStyle(f);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        if (f.querySelector("input:not([type='hidden']), textarea, select")) return true;
       }
     }
 
-    // ── Labels with common first-field names (reliable form signal) ──
-    const labels = document.querySelectorAll("label");
-    for (const lbl of labels) {
-      const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
-      if (text === "full name" || text === "first name" || text === "email" ||
-          text === "email address" || text === "phone" || text === "resume") {
-        const style = window.getComputedStyle(lbl);
-        if (style.display !== "none" && style.visibility !== "hidden") return true;
-      }
-    }
-
-    // ── Visible non-hidden inputs (2+ required) — only check display/visibility, not rect ──
-    // getBoundingClientRect can return zeros during CSS transitions (Ashby has tab animations)
-    const allInputs = document.querySelectorAll(
-      'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
-      ':not([type="file"]):not([type="submit"]):not([type="button"])' +
-      ':not([type="reset"]):not([type="image"]):not([type="range"]):not([type="color"]), textarea'
-    );
-    let visibleCount = 0;
-    for (const el of allInputs) {
-      const style = window.getComputedStyle(el);
-      if (style.display === "none" || style.visibility === "hidden") continue;
-      visibleCount++;
-      if (visibleCount >= 2) return true;
-    }
-
-    // ── Explicit <form> with visible inputs ──
-    const forms = document.querySelectorAll("form");
-    for (const f of forms) {
-      const style = window.getComputedStyle(f);
-      if (style.display === "none" || style.visibility === "hidden") continue;
-      if (f.querySelector("input:not([type='hidden']), textarea, select")) return true;
-    }
-
-    // ── Ashby iframe embed ──
+    // ── Cross-origin iframe with Ashby (can't access DOM, but src gives it away) ──
     const frames = document.querySelectorAll("iframe");
     for (const fr of frames) {
-      try {
-        const doc = fr.contentDocument || fr.contentWindow?.document;
-        if (doc && doc.querySelector('input:not([type="hidden"]), textarea')) return true;
-      } catch (_) { /* cross-origin */ }
+      const src = (fr.src || "").toLowerCase();
+      if (src.includes("ashbyhq.com") || src.includes("ashby")) return true;
     }
 
     return false;
@@ -102,39 +221,51 @@
   async function waitForAshbyForm(timeoutMs = 12000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      // Signal 1: Ashby's "Type here..." placeholder is the most specific indicator
-      if (document.querySelector('input[placeholder*="here" i], input[placeholder*="type" i]')) return true;
+      const docs = getAccessibleDocuments();
 
-      // Signal 2: "Application Details" heading in any element
-      const allEls = document.querySelectorAll('p, div, span, strong, h1, h2, h3, h4');
-      for (const el of allEls) {
-        if (el.children.length > 3) continue;
-        const text = (el.textContent || "").trim().toLowerCase();
-        if (text === "application details" || text.startsWith("application details")) {
-          const style = window.getComputedStyle(el);
-          if (style.display !== "none" && style.visibility !== "hidden") return true;
+      for (const doc of docs) {
+        // Signal 1: "Type here..." placeholder
+        if (queryAllDeep('input[placeholder*="here" i], input[placeholder*="type" i]', doc).length > 0) return true;
+
+        // Signal 2: "Application Details" heading
+        const allEls = doc.querySelectorAll('p, div, span, strong, h1, h2, h3, h4');
+        for (const el of allEls) {
+          if (el.children.length > 3) continue;
+          const text = (el.textContent || "").trim().toLowerCase();
+          if (text === "application details" || text.startsWith("application details")) {
+            const style = window.getComputedStyle(el);
+            if (style.display !== "none" && style.visibility !== "hidden") return true;
+          }
+        }
+
+        // Signal 3: Full Name / Email label visible
+        const labels = queryAllDeep("label", doc);
+        for (const lbl of labels) {
+          const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
+          if (text === "full name" || text === "first name" || text === "email" || text === "email address") {
+            const style = window.getComputedStyle(lbl);
+            if (style.display !== "none" && style.visibility !== "hidden") return true;
+          }
+        }
+
+        // Signal 4: 2+ visible inputs
+        const inputs = queryAllDeep(
+          'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
+          ':not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]), textarea',
+          doc
+        );
+        let cnt = 0;
+        for (const el of inputs) {
+          const s = window.getComputedStyle(el);
+          if (s.display !== "none" && s.visibility !== "hidden") { cnt++; if (cnt >= 2) return true; }
         }
       }
 
-      // Signal 3: A "Full Name" or "Email" label is visible
-      const labels = document.querySelectorAll("label");
-      for (const lbl of labels) {
-        const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
-        if (text === "full name" || text === "first name" || text === "email" || text === "email address") {
-          const style = window.getComputedStyle(lbl);
-          if (style.display !== "none" && style.visibility !== "hidden") return true;
-        }
-      }
-
-      // Signal 4: 2+ inputs with no display:none / visibility:hidden (ignores rect during transitions)
-      const inputs = document.querySelectorAll(
-        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
-        ':not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]), textarea'
-      );
-      let cnt = 0;
-      for (const el of inputs) {
-        const s = window.getComputedStyle(el);
-        if (s.display !== "none" && s.visibility !== "hidden") { cnt++; if (cnt >= 2) return true; }
+      // Signal 5: cross-origin Ashby iframe detected (form is in the iframe, not here)
+      const frames = document.querySelectorAll("iframe");
+      for (const fr of frames) {
+        const src = (fr.src || "").toLowerCase();
+        if (src.includes("ashbyhq.com") || src.includes("ashby")) return true;
       }
 
       await sleep(400);
@@ -324,10 +455,9 @@
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
     showBanner("Opening application...", "ai");
 
-    // Detect Ashby embedded pages — different strategy (no scrolling)
-    const isAshbyPage =
-      window.location.href.includes("ashby_jid=") ||
-      window.location.href.includes("ashbyhq.com");
+    // Detect Ashby embedded pages — checks URL AND DOM signals
+    // (DOM check handles SPA navigation that removes ashby_jid= from URL)
+    const isAshbyPage = detectAshbyPage();
 
     // ── Fire tailoring immediately in the background ──
     // We don't wait for it here — form fills happen in parallel so there's no
@@ -469,34 +599,27 @@
   }
 
   /**
-   * Fill just the basic profile fields (no tailored data needed).
-   * Used as fallback when tailoring fails.
+   * Fill basic profile fields inside a specific document root (main doc or iframe doc).
+   * Returns the number of fields successfully filled.
+   * This is the synchronous, document-scoped core of fillBasicProfile().
    */
-  async function fillBasicProfile() {
-    const profile = await chrome.storage.local.get(["userProfile"]);
-    const user = profile.userProfile || {};
-
-    if (!user.firstName && !user.email) {
-      showBanner("No profile data found — sync your profile from the extension panel.", "error");
-      return;
-    }
-
+  function fillBasicProfileInDoc(user, doc = document) {
     let filled = 0;
 
     // Try combined name field first
     let filledFullName = false;
     if (user.firstName && user.lastName) {
       const fullName = `${user.firstName} ${user.lastName}`;
-      if (fillByLabel(["full name", "your name", "first & last name", "first and last name"], fullName)) {
+      if (fillByLabel(["full name", "your name", "first & last name", "first and last name"], fullName, doc)) {
         filledFullName = true;
         filled++;
       }
     }
 
-    // Only fill separate first/last name if combined didn't work
+    // Only fill separate first/last if combined didn't work
     if (!filledFullName) {
-      if (user.firstName && fillByLabel(["first name", "given name", "prénom"], user.firstName)) filled++;
-      if (user.lastName && fillByLabel(["last name", "family name", "surname", "nom"], user.lastName)) filled++;
+      if (user.firstName && fillByLabel(["first name", "given name", "prénom"], user.firstName, doc)) filled++;
+      if (user.lastName && fillByLabel(["last name", "family name", "surname", "nom"], user.lastName, doc)) filled++;
     }
 
     const otherMappings = [
@@ -509,7 +632,57 @@
 
     for (const mapping of otherMappings) {
       if (!mapping.value) continue;
-      if (fillByLabel(mapping.labels, mapping.value)) filled++;
+      if (fillByLabel(mapping.labels, mapping.value, doc)) filled++;
+    }
+
+    return filled;
+  }
+
+  /**
+   * Fill just the basic profile fields (no tailored data needed).
+   * Tries the main document, same-origin iframes, and shadow DOM.
+   * Returns total fields filled.
+   */
+  async function fillBasicProfile() {
+    const profile = await chrome.storage.local.get(["userProfile"]);
+    const user = profile.userProfile || {};
+
+    if (!user.firstName && !user.email) {
+      showBanner("No profile data found — sync your profile from the extension panel.", "error");
+      return 0;
+    }
+
+    let filled = 0;
+
+    // Try all accessible document roots (main doc + same-origin iframes)
+    const docs = getAccessibleDocuments();
+    for (const doc of docs) {
+      const docFilled = fillBasicProfileInDoc(user, doc);
+      filled += docFilled;
+      if (docFilled > 0) {
+        console.log(`AutoApply: Filled ${docFilled} fields in ${doc === document ? "main frame" : "iframe"}`);
+      }
+    }
+
+    if (filled === 0) {
+      // Log diagnostics to help identify the root cause
+      const inputCount = queryAllDeep('input:not([type="hidden"])').length;
+      const labelCount = queryAllDeep("label").length;
+      const editableCount = queryAllDeep('[contenteditable], [role="textbox"]').length;
+      const iframeCount = document.querySelectorAll("iframe").length;
+      console.warn(`AutoApply: 0 fields filled. DOM: ${inputCount} inputs, ${labelCount} labels, ${editableCount} editables, ${iframeCount} iframes`);
+      // Log accessible docs
+      console.warn(`AutoApply: Accessible docs: ${docs.length} (${iframeCount} iframes total, some may be cross-origin)`);
+      // Log iframe sources
+      document.querySelectorAll("iframe").forEach((fr, i) => {
+        try {
+          const accessible = !!(fr.contentDocument);
+          console.warn(`AutoApply: iframe[${i}] src="${fr.src}" accessible=${accessible}`);
+        } catch (e) {
+          console.warn(`AutoApply: iframe[${i}] src="${fr.src}" cross-origin (not accessible)`);
+        }
+      });
+      console.warn("AutoApply: body HTML snippet:", document.body.innerHTML.substring(0, 3000));
     }
 
     if (filled > 0) {
@@ -524,68 +697,68 @@
 
     console.log("AutoApply: User profile:", JSON.stringify(user));
 
+    const docs = getAccessibleDocuments();
     let filled = 0;
 
-    // Try to fill combined "full name" / "first & last name" field FIRST
-    // This prevents separate first/last fills from overwriting each other
-    // on forms that use a single combined name field.
-    let filledFullName = false;
-    if (user.firstName && user.lastName) {
-      const fullName = `${user.firstName} ${user.lastName}`;
-      if (fillByLabel(["full name", "your name", "first & last name", "first and last name"], fullName)) {
-        filledFullName = true;
-        filled++;
-      }
-    }
-
-    // Only fill separate first/last name fields if we didn't fill a combined name field
-    if (!filledFullName) {
-      const nameFieldMappings = [
-        { labels: ["first name", "given name", "prénom"], value: user.firstName },
-        { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
-      ];
-      for (const mapping of nameFieldMappings) {
-        if (!mapping.value) continue;
-        if (fillByLabel(mapping.labels, mapping.value)) filled++;
-      }
-    }
-
-    // Other field mappings
-    const fieldMappings = [
-      { labels: ["email", "e-mail", "email address"], value: user.email },
-      { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
-      { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
-      { labels: ["github", "github url", "github profile"], value: user.github },
-      { labels: ["portfolio", "website", "personal website", "portfolio url"], value: user.portfolio },
-      { labels: ["preferred name", "nickname", "what should we call you"], value: user.preferredName },
-      { labels: ["pronoun", "pronouns", "preferred pronoun"], value: user.pronouns },
-      { labels: ["city", "location", "address", "city, province", "city, state"], value: user.province ? `Vancouver, ${user.province}, Canada` : "" },
-      { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
-      { labels: ["sponsorship", "visa sponsorship", "require sponsorship", "work authorization"], value: user.requireSponsorship },
-      { labels: ["work authorization", "authorized to work", "legally authorized", "eligibility"], value: user.workAuthorization },
-    ];
-
-    for (const mapping of fieldMappings) {
-      if (!mapping.value) continue;
-      if (fillByLabel(mapping.labels, mapping.value)) filled++;
-    }
-
-    // Fill cover letter in any large textarea
-    if (tailoredResult.coverLetter) {
-      const textareas = document.querySelectorAll("textarea");
-      for (const ta of textareas) {
-        const label = getFieldLabel(ta).toLowerCase();
-        if (label.includes("cover") || label.includes("letter") ||
-            label.includes("additional") || label.includes("message") ||
-            label.includes("comments") || label.includes("note")) {
-          setNativeValue(ta, tailoredResult.coverLetter);
+    for (const doc of docs) {
+      // Try combined name field first
+      let filledFullName = false;
+      if (user.firstName && user.lastName) {
+        const fullName = `${user.firstName} ${user.lastName}`;
+        if (fillByLabel(["full name", "your name", "first & last name", "first and last name"], fullName, doc)) {
+          filledFullName = true;
           filled++;
-          break;
+        }
+      }
+
+      // Separate first/last name if combined didn't work
+      if (!filledFullName) {
+        const nameFieldMappings = [
+          { labels: ["first name", "given name", "prénom"], value: user.firstName },
+          { labels: ["last name", "family name", "surname", "nom"], value: user.lastName },
+        ];
+        for (const mapping of nameFieldMappings) {
+          if (!mapping.value) continue;
+          if (fillByLabel(mapping.labels, mapping.value, doc)) filled++;
+        }
+      }
+
+      const fieldMappings = [
+        { labels: ["email", "e-mail", "email address"], value: user.email },
+        { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
+        { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
+        { labels: ["github", "github url", "github profile"], value: user.github },
+        { labels: ["portfolio", "website", "personal website", "portfolio url"], value: user.portfolio },
+        { labels: ["preferred name", "nickname", "what should we call you"], value: user.preferredName },
+        { labels: ["pronoun", "pronouns", "preferred pronoun"], value: user.pronouns },
+        { labels: ["city", "location", "address", "city, province", "city, state"], value: user.province ? `Vancouver, ${user.province}, Canada` : "" },
+        { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
+        { labels: ["sponsorship", "visa sponsorship", "require sponsorship", "work authorization"], value: user.requireSponsorship },
+        { labels: ["work authorization", "authorized to work", "legally authorized", "eligibility"], value: user.workAuthorization },
+      ];
+
+      for (const mapping of fieldMappings) {
+        if (!mapping.value) continue;
+        if (fillByLabel(mapping.labels, mapping.value, doc)) filled++;
+      }
+
+      // Fill cover letter in large textareas
+      if (tailoredResult.coverLetter) {
+        const textareas = queryAllDeep("textarea", doc);
+        for (const ta of textareas) {
+          const label = getFieldLabel(ta).toLowerCase();
+          if (label.includes("cover") || label.includes("letter") ||
+              label.includes("additional") || label.includes("message") ||
+              label.includes("comments") || label.includes("note")) {
+            setNativeValue(ta, tailoredResult.coverLetter);
+            filled++;
+            break;
+          }
         }
       }
     }
 
-    console.log(`AutoApply: Filled ${filled} fields`);
+    console.log(`AutoApply: Filled ${filled} fields total`);
     return filled;
   }
 
@@ -619,29 +792,45 @@
     element.dispatchEvent(new Event("blur", { bubbles: true }));
   }
 
-  function fillByLabel(labelTexts, value) {
+  /**
+   * Fill a form field identified by label text with the given value.
+   * Accepts an optional `doc` parameter to search inside a specific document root
+   * (e.g. an iframe's contentDocument). Defaults to the main document.
+   *
+   * Uses four strategies in order:
+   *   1. <label> element match (with 'for' attribute or DOM proximity)
+   *   2. Input attribute match (placeholder, name, id, aria-label)
+   *   3. Nearby visible text match (React-style forms without <label>)
+   *   4. aria-placeholder / contenteditable (Ashby, Draft.js, rich-text)
+   *
+   * All strategies also search inside open shadow roots via queryAllDeep().
+   */
+  function fillByLabel(labelTexts, value, doc = document) {
     if (!value) return false;
 
-    // Strategy 1: match <label> elements
-    const labels = document.querySelectorAll("label");
+    // Strategy 1: match <label> elements (including inside shadow DOM)
+    const labels = queryAllDeep("label", doc);
     for (const label of labels) {
       const labelText = (label.textContent || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
       if (labelTexts.some((t) => labelText.includes(t) || labelText === t)) {
         const forId = label.getAttribute("for");
-        let input = forId ? document.getElementById(forId) : null;
+        let input = forId ? (doc.getElementById ? doc.getElementById(forId) : null) : null;
 
         // If no for attribute, search nearby
         if (!input) {
-          // Look in same parent container
           const container = label.closest("div, fieldset, li, section");
           input = container?.querySelector("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea, select");
+          // Also check shadow DOM inside the container
+          if (!input && container) {
+            input = queryDeep("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea, select", container);
+          }
         }
 
-        // Also try the next sibling element
+        // Try next sibling
         if (!input) {
           let sibling = label.nextElementSibling;
           if (sibling?.tagName === "DIV") {
-            input = sibling.querySelector("input, textarea");
+            input = sibling.querySelector("input, textarea") || queryDeep("input, textarea", sibling);
           } else if (sibling?.tagName === "INPUT" || sibling?.tagName === "TEXTAREA") {
             input = sibling;
           }
@@ -652,12 +841,25 @@
           setNativeValue(input, value);
           return true;
         }
+
+        // Check for contenteditable/textbox near the label
+        const container2 = label.closest("div, fieldset, li, section");
+        if (container2) {
+          const editable = container2.querySelector('[contenteditable="true"], [contenteditable=""], [role="textbox"]') ||
+                           queryDeep('[contenteditable="true"], [contenteditable=""], [role="textbox"]', container2);
+          if (editable && !editable.textContent.trim()) {
+            console.log(`AutoApply: Filling editable near label "${labelText}" with "${value.substring(0, 20)}..."`);
+            setEditableValue(editable, value);
+            return true;
+          }
+        }
       }
     }
 
-    // Strategy 2: match by placeholder, name, id, or aria-label
-    const inputs = document.querySelectorAll(
-      "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
+    // Strategy 2: match by placeholder, name, id, or aria-label (including shadow DOM)
+    const inputs = queryAllDeep(
+      "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea",
+      doc
     );
     for (const input of inputs) {
       const placeholder = (input.placeholder || "").toLowerCase();
@@ -676,28 +878,29 @@
       }
     }
 
-    // Strategy 3: match by visible text near the input (for React-style forms
-    // where label is rendered as a separate element without 'for' attribute)
-    const allTexts = document.querySelectorAll("span, p, div, h3, h4, h5, h6, strong, b");
+    // Strategy 3: match by visible text near input (React-style forms without <label>)
+    const allTexts = queryAllDeep("span, p, div, h3, h4, h5, h6, strong, b", doc);
     for (const textEl of allTexts) {
       const text = (textEl.textContent || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-      if (text.length > 50) continue; // Skip long text blocks
+      if (text.length > 60) continue;
       if (!labelTexts.some((t) => text === t || text.includes(t))) continue;
 
-      // Found matching text — look for an input nearby
       const parent = textEl.closest("div, fieldset, section, li");
       if (!parent) continue;
+
+      // Standard input
       const input = parent.querySelector(
         "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
-      );
+      ) || queryDeep("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea", parent);
       if (input && !input.value) {
         console.log(`AutoApply: Filling near text "${text}" with "${value.substring(0, 20)}..."`);
         setNativeValue(input, value);
         return true;
       }
 
-      // Also check for contenteditable or role=textbox (Ashby, Draft.js, rich-text fields)
-      const editable = parent.querySelector('[contenteditable="true"], [contenteditable=""], [role="textbox"]');
+      // Contenteditable or role=textbox (Ashby, Draft.js, etc.)
+      const editable = parent.querySelector('[contenteditable="true"], [contenteditable=""], [role="textbox"]') ||
+                       queryDeep('[contenteditable="true"], [contenteditable=""], [role="textbox"]', parent);
       if (editable && !editable.textContent.trim()) {
         console.log(`AutoApply: Filling contenteditable near "${text}" with "${value.substring(0, 20)}..."`);
         setEditableValue(editable, value);
@@ -705,8 +908,8 @@
       }
     }
 
-    // Strategy 4: aria-placeholder attribute (Ashby and other accessible form libs)
-    const ariaPlaceholders = document.querySelectorAll('[aria-placeholder], [placeholder]');
+    // Strategy 4: aria-placeholder attribute (Ashby accessible inputs)
+    const ariaPlaceholders = queryAllDeep('[aria-placeholder], [placeholder]', doc);
     for (const el of ariaPlaceholders) {
       const phText = (el.getAttribute("aria-placeholder") || el.getAttribute("placeholder") || "").toLowerCase();
       if (labelTexts.some(t => phText.includes(t))) {
@@ -746,11 +949,13 @@
       return false;
     }
 
-    // Find file input — prefer ones with resume/cv in name/label
-    let fileInput = document.querySelector('input[type="file"][name*="resume"], input[type="file"][name*="cv"]');
-    if (!fileInput) {
-      // Try to find any file input near a "resume" or "cv" label
-      const fileInputs = document.querySelectorAll('input[type="file"]');
+    // Find file input across all accessible docs (including iframes + shadow DOM)
+    let fileInput = null;
+    const docs = getAccessibleDocuments();
+    for (const doc of docs) {
+      fileInput = queryDeep('input[type="file"][name*="resume"], input[type="file"][name*="cv"]', doc);
+      if (fileInput) break;
+      const fileInputs = queryAllDeep('input[type="file"]', doc);
       for (const fi of fileInputs) {
         const label = getFieldLabel(fi).toLowerCase();
         if (label.includes("resume") || label.includes("cv") || label.includes("upload")) {
@@ -758,10 +963,10 @@
           break;
         }
       }
-      // Fall back to first file input
-      if (!fileInput && fileInputs.length > 0) {
-        fileInput = fileInputs[0];
-      }
+      if (fileInput) break;
+      // Fall back to first file input in this doc
+      const allFiles = queryAllDeep('input[type="file"]', doc);
+      if (allFiles.length > 0) { fileInput = allFiles[0]; break; }
     }
 
     if (!fileInput) {

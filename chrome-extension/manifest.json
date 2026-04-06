@@ -50,7 +50,8 @@
     {
       "matches": ["https://*.ashbyhq.com/*"],
       "js": ["ats/generic.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": ["https://*.icims.com/*"],

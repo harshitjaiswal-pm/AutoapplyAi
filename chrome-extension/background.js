@@ -557,12 +557,16 @@ async function injectATSScript(tabId, url) {
     scriptFile = "ats/generic.js";
   }
 
+  // For Ashby pages, also inject into child frames (the form may be in a cross-origin iframe)
+  const injectIntoAllFrames = scriptFile === "ats/generic.js" &&
+    (urlLower.includes("ashby_jid=") || urlLower.includes("ashbyhq.com"));
+
   try {
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, allFrames: injectIntoAllFrames },
       files: [scriptFile],
     });
-    console.log(`AutoApply BG: Injected ${scriptFile} into tab ${tabId}`);
+    console.log(`AutoApply BG: Injected ${scriptFile} into tab ${tabId} (allFrames=${injectIntoAllFrames})`);
   } catch (err) {
     console.error("AutoApply BG: Failed to inject script:", err);
     // Try with generic as fallback
