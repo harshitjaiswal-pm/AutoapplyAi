@@ -727,33 +727,18 @@
 
       const jobDescription = scrapeJobDescription();
 
-      // Step 2: Tailor the resume in background (non-blocking preview)
+      // Step 2: JD is ready — show confirmation immediately, no tailoring on LinkedIn side.
+      // Tailoring happens on the company ATS page in the background while Step 1 fills.
       updateJobStatus(job.id, "applying", "Scanning job description...");
-      let tailoredResult = null;
       const jobData = {
         jobTitle: job.title, company: job.company,
         location: job.location, jobDescription,
         easyApply: job.easyApply, source: "linkedin",
       };
 
-      // Start tailoring asynchronously — we'll show partial results in the modal
-      const tailorPromise = new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: jobData }, resolve);
-      });
-
-      // Step 3: Show confirmation modal — user decides per-job
-      updateJobStatus(job.id, "applying", "Tailoring resume...");
+      // Step 3: Show confirmation modal immediately — user verifies JD, then we open the ATS
       updateStatus(`Review job ${jobNumber}/${selectedJobs.length}: ${job.title}`);
-
-      // Wait for tailoring to complete before showing confirmation
-      try {
-        const result = await tailorPromise;
-        if (result && !result.error) tailoredResult = result.tailoredResult || result;
-      } catch (err) {
-        console.warn("AutoApply: Tailoring error for", job.title, err);
-      }
-
-      const decision = await showConfirmation(jobNumber, selectedJobs.length, job, tailoredResult, jobDescription);
+      const decision = await showConfirmation(jobNumber, selectedJobs.length, job, null, jobDescription);
 
       if (decision === "stop") {
         stopApplying();
