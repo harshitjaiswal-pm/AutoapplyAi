@@ -428,7 +428,8 @@
         </div>`;
       } else if (type === "user") {
         actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
-          <button id="aa-btn-skip" style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
+          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
         </div>`;
       }
 
