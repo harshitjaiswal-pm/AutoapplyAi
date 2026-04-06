@@ -587,10 +587,11 @@
             border: 1px solid #E5E5E5;
           ">Loading job description...</div>
           <div id="confirm-match-score" style="
-            margin-top: 8px; display: flex; align-items: center; gap: 8px;
+            margin-top: 8px; display: flex; align-items: center; gap: 12px;
           ">
             <span style="font-size: 11px; color: #666;">Match Score:</span>
             <span id="confirm-score-value" style="font-size: 14px; font-weight: 700; color: #4F46E5;">—</span>
+            <span id="confirm-jd-chars" style="font-size: 10px; color: #9CA3AF; margin-left: auto;">— chars sent to AI</span>
           </div>
         </div>
 
@@ -629,11 +630,16 @@
 
       const preview = document.getElementById("confirm-resume-preview");
       const scoreEl = document.getElementById("confirm-score-value");
+      const jdCharsEl = document.getElementById("confirm-jd-chars");
 
-      // Show job description so user can verify the right JD was scraped
-      preview.textContent = jobDescription
-        ? jobDescription.trim().slice(0, 1200) + (jobDescription.length > 1200 ? "…" : "")
-        : "Job description not available.";
+      // Show full job description so user can verify the right JD was scraped.
+      // The box is scrollable — no truncation here. Full text is also what AI receives.
+      const jdText = jobDescription ? jobDescription.trim() : "";
+      preview.textContent = jdText || "Job description not available.";
+      if (jdCharsEl) {
+        jdCharsEl.textContent = jdText ? `${jdText.length.toLocaleString()} chars sent to AI` : "No JD scraped";
+        jdCharsEl.style.color = jdText.length < 200 ? "#DC2626" : "#9CA3AF"; // red if suspiciously short
+      }
 
       // Show match score from tailoring result (JD preview is already set above)
       if (tailoredResult) {
