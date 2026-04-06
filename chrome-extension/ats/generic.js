@@ -22,9 +22,13 @@
    * Covers: standard forms, Ashby tab-based forms, iframes with forms.
    */
   function isOnApplicationForm() {
-    // Standard: 2+ visible text/email/tel inputs
+    // Broad input selector — covers inputs WITHOUT an explicit type attribute (Ashby),
+    // inputs with type="search", and all standard text-entry inputs.
+    // Only excludes truly non-text inputs.
     const inputs = document.querySelectorAll(
-      'input[type="text"], input[type="email"], input[type="tel"], textarea'
+      'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
+      ':not([type="file"]):not([type="submit"]):not([type="button"])' +
+      ':not([type="reset"]):not([type="image"]):not([type="range"]):not([type="color"]), textarea'
     );
     if (inputs.length >= 2) return true;
 
@@ -42,12 +46,24 @@
       if ((tab.textContent || "").toLowerCase().includes("application")) return true;
     }
 
+    // Ashby "Application Details" heading — visible when the Application tab is open
+    const headings = document.querySelectorAll("h1, h2, h3, h4, h5, h6");
+    for (const h of headings) {
+      const text = (h.textContent || "").trim().toLowerCase();
+      if (text === "application details" || text === "application form" ||
+          text.startsWith("application details") || text.startsWith("your application")) return true;
+    }
+
+    // Any div/section that looks like a labelled form section (Ashby pattern)
+    const formLabels = document.querySelectorAll('label');
+    if (formLabels.length >= 3) return true; // 3+ labels = very likely a form
+
     // Ashby iframe embed
     const frames = document.querySelectorAll("iframe");
     for (const fr of frames) {
       try {
         const doc = fr.contentDocument || fr.contentWindow?.document;
-        if (doc && doc.querySelector('input[type="email"], input[type="text"]')) return true;
+        if (doc && doc.querySelector('input:not([type="hidden"]), textarea')) return true;
       } catch (_) { /* cross-origin iframe — skip */ }
     }
 
@@ -107,10 +123,20 @@
     }
 
     // Pass 3: Ashby "Application" tab — click it to reveal the form
+    // But DON'T re-click if it's already active (would cause React remount)
     const tabs = document.querySelectorAll('[role="tab"], [class*="tab"]');
     for (const tab of tabs) {
       const text = (tab.textContent || "").trim().toLowerCase();
       if (text === "application" || text === "apply" || text === "application form") {
+        const alreadyActive =
+          tab.getAttribute("aria-selected") === "true" ||
+          tab.getAttribute("aria-current") === "true" ||
+          tab.classList.contains("active") ||
+          tab.classList.contains("selected");
+        if (alreadyActive) {
+          console.log("AutoApply: Application tab already active — no click needed");
+          return true; // form should already be showing
+        }
         console.log("AutoApply: Clicking Ashby/tab Application tab:", tab.textContent?.trim());
         tab.scrollIntoView({ behavior: "smooth", block: "center" });
         await sleep(300);
