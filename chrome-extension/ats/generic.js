@@ -216,6 +216,48 @@
     return false;
   }
 
+  /* ─────────────── SIGN-IN WALL DETECTION ─────────────── */
+
+  /**
+   * Returns true if the page is presenting a sign-in / registration wall
+   * instead of an application form. When detected, AutoApply skips filling
+   * and prompts the user to log in manually.
+   *
+   * Heuristics (any one is enough to flag a sign-in wall):
+   *  1. URL contains login / signin / register / auth patterns
+   *  2. A password <input> is present in the DOM
+   *  3. Very few visible inputs (≤3) AND recognisable sign-in text on the page
+   *  4. Sign-in text present AND no resume upload AND no textareas/rich inputs
+   */
+  function detectSignInWall() {
+    // Signal 1: URL pattern
+    const url = window.location.href.toLowerCase();
+    const loginUrlPatterns = ["login", "signin", "sign-in", "/register", "/auth", "account/create", "new-user", "createaccount"];
+    if (loginUrlPatterns.some(p => url.includes(p))) return true;
+
+    // Signal 2: Password input visible in the DOM
+    const passwordInputs = Array.from(document.querySelectorAll('input[type="password"]'))
+      .filter(el => el.offsetParent !== null);
+    if (passwordInputs.length > 0) return true;
+
+    // Shared: page text and sign-in keywords
+    const pageText = (document.body?.textContent || "").toLowerCase();
+    const signInKeywords = ["sign in", "log in", "login to apply", "create an account", "register to apply", "create account to apply"];
+    const hasSignInText = signInKeywords.some(k => pageText.includes(k));
+
+    // Signal 3: Very few visible inputs + sign-in text
+    const visibleInputs = Array.from(document.querySelectorAll('input:not([type="hidden"])'))
+      .filter(el => el.offsetParent !== null);
+    if (visibleInputs.length <= 3 && hasSignInText) return true;
+
+    // Signal 4: Sign-in text + no resume upload + no application-style text inputs
+    const hasResumeUpload = !!document.querySelector('input[type="file"]');
+    const hasRichInputs = !!document.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
+    if (hasSignInText && !hasResumeUpload && !hasRichInputs && visibleInputs.length <= 5) return true;
+
+    return false;
+  }
+
   /* ─────────────── FORM VS POSTING DETECTION ─────────────── */
 
   /**
@@ -535,6 +577,19 @@
     const pendingJob = stored.pendingApplication;
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
     showBanner("Opening application...", "ai");
+
+    // ── Early sign-in wall check ──
+    // Run before firing the tailoring API call so we don't waste tokens on a
+    // page that requires authentication before showing the application form.
+    // Give the page a moment to fully render first (init() already waits 3s).
+    if (detectSignInWall()) {
+      console.warn("AutoApply: Sign-in wall detected at", location.href);
+      try { AALog && AALog.state("ats.signinWall.detected", { url: location.href }); } catch(_){}
+      showBanner("⚠️ Sign-in required — log in to this site, then click Try Again.", "user", {
+        subtext: "AutoApply detected a login or registration page and cannot fill it automatically.",
+      });
+      return;
+    }
 
     // Detect Ashby embedded pages — checks URL AND DOM signals
     // (DOM check handles SPA navigation that removes ashby_jid= from URL)
