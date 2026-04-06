@@ -30,7 +30,36 @@
    * the Application tab is inactive.
    */
   function isOnApplicationForm() {
-    // Count only inputs that are actually visible on screen
+    // ── Ashby-specific: "Type here..." placeholder is unique to Ashby form inputs ──
+    const ashbyInputs = document.querySelectorAll('input[placeholder*="here" i], input[placeholder*="type" i]');
+    if (ashbyInputs.length > 0) return true;
+
+    // ── Ashby-specific: look for "Application Details" in ANY element (not just headings) ──
+    // Ashby uses custom-styled divs, not semantic h-tags, for section headers.
+    const allEls = document.querySelectorAll('p, div, span, strong, h1, h2, h3, h4, h5, h6, section');
+    for (const el of allEls) {
+      if (el.children.length > 3) continue; // skip layout containers
+      const text = (el.textContent || "").trim().toLowerCase();
+      if (text === "application details" || text === "application form" ||
+          text.startsWith("application details")) {
+        const style = window.getComputedStyle(el);
+        if (style.display !== "none" && style.visibility !== "hidden") return true;
+      }
+    }
+
+    // ── Labels with common first-field names (reliable form signal) ──
+    const labels = document.querySelectorAll("label");
+    for (const lbl of labels) {
+      const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
+      if (text === "full name" || text === "first name" || text === "email" ||
+          text === "email address" || text === "phone" || text === "resume") {
+        const style = window.getComputedStyle(lbl);
+        if (style.display !== "none" && style.visibility !== "hidden") return true;
+      }
+    }
+
+    // ── Visible non-hidden inputs (2+ required) — only check display/visibility, not rect ──
+    // getBoundingClientRect can return zeros during CSS transitions (Ashby has tab animations)
     const allInputs = document.querySelectorAll(
       'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
       ':not([type="file"]):not([type="submit"]):not([type="button"])' +
@@ -39,26 +68,12 @@
     let visibleCount = 0;
     for (const el of allInputs) {
       const style = window.getComputedStyle(el);
-      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
-      // Check that the element (or an ancestor) is not hidden
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) continue;
+      if (style.display === "none" || style.visibility === "hidden") continue;
       visibleCount++;
       if (visibleCount >= 2) return true;
     }
 
-    // Ashby "Application Details" heading — only visible when that tab is open
-    const headings = document.querySelectorAll("h1, h2, h3, h4, h5, h6");
-    for (const h of headings) {
-      const text = (h.textContent || "").trim().toLowerCase();
-      if (text === "application details" || text.startsWith("application details") ||
-          text === "application form" || text.startsWith("your application")) {
-        const style = window.getComputedStyle(h);
-        if (style.display !== "none" && style.visibility !== "hidden") return true;
-      }
-    }
-
-    // Explicit <form> with visible inputs
+    // ── Explicit <form> with visible inputs ──
     const forms = document.querySelectorAll("form");
     for (const f of forms) {
       const style = window.getComputedStyle(f);
@@ -66,15 +81,64 @@
       if (f.querySelector("input:not([type='hidden']), textarea, select")) return true;
     }
 
-    // Ashby iframe embed
+    // ── Ashby iframe embed ──
     const frames = document.querySelectorAll("iframe");
     for (const fr of frames) {
       try {
         const doc = fr.contentDocument || fr.contentWindow?.document;
         if (doc && doc.querySelector('input:not([type="hidden"]), textarea')) return true;
-      } catch (_) { /* cross-origin iframe — skip */ }
+      } catch (_) { /* cross-origin */ }
     }
 
+    return false;
+  }
+
+  /**
+   * Ashby-specific form readiness check.
+   * Polls for Ashby's characteristic signals: "Type here..." placeholders,
+   * "Full Name" labels, or "Application Details" heading in any element.
+   * Much more reliable than the generic isOnApplicationForm() for Ashby pages.
+   */
+  async function waitForAshbyForm(timeoutMs = 12000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      // Signal 1: Ashby's "Type here..." placeholder is the most specific indicator
+      if (document.querySelector('input[placeholder*="here" i], input[placeholder*="type" i]')) return true;
+
+      // Signal 2: "Application Details" heading in any element
+      const allEls = document.querySelectorAll('p, div, span, strong, h1, h2, h3, h4');
+      for (const el of allEls) {
+        if (el.children.length > 3) continue;
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text === "application details" || text.startsWith("application details")) {
+          const style = window.getComputedStyle(el);
+          if (style.display !== "none" && style.visibility !== "hidden") return true;
+        }
+      }
+
+      // Signal 3: A "Full Name" or "Email" label is visible
+      const labels = document.querySelectorAll("label");
+      for (const lbl of labels) {
+        const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
+        if (text === "full name" || text === "first name" || text === "email" || text === "email address") {
+          const style = window.getComputedStyle(lbl);
+          if (style.display !== "none" && style.visibility !== "hidden") return true;
+        }
+      }
+
+      // Signal 4: 2+ inputs with no display:none / visibility:hidden (ignores rect during transitions)
+      const inputs = document.querySelectorAll(
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
+        ':not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]), textarea'
+      );
+      let cnt = 0;
+      for (const el of inputs) {
+        const s = window.getComputedStyle(el);
+        if (s.display !== "none" && s.visibility !== "hidden") { cnt++; if (cnt >= 2) return true; }
+      }
+
+      await sleep(400);
+    }
     return false;
   }
 
@@ -279,23 +343,34 @@
     try {
       // ── Step 0: Navigate to the application form ──
       if (isAshbyPage) {
-        // Ashby: always explicitly activate the Application tab.
-        // The DOM contains both tab panels simultaneously — hidden inputs from the
-        // inactive tab can fool form detection, so we always go through tab activation.
-        if (!isOnApplicationForm()) {
-          showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
-          const activated = await activateAshbyTab();
-          if (!activated) {
-            showBanner("Click the 'Application' tab to open the form.", "user",
-              { subtext: "AutoApply will continue automatically once the form is visible." });
-          }
-          const formReady = await waitForApplicationForm(15000);
-          if (!formReady) {
-            showBanner("Could not detect application form — please click the 'Application' tab.", "user");
+        // Ashby: always try to activate the Application tab, then wait for Ashby-specific signals.
+        // We use waitForAshbyForm() which is much more reliable than the generic detection.
+        showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
+
+        // Try to activate Application tab (safe — skips click if already active)
+        const activated = await activateAshbyTab();
+
+        if (!activated) {
+          // Tab element not found at all — tell user to navigate manually
+          showBanner("Click the 'Application' tab to open the form.", "user",
+            { subtext: "AutoApply will continue filling once the form is visible." });
+        }
+
+        // Wait for Ashby-specific form signals (up to 12s)
+        const formReady = await waitForAshbyForm(12000);
+
+        if (!formReady) {
+          // Form still not detected — show nudge banner and wait longer for manual help
+          showBanner("👆 Click 'Application' tab above — AutoApply will fill it automatically.", "user",
+            { subtext: "Waiting for you to open the form..." });
+          const manuallyReady = await waitForAshbyForm(30000);
+          if (!manuallyReady) {
+            showBanner("Could not detect application form — please apply manually.", "user");
             return;
           }
-          await sleep(500);
         }
+
+        await sleep(600); // final render settle
       } else if (!isOnApplicationForm()) {
         // Generic non-Ashby page: scroll and find Apply button
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
