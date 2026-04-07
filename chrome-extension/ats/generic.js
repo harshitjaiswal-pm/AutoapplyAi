@@ -927,6 +927,12 @@
       if (fillByLabel(mapping.labels, mapping.value, doc)) filled++;
     }
 
+    // Fill native <select> Yes/No dropdowns (work auth, residency, sponsorship)
+    filled += fillYesNoDropdowns(user, doc);
+
+    // Notice period — always fill on the basic path too
+    if (fillByLabel(["notice period", "required notice", "notice period required", "required notice period"], user.noticePeriod || "2 weeks", doc)) filled++;
+
     return filled;
   }
 
@@ -1119,6 +1125,8 @@
         { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
         // Salary expectation — fill with max pay from JD, fallback to profile value
         { labels: ["salary", "compensation", "salary expectation", "minimum salary", "base salary", "minimum base salary", "salary expectations", "minimum base", "expected salary", "desired salary", "pay expectation"], value: maxPay || user.salaryExpectation || user.compensation },
+        // Notice period
+        { labels: ["notice period", "required notice", "notice period required", "required notice period"], value: user.noticePeriod || "2 weeks" },
       ];
 
       for (const mapping of fieldMappings) {
@@ -1131,6 +1139,9 @@
       if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, doc)) {
         filled++;
       }
+
+      // Native <select> Yes/No dropdowns (work auth, residency, sponsorship) — Breezy HR etc.
+      filled += fillYesNoDropdowns(user, doc);
 
       // ── Education fields ──────────────────────────────────────────────────────
       if (edu.school) {
@@ -1636,6 +1647,56 @@
     chrome.storage.local.get(["_aa_batchProgress"], ({ _aa_batchProgress: bp }) => {
       if (bp) chrome.storage.local.set({ _aa_batchProgress: { ...bp, salaryRange } });
     });
+  }
+
+  // ── Fill native <select> Yes/No dropdowns (work auth, residency, sponsorship) ──
+  function fillYesNoDropdowns(user, doc = document) {
+    let filled = 0;
+    const selects = queryAllDeep("select", doc);
+    for (const sel of selects) {
+      const label = getFieldLabel(sel).toLowerCase();
+      // Work authorization → Yes
+      if (/legal(ly)?\s*(authorized|eligible|allowed|entitled)\s*to\s*work|right\s*to\s*work|work\s*auth/i.test(label)) {
+        if (fillSelectElement(sel, "yes")) filled++;
+      }
+      // Residency — match province from user profile
+      else if (/reside|residing|resident|live\s*in|living\s*in|based\s*in|located\s*in/i.test(label)) {
+        const userProv = (user.province || "").toLowerCase();
+        const inBC = userProv.includes("british columbia") || userProv === "bc";
+        const inON = userProv.includes("ontario") || userProv === "on";
+        const labelHasBC = /british columbia|b\.?c\.?/i.test(label);
+        const labelHasON = /ontario|\bon\b/i.test(label);
+        if      (labelHasBC) { if (fillSelectElement(sel, inBC ? "yes" : "no")) filled++; }
+        else if (labelHasON) { if (fillSelectElement(sel, inON ? "yes" : "no")) filled++; }
+        else                 { if (fillSelectElement(sel, "yes")) filled++; }
+      }
+      // Visa sponsorship → No
+      else if (/sponsor|sponsorship|visa\s*support|immigration/i.test(label)) {
+        if (fillSelectElement(sel, "no")) filled++;
+      }
+      // Criminal record → No
+      else if (/criminal|convicted|felony|misdemeanor/i.test(label)) {
+        if (fillSelectElement(sel, "no")) filled++;
+      }
+    }
+    return filled;
+  }
+
+  // Pick the first <option> whose visible text contains targetText
+  function fillSelectElement(sel, targetText) {
+    const target = targetText.toLowerCase();
+    for (const opt of sel.options) {
+      if (!opt.value || opt.disabled) continue;
+      if (opt.text.toLowerCase().includes(target)) {
+        if (sel.value === opt.value) return false; // already correct
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        sel.dispatchEvent(new Event("input",  { bubbles: true }));
+        console.log(`AutoApply: Dropdown "${getFieldLabel(sel)}" → "${opt.text}"`);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
