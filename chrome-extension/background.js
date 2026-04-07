@@ -192,6 +192,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  /* ── From universal.js: Inject generic.js into the current tab ── */
+  if (message.type === "INJECT_GENERIC_HERE") {
+    const tabId = sender.tab?.id;
+    if (tabId) {
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["logger.js", "ats/generic.js"],
+      }).catch((err) => {
+        console.warn("AutoApply BG: INJECT_GENERIC_HERE failed for tab", tabId, err.message);
+      });
+    }
+    sendResponse({ success: !!tabId });
+    return false;
+  }
+
   /* ── From ATS content scripts: Upload resume PDF in the MAIN world ──
    * Content scripts run in an isolated world — React's __reactProps$ expando
    * properties are set by the page's main world and are NOT visible from the
