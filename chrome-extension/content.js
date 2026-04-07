@@ -1536,7 +1536,9 @@
       const n = selectedJobIds.size;
       start.textContent = n === 0 ? "Select jobs above to begin" : `Apply to ${n} job${n === 1 ? "" : "s"} →`;
       start.disabled = n === 0;
-      start.style.opacity = n === 0 ? "0.5" : "1";
+      start.style.opacity = n === 0 ? "0.38" : "1";
+      start.style.pointerEvents = n === 0 ? "none" : "auto";
+      start.style.cursor = n === 0 ? "default" : "pointer";
     }
     if (count) count.textContent = `${scrapedJobs.length}`;
   }
