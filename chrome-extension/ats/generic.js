@@ -1337,14 +1337,23 @@
       });
 
       if (mainWorldResult?.success) {
-        // Wait for React to process the change and verify via DOM
-        await new Promise(r => setTimeout(r, 900));
+        // Wait for React to process the change and verify via DOM.
+        // Some ATSs (Ashby) render the filename in a completely different
+        // part of the DOM than where the file input lives, so we check
+        // the whole document body rather than just uploadRoot.
+        await new Promise(r => setTimeout(r, 1800));
         const uploadRoot = fileInput.closest('[role="presentation"], [class*="upload"], [class*="dropzone"], section') ||
                            fileInput.parentElement?.parentElement;
-        const confirmed = uploadRoot && (
-          (uploadRoot.getAttribute("data-state") && uploadRoot.getAttribute("data-state") !== "default") ||
-          uploadRoot.textContent.includes("Resume.pdf") ||
-          uploadRoot.querySelector('[class*="filename"], [class*="file-name"], [class*="name"]')
+        const confirmed = (
+          // Narrow: check the upload container for state/filename
+          (uploadRoot && (
+            (uploadRoot.getAttribute("data-state") && uploadRoot.getAttribute("data-state") !== "default") ||
+            uploadRoot.textContent.includes("Resume.pdf") ||
+            uploadRoot.querySelector('[class*="filename"], [class*="file-name"], [class*="name"]')
+          )) ||
+          // Wide: Ashby and similar ATSs render filename anywhere in the document
+          document.body.textContent.includes("Resume.pdf") ||
+          !!document.querySelector('[class*="filename"], [class*="file-name"]')
         );
         if (confirmed) {
           console.log(`AutoApply: Resume uploaded via main-world (strategy: ${mainWorldResult.strategy})`);
