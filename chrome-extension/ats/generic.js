@@ -1759,6 +1759,8 @@
     const timerStart = banner._timerStart;
 
     // Reset ALL inherited/page styles on the banner root so site CSS can't bleed in
+    // Set non-background properties first, then background separately so
+    // backdrop-filter is never reset by all:initial alongside the bg colour.
     banner.style.cssText = `
       all: initial;
       position: fixed !important;
@@ -1771,17 +1773,18 @@
       font-size: 14px !important;
       line-height: 1.4 !important;
       color: #fff !important;
-      backdrop-filter: blur(12px) !important;
-      -webkit-backdrop-filter: blur(12px) !important;
       box-shadow: 0 4px 24px rgba(0,0,0,0.18) !important;
     `;
+    // Apply backdrop-filter AFTER cssText to ensure all:initial doesn't clobber it
+    banner.style.setProperty("backdrop-filter", "blur(16px) saturate(1.4)", "important");
+    banner.style.setProperty("-webkit-backdrop-filter", "blur(16px) saturate(1.4)", "important");
 
     const typeConfig = {
-      ai:      { bg: "rgba(79, 70, 229, 0.82)",  icon: "⚡", actor: "Working" },
-      info:    { bg: "rgba(79, 70, 229, 0.82)",  icon: "⚡", actor: "Working" },
-      user:    { bg: "rgba(180, 83, 9, 0.85)",   icon: "👆", actor: "Action needed" },
-      success: { bg: "rgba(4, 120, 87, 0.82)",   icon: "✓", actor: "Done" },
-      error:   { bg: "rgba(185, 28, 28, 0.85)",  icon: "!", actor: "Needs attention" },
+      ai:      { bg: "rgba(49, 46, 129, 0.62)",  icon: "⚡", actor: "Working" },
+      info:    { bg: "rgba(49, 46, 129, 0.62)",  icon: "⚡", actor: "Working" },
+      user:    { bg: "rgba(120, 53, 15, 0.62)",  icon: "👆", actor: "Action needed" },
+      success: { bg: "rgba(6, 78, 59, 0.62)",    icon: "✓", actor: "Done" },
+      error:   { bg: "rgba(127, 29, 29, 0.62)",  icon: "!", actor: "Needs attention" },
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
