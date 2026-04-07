@@ -179,7 +179,7 @@ interface AppState {
   setRawResumeText: (text: string) => void;
   setParsedResume: (resume: ParsedResume) => void;
   setParsedJob: (job: ParsedJob) => void;
-  setTailoredResult: (result: TailoredResult) => void;
+  setTailoredResult: (result: TailoredResult | null) => void;
   addApplication: (app: Application) => void;
   updateApplicationStatus: (id: string, status: Application["status"]) => void;
   setIsParsingResume: (val: boolean) => void;

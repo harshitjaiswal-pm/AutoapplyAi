@@ -119,6 +119,15 @@ C. FORMAT FOR ATS: Clean section headers, standard date formats, no tables or co
 D. NATURAL LANGUAGE: If the JD says "cross-functional collaboration," use that exact phrase once or twice — but also use natural variants elsewhere. A resume that repeats the same JD phrase 8 times looks artificial.
 
 RESUME TAILORING RULES:
+
+⛔ RULE ZERO — DATE INTEGRITY (HIGHEST PRIORITY, ENFORCED BY AUTOMATED VALIDATOR):
+The candidate's total years of experience is calculated from employment dates. Any change that reduces total experience years is a CRITICAL DEFECT that will cause automatic rejection.
+- Copy EVERY startDate and EVERY endDate for EVERY role verbatim from the input. Not paraphrased, not rounded, not "fixed" — verbatim.
+- If endDate is "Present" or "Current" or any similar variant, output it exactly as-is. Never replace "Present" with a specific year.
+- NEVER shorten, adjust, or "normalize" any date under any circumstances.
+- An automated system will compute total experience years from your output and compare it to the source. A discrepancy greater than 2 months will cause the entire output to be rejected and the candidate will NOT see their tailored resume.
+- This rule takes absolute precedence over all other rules in this prompt.
+
 1. SACRED — NEVER change: job titles, company names, employment dates, education, degrees. These are factual anchors. Copy them EXACTLY from the input. If the input says "Senior Product Manager -- AI-Powered Returns & Vendor Intelligence Platform", the output must say EXACTLY that. Do NOT rename it to match the target JD. Do NOT add words like "Risk" or "Underwriting" to titles. This is the single most important rule.
 2. PRESERVE TECHNICAL DEPTH: If the original resume mentions specific technologies (NLP, computer vision, RAG, ML models, specific frameworks), KEEP THEM in the bullet points. These demonstrate real capability and make the candidate memorable. A PM who built "merchant underwriting using NLP and computer vision" is far more impressive than one who just "built merchant underwriting systems."
 3. PRESERVE RICH BULLET POINTS: Don't compress detailed, metric-driven bullets into thin generic ones. If the original has a great bullet with specific numbers and methods, keep the substance. You can reword it to include a JD keyword, but don't hollow it out.

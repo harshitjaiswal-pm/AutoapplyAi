@@ -17,26 +17,58 @@ export interface ResumeValidationResult {
 
 function parseDate(dateStr: string): Date | null {
   if (!dateStr) return null;
-  const lower = dateStr.toLowerCase().trim();
+  // Strip em-dash / en-dash / hyphen ranges — take only the first segment if it's a range
+  // e.g. "Jan 2018 – Present" → "Jan 2018"
+  const stripped = dateStr.split(/\s*[–—-]\s*/)[0].trim();
+  const lower = stripped.toLowerCase().trim();
 
   if (lower === "present" || lower === "current" || lower === "now" || lower === "today") {
     return new Date();
   }
 
-  // "Month Year" or "Month, Year" — e.g. "Jan 2020", "January 2020"
-  const monthYearMatch = lower.match(/([a-z]+)[,\s]+(\d{4})/);
+  // "Month. Year" — abbreviated with trailing period e.g. "Jan. 2020", "Feb. 2018"
+  // Also handles "Month Year", "Month, Year"
+  const monthYearMatch = lower.match(/([a-z]+)\.?[,\s]+(\d{4})/);
   if (monthYearMatch) {
     const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-    const monthIdx = months.findIndex((m) => monthYearMatch[1].startsWith(m));
+    const monthIdx = months.findIndex((m) => monthYearMatch[1].replace(/\.$/, "").startsWith(m));
     if (monthIdx >= 0) {
       return new Date(parseInt(monthYearMatch[2]), monthIdx, 1);
     }
   }
 
-  // "YYYY-MM" ISO partial
+  // "MM/YYYY" — e.g. "08/2019", "01/2022"
+  const mmYYYYMatch = lower.match(/^(\d{1,2})\/(\d{4})$/);
+  if (mmYYYYMatch) {
+    return new Date(parseInt(mmYYYYMatch[2]), parseInt(mmYYYYMatch[1]) - 1, 1);
+  }
+
+  // "YYYY/MM" — e.g. "2019/08"
+  const yyyyMMSlashMatch = lower.match(/^(\d{4})\/(\d{2})$/);
+  if (yyyyMMSlashMatch) {
+    return new Date(parseInt(yyyyMMSlashMatch[1]), parseInt(yyyyMMSlashMatch[2]) - 1, 1);
+  }
+
+  // "YYYY-MM" ISO partial — e.g. "2020-01"
   const isoMatch = lower.match(/^(\d{4})-(\d{2})/);
   if (isoMatch) {
     return new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, 1);
+  }
+
+  // "Q1/Q2/Q3/Q4 YYYY" — e.g. "Q1 2022", "Q3 2019"
+  const quarterMatch = lower.match(/q([1-4])\s*(\d{4})/);
+  if (quarterMatch) {
+    const monthForQ = (parseInt(quarterMatch[1]) - 1) * 3; // Q1→0, Q2→3, Q3→6, Q4→9
+    return new Date(parseInt(quarterMatch[2]), monthForQ, 1);
+  }
+
+  // "Summer/Fall/Spring/Winter YYYY" — use midpoint months
+  const seasonMatch = lower.match(/(summer|fall|autumn|spring|winter)\s*(\d{4})/);
+  if (seasonMatch) {
+    const seasonMonth: Record<string, number> = {
+      spring: 2, summer: 6, fall: 9, autumn: 9, winter: 11,
+    };
+    return new Date(parseInt(seasonMatch[2]), seasonMonth[seasonMatch[1]] ?? 6, 1);
   }
 
   // Just a year "2020"
