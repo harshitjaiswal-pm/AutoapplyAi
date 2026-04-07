@@ -132,7 +132,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PREPARE_APPLICATION") {
     try { AALog && AALog.state("bg.prepareApplication", { jobTitle: message.job?.jobTitle, company: message.job?.company }); } catch(_){}
     startKeepAlive(); // Keep alive while waiting for new tab + API calls
-    chrome.storage.local.set({ pendingApplication: message.job }, () => {
+    chrome.storage.local.set({ pendingApplication: { ...message.job, _queuedAt: Date.now() } }, () => {
       console.log("AutoApply BG: Stored pending application for", message.job.jobTitle);
 
       // Start watching for new tabs
@@ -534,8 +534,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const job = message.job;
     console.log("AutoApply BG: Application completed for", job.jobTitle, "at", job.company);
 
-    // Clear apply tab tracking — this application is done
+    // Clear apply tab tracking and pending state — this application is done
     applyTabId = null;
+    chrome.storage.local.remove(["pendingApplication"]);
 
     // Store completed application in a list for the dashboard to read
     chrome.storage.local.get(["completedApplications"], (stored) => {
@@ -768,8 +769,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (isKnownATS && !url.includes("linkedin.com")) {
     // Only auto-inject if the user actually queued a job — never fire on manual browsing
     chrome.storage.local.get(["pendingApplication"], (stored) => {
-      if (!stored.pendingApplication) {
+      const pending = stored.pendingApplication;
+      if (!pending) {
         console.log("AutoApply BG: Known ATS domain but no pendingApplication — skipping auto-inject");
+        return;
+      }
+      // Expire stale pending applications (older than 15 minutes)
+      if (pending._queuedAt && (Date.now() - pending._queuedAt) > 15 * 60 * 1000) {
+        console.log("AutoApply BG: pendingApplication expired — clearing and skipping");
+        chrome.storage.local.remove(["pendingApplication"]);
         return;
       }
       console.log("AutoApply BG: Detected known ATS domain in new tab:", tab.url);
@@ -1130,6 +1138,9 @@ function arrayBufferToBase64(buffer) {
  * Initialize extension state on install or startup
  */
 function initializeExtension() {
+  // Clear any stale pending state from a previous session so it doesn't
+  // auto-trigger injection on the next browser launch.
+  chrome.storage.local.remove(["pendingApplication", "pendingJobs"]);
   chrome.storage.local.set({
     autoapplyUrl: "https://autoapply-ai-delta.vercel.app",
   });
