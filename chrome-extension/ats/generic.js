@@ -1710,73 +1710,64 @@
       const hasBatch = bp && bp.total > 0;
       const hasPdf = !!result.tailoredResumePdf;
 
-      const batchTag = hasBatch
-        ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
-        : "";
-
-      const pillStyle = `font-size:12px;opacity:0.9;background:rgba(255,255,255,0.15);border-radius:5px;padding:2px 8px;white-space:nowrap;`;
-      const companyTag = (hasBatch && bp.company)
-        ? `<span style="${pillStyle}">${bp.company}</span>` : "";
-      const roleTag = (hasBatch && bp.title)
-        ? `<span style="${pillStyle}">${bp.title}</span>` : "";
-      const salaryTag = (hasBatch && bp.salaryRange)
-        ? `<span style="${pillStyle}">💰 ${bp.salaryRange}</span>` : "";
-
+      // ── Progress bar (top edge, always shown during batch) ──────────────────
       const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
-      const progressBar = hasBatch ? `
-        <div style="height:3px;background:rgba(255,255,255,0.2);margin:6px 0 4px;">
-          <div style="height:100%;width:${pct}%;background:rgba(255,255,255,0.7);border-radius:2px;transition:width 0.4s;"></div>
-        </div>` : "";
-
-      const actorBadge = `<span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">${cfg.icon} ${cfg.actor.toUpperCase()}</span>`;
-      const statusMsg  = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
-      const timerEl    = isAi
-        ? `<span id="aa-elapsed-timer" style="font-size:14px;font-weight:700;opacity:0.9;margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:1px;background:rgba(0,0,0,0.18);border-radius:5px;padding:1px 8px;">0:00</span>`
+      const progressBar = hasBatch
+        ? `<div style="position:absolute;top:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.2);">
+             <div style="height:100%;width:${pct}%;background:rgba(255,255,255,0.75);border-radius:0 2px 2px 0;transition:width 0.5s;"></div>
+           </div>`
         : "";
 
+      // ── Top meta row: job counter + company · role (only during batch) ───────
+      const metaRow = hasBatch ? (() => {
+        const counter = `<span style="font-size:11px;font-weight:700;background:rgba(0,0,0,0.2);border-radius:4px;padding:1px 7px;white-space:nowrap;letter-spacing:0.2px;">Job ${bp.current} / ${bp.total}</span>`;
+        const company = bp.company ? `<span style="font-size:11px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">${bp.company}</span>` : "";
+        const role    = bp.title   ? `<span style="font-size:11px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">${bp.title}</span>` : "";
+        const salary  = bp.salaryRange ? `<span style="font-size:11px;opacity:0.8;white-space:nowrap;">💰 ${bp.salaryRange}</span>` : "";
+        const timer   = isAi ? `<span id="aa-elapsed-timer" style="margin-left:auto;font-size:11px;font-weight:700;opacity:0.8;font-variant-numeric:tabular-nums;white-space:nowrap;">0:00</span>` : "";
+        return `<div style="display:flex;align-items:center;gap:8px;overflow:hidden;margin-bottom:5px;">${counter}${company}${role}${salary}${timer}</div>`;
+      })() : (isAi ? `<div style="display:flex;justify-content:flex-end;margin-bottom:4px;"><span id="aa-elapsed-timer" style="font-size:11px;font-weight:700;opacity:0.7;font-variant-numeric:tabular-nums;">0:00</span></div>` : "");
+
+      // ── Main message row ─────────────────────────────────────────────────────
+      const statusMsg = `<span style="font-size:14px;font-weight:600;line-height:1.3;">${message}</span>`;
       const subtextRow = opts.subtext
-        ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
+        ? `<div style="font-size:12px;opacity:0.75;margin-top:3px;">${opts.subtext}</div>`
         : "";
 
-      // Resume download button — always shown when PDF is in storage
-      const pdfBtnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;`;
+      // ── Action buttons ───────────────────────────────────────────────────────
+      const btnStyle = `border:none;border-radius:6px;padding:5px 13px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;`;
+      const pdfBtnStyle = `${btnStyle}background:#fff;color:#4F46E5;`;
       const pdfBtn = hasPdf
-        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
-        : "";
+        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇ Resume PDF</button>` : "";
 
-      // ── Action buttons (error and user-turn states get quick actions)
-      const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
-      const pauseBtn = isAi
-        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.2);color:#fff;">⏸ Pause</button>`
-        : "";
-      const resumeBtn = opts.showResume
-        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.9);color:#B45309;">▶ Resume</button>`
-        : "";
       let actionRow = "";
       if (type === "error") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
-          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+        actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Retry</button>
+          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
           ${pdfBtn}
         </div>`;
       } else if (type === "user") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
-          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+        actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Try again</button>
+          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
           ${pdfBtn}
         </div>`;
-      } else if (isAi || resumeBtn || pdfBtn) {
-        // AI / success states: show pause + resume + resume download
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${pauseBtn}${resumeBtn}${pdfBtn}</div>`;
+      } else if (isAi) {
+        const pauseBtn = `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.18);color:#fff;">⏸ Pause</button>`;
+        actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">${pauseBtn}${pdfBtn}</div>`;
+      } else if (opts.showResume || pdfBtn) {
+        const resumeBtn = opts.showResume ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.9);color:#B45309;">▶ Resume</button>` : "";
+        actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">${resumeBtn}${pdfBtn}</div>`;
       }
 
       banner.style.background = cfg.bg;
       banner.style.color = "#fff";
       banner.innerHTML = `
-        <div style="padding:8px 18px 7px;">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${batchTag}${companyTag}${roleTag}${salaryTag}</div>
+        <div style="position:relative;padding:10px 18px 10px;">
           ${progressBar}
-          <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
+          ${metaRow}
+          <div>${statusMsg}</div>
           ${subtextRow}
           ${actionRow}
         </div>`;
