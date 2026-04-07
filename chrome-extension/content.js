@@ -1550,22 +1550,24 @@
   // Initialize
   createFloatingUI();
 
-  // On every page load, treat a LinkedIn refresh as an implicit "stop".
-  //
-  // Why: the batch-apply loop lives in-memory inside this content script. A
-  // page reload destroys that loop, so any previously-stored _aa_batchProgress
-  // with active:true is guaranteed to be stale — there is no live loop it
-  // could belong to. Restoring the banner from it would leave a frozen
-  // "Job N/M" widget that never updates again. Clearing it here gives the
-  // user a predictable, clean slate on every refresh.
-  chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+  // On every page load, clear any stale batch-progress state (the in-memory
+  // apply loop is gone after a reload, so an active:true flag is always stale).
+  // Then restore previously scanned jobs + selections so the user doesn't lose
+  // their work when they navigate back to the LinkedIn jobs page.
+  chrome.storage.local.get(["_aa_batchProgress", "_aa_scrapedJobs", "_aa_selectedIds"], (result) => {
     const bp = result._aa_batchProgress;
     if (bp && bp.active) {
       try { AALog && AALog.state("batch.staleCleared", { reason: "page_reload", prior: bp }); } catch(_){}
       chrome.storage.local.set({ _aa_batchProgress: { active: false } });
     }
-    // Always wipe scraped jobs on reload so "Scan Page" is the only way to
-    // populate the panel — this matches the mental model the user expects.
-    chrome.storage.local.remove(["_aa_scrapedJobs", "_aa_selectedIds"]);
+
+    // Restore scanned jobs + selections from the previous session on this page
+    if (result._aa_scrapedJobs && Array.isArray(result._aa_scrapedJobs) && result._aa_scrapedJobs.length > 0) {
+      scrapedJobs = result._aa_scrapedJobs;
+      selectedJobIds = new Set(result._aa_selectedIds || []);
+      console.log(`AutoApply: Restored ${scrapedJobs.length} jobs from storage (${selectedJobIds.size} selected)`);
+      renderJobList();
+      updateStartButton();
+    }
   });
 })();
