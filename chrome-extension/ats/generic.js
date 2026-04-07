@@ -931,9 +931,34 @@
     return filled;
   }
 
+  /** Normalise a degree string from a resume to the standard label used in most ATS dropdowns */
+  function normalizeDegree(raw) {
+    const d = (raw || "").toLowerCase();
+    if (d.includes("phd") || d.includes("doctor")) return "Doctorate";
+    if (d.includes("mba") || d.includes("master")) return "Master's";
+    if (d.includes("bachelor") || d.includes("b.sc") || d.includes("b.a") || d.includes("b.eng") || d.includes("b.com") || /\b(ba|bs|be|bcom|bba|bsc)\b/.test(d)) return "Bachelor's";
+    if (d.includes("associate")) return "Associate's";
+    if (d.includes("diploma")) return "Diploma";
+    if (d.includes("certificate")) return "Certificate";
+    return raw;
+  }
+
+  /** Derive yyyy-mm-dd start/end dates from an education year field ("2022" or "2020–2022") */
+  function eduDates(year) {
+    const rangeMatch = String(year || "").match(/(\d{4})\s*[-–—]\s*(\d{4})/);
+    if (rangeMatch) return { start: `${rangeMatch[1]}-09-01`, end: `${rangeMatch[2]}-05-01` };
+    const single = String(year || "").match(/(\d{4})/);
+    if (single) {
+      const y = parseInt(single[1]);
+      return { start: `${y - 2}-09-01`, end: `${y}-05-01` };
+    }
+    return { start: "", end: "" };
+  }
+
   async function fillGenericForm(tailoredResult, job) {
-    const profile = await chrome.storage.local.get(["userProfile"]);
+    const profile = await chrome.storage.local.get(["userProfile", "parsedResume"]);
     const user = profile.userProfile || {};
+    const edu = (profile.parsedResume?.education || [])[0] || {};
 
     console.log("AutoApply: User profile:", JSON.stringify(user));
 
@@ -996,6 +1021,26 @@
       if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, doc)) {
         filled++;
       }
+
+      // ── Education fields ──────────────────────────────────────────────────────
+      if (edu.school) {
+        if (fillByLabel(["school", "institution", "university", "college", "school name"], edu.school, doc)) filled++;
+      }
+      if (edu.degree) {
+        const degreeNorm = normalizeDegree(edu.degree);
+        // Degree is usually a <select> dropdown; fall back to text input
+        if (fillSelectByLabel(["degree", "highest level of education", "level of education", "education level", "degree level"], degreeNorm, doc)) {
+          filled++;
+        } else if (fillByLabel(["degree", "degree type", "degree level", "field of study"], degreeNorm, doc)) {
+          filled++;
+        }
+      }
+      if (edu.year) {
+        const { start: eduStart, end: eduEnd } = eduDates(edu.year);
+        if (eduStart && fillByLabel(["start date", "start year", "from date", "date from", "education start"], eduStart, doc)) filled++;
+        if (eduEnd   && fillByLabel(["end date", "end year", "graduation date", "to date", "date to", "education end", "completion date", "expected graduation"], eduEnd, doc)) filled++;
+      }
+      // ─────────────────────────────────────────────────────────────────────────
 
       // Button-style Yes/No questions (Ashby uses toggle buttons, not radio inputs)
       const btnFilled = await fillButtonStyleYesNo(doc);
