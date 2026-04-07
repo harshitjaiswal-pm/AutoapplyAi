@@ -1007,7 +1007,13 @@
         chrome.runtime.sendMessage({ type: "OPEN_ATS_TAB", url: fetchedApplyUrl });
         applyType = "external";
       } else {
-        // Fallback: click LinkedIn's Apply button (may be stale if panel wasn't updated)
+        // Re-click the job card to make sure the correct detail panel is loaded.
+        // The confirmation modal may have taken time, during which LinkedIn could
+        // have changed the detail panel to a different job.
+        updateJobStatus(job.id, "applying", "Opening application...");
+        await clickJobCard(job);
+        await new Promise((r) => setTimeout(r, 1200));
+
         try { AALog && AALog.nav("linkedin.apply.click", { jobId: job.id }); } catch(_){}
         applyType = await clickApplyButton();
         try { AALog && AALog.nav("linkedin.apply.result", { jobId: job.id, applyType }); } catch(_){}
@@ -1027,7 +1033,7 @@
         skippedCount++;
         updateStatus(`Already applied: ${job.title}`);
       } else {
-        updateJobStatus(job.id, "failed");
+        updateJobStatus(job.id, "failed", "Apply button not found — may be Easy Apply or already applied");
         try { AALog && AALog.error("linkedin.apply.failed", { jobId: job.id, applyType }); } catch(_){}
       }
 
