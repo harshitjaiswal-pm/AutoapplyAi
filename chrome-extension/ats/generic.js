@@ -258,7 +258,7 @@
     const hasApplyButton = Array.from(document.querySelectorAll('a[href], button, [role="button"]'))
       .some(el => {
         const text = (el.textContent?.trim() || "").toLowerCase().replace(/\s+/g, " ");
-        return applyButtonTexts.has(text) || text.startsWith("apply for ");
+        return applyButtonTexts.has(text) || text.startsWith("apply for ") || text.startsWith("apply with ");
       });
 
     // Signal 3: Very few visible inputs + sign-in text
