@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAppStore } from "@/store/useAppStore";
+import { validateTailoredResume, ResumeValidationResult } from "@/lib/resumeValidation";
 
 async function downloadResume(
   resume: any,
@@ -48,6 +49,8 @@ export default function TailorEngine() {
   const [copied, setCopied] = useState("");
   const [tab, setTab] = useState<"resume" | "cover">("resume");
   const [mode, setMode] = useState<"pro" | "fast">("fast");
+  const [validation, setValidation] = useState<ResumeValidationResult | null>(null);
+  const [guardDismissed, setGuardDismissed] = useState(false);
 
   const {
     parsedResume,
@@ -64,6 +67,8 @@ export default function TailorEngine() {
   const handleTailor = async () => {
     if (!parsedResume || !parsedJob) return;
     setError("");
+    setValidation(null);
+    setGuardDismissed(false);
     setIsTailoring(true);
     try {
       const res = await fetch("/api/tailor-resume", {
@@ -73,7 +78,19 @@ export default function TailorEngine() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Tailoring failed."); return; }
-      setTailoredResult(data.tailoredResult);
+
+      // ── Guardrail: validate tailored resume against source ──────────────
+      const tailored = data.tailoredResult.tailoredResume;
+      const valResult = validateTailoredResume(parsedResume, tailored);
+
+      // Attach validation to the result before storing
+      const resultWithValidation = {
+        ...data.tailoredResult,
+        validation: valResult,
+      };
+
+      setValidation(valResult);
+      setTailoredResult(resultWithValidation);
       addApplication({
         id: Date.now().toString(),
         jobTitle: parsedJob.title,
@@ -82,6 +99,9 @@ export default function TailorEngine() {
         appliedAt: new Date().toISOString(),
         resumeVersion: `Tailored - ${parsedJob.title}`,
         matchScore: data.tailoredResult.matchScore,
+        defects: valResult.warnings,
+        sourceYears: valResult.sourceYears,
+        tailoredYears: valResult.tailoredYears,
       });
     } catch {
       setError("Network error.");
@@ -175,8 +195,74 @@ export default function TailorEngine() {
         )}
       </div>
 
+      {/* ═══ Guardrail: Validation warnings ═══ */}
+      {validation && validation.hasDefects && !guardDismissed && (
+        <div className="border border-red-200 rounded-xl p-5 bg-red-50 animate-fade-in">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 text-red-500 shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+              </span>
+              <div>
+                <p className="text-[13px] font-semibold text-red-700 mb-1.5">
+                  Guardrail: {validation.warnings.filter(w => w.severity === "error").length} error(s) · {validation.warnings.filter(w => w.severity === "warning").length} warning(s) detected
+                </p>
+                <div className="space-y-2">
+                  {validation.warnings.map((w, i) => (
+                    <div key={i} className={`rounded-lg px-3 py-2 text-[12px] border ${
+                      w.severity === "error"
+                        ? "bg-red-100 border-red-200 text-red-800"
+                        : "bg-amber-50 border-amber-200 text-amber-800"
+                    }`}>
+                      <span className="font-semibold">{w.severity === "error" ? "✗ ERROR" : "⚠ WARN"}</span>
+                      {" "}{w.message}
+                      <span className="text-[11px] ml-2 opacity-60">
+                        (source: {w.sourceValue} → tailored: {w.tailoredValue})
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {validation.sourceYears > 0 && (
+                  <p className="text-[11px] text-red-500 mt-2">
+                    Your actual experience: <strong>{validation.sourceYears}y</strong> · Tailored resume shows: <strong>{validation.tailoredYears}y</strong>
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setGuardDismissed(true)}
+              className="text-[11px] text-red-400 hover:text-red-600 shrink-0 px-2 py-1 rounded hover:bg-red-100 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+          <div className="mt-3 pt-3 border-t border-red-200 flex gap-3">
+            <button
+              onClick={() => setGuardDismissed(true)}
+              className="text-[12px] font-medium px-3 py-1.5 rounded-md bg-red-600 text-white hover:bg-red-700 transition-colors"
+            >
+              I've reviewed — proceed anyway
+            </button>
+            <button
+              onClick={() => { setTailoredResult(null); setValidation(null); }}
+              className="text-[12px] font-medium px-3 py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-100 transition-colors"
+            >
+              Re-tailor with Pro mode
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Guardrail pass banner */}
+      {validation && !validation.hasDefects && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-[12px] text-emerald-700 font-medium animate-fade-in">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          Guardrail passed — {validation.sourceYears}y of experience accurately preserved in tailored resume
+        </div>
+      )}
+
       {/* ═══ Results: Side-by-side ═══ */}
-      {tailoredResult && (
+      {tailoredResult && (guardDismissed || !validation?.hasDefects) && (
         <div className="animate-fade-up">
           {/* Score header */}
           <div className="border border-neutral-200 rounded-xl p-6 mb-6">

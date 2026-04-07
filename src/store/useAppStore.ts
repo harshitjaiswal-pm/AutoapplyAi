@@ -54,6 +54,14 @@ export interface ParsedJob {
   cultureCues: string[];
 }
 
+export interface ResumeDefect {
+  field: string;
+  sourceValue: string;
+  tailoredValue: string;
+  severity: "error" | "warning";
+  message: string;
+}
+
 export interface TailoredResult {
   originalMatchScore?: number;
   matchScore: number;
@@ -73,6 +81,13 @@ export interface TailoredResult {
   tailoredResume: ParsedResume;
   coverLetter: string;
   changes: { category: string; text: string }[];
+  // Guardrail validation results
+  validation?: {
+    sourceYears: number;
+    tailoredYears: number;
+    warnings: ResumeDefect[];
+    hasDefects: boolean;
+  };
 }
 
 // Legacy single-application tracking
@@ -85,6 +100,9 @@ export interface Application {
   appliedAt: string;
   resumeVersion: string;
   matchScore: number;
+  defects?: ResumeDefect[];         // Guardrail warnings attached at tailor time
+  sourceYears?: number;             // Years in original resume
+  tailoredYears?: number;           // Years in tailored resume
 }
 
 /**
