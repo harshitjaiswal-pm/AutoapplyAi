@@ -226,6 +226,16 @@
     return false;
   }
 
+  /** Detect iCIMS job application pages by URL */
+  function detectICIMS() {
+    return window.location.href.toLowerCase().includes("icims.com");
+  }
+
+  /** Detect Oracle Taleo job application pages by URL */
+  function detectTaleo() {
+    return window.location.href.toLowerCase().includes("taleo.net");
+  }
+
   /* ─────────────── SIGN-IN WALL DETECTION ─────────────── */
 
   /**
@@ -633,6 +643,8 @@
     // Detect Ashby embedded pages — checks URL AND DOM signals
     // (DOM check handles SPA navigation that removes ashby_jid= from URL)
     const isAshbyPage = detectAshbyPage();
+    const isICIMS     = detectICIMS();
+    const isTaleo     = detectTaleo();
 
     // ── Fire tailoring immediately in the background ──
     // We don't wait for it here — form fills happen in parallel so there's no
@@ -738,9 +750,23 @@
       }
 
       // ── Step 1: Fill basic fields immediately (no tailoring needed) ──
-      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
-      try { AALog && AALog.form("ats.fillBasic.start", { url: location.href }); } catch(_){}
+      if (isICIMS) {
+        showBanner("iCIMS detected — filling basic fields...", "ai", { subtext: "Partial fill only — please review all fields before submitting." });
+      } else if (isTaleo) {
+        showBanner("Taleo detected — filling basic fields...", "ai", { subtext: "Partial fill only — please review all fields before submitting." });
+      } else {
+        showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+      }
+      try { AALog && AALog.form("ats.fillBasic.start", { url: location.href, ats: isICIMS ? "icims" : isTaleo ? "taleo" : "generic" }); } catch(_){}
       const basicFilled = await fillBasicProfile();
+      // ATS-specific supplemental fill — catches fields missed by the generic label matcher
+      if (isICIMS || isTaleo) {
+        const storedProfile = await chrome.storage.local.get(["userProfile"]);
+        const atsFilled = isICIMS
+          ? fillICIMSForm(storedProfile.userProfile || {})
+          : fillTaleoForm(storedProfile.userProfile || {});
+        try { AALog && AALog.form("ats.fillAtsSpecific.done", { ats: isICIMS ? "icims" : "taleo", fieldsFilled: atsFilled }); } catch(_){}
+      }
       try { AALog && AALog.form("ats.fillBasic.done", { fieldsFilled: basicFilled }); } catch(_){}
 
       if (basicFilled === 0 && isAshbyPage) {
@@ -763,9 +789,24 @@
         await fillGenericForm(tailoredData.tailoredResult, pendingJob);
         try { AALog && AALog.form("ats.fillTailored.done", {}); } catch(_){}
       } else {
-        console.warn("AutoApply: No tailored data — basic profile already filled");
-        try { AALog && AALog.error("ats.fillTailored.noData", {}); } catch(_){}
+        // Tailoring failed after all retries — show amber fallback banner
+        const reason = tailoredData?.error || "API unavailable";
+        console.warn("AutoApply: Tailoring failed —", reason, "— basic info filled, no tailored resume");
+        try { AALog && AALog.error("ats.fillTailored.noData", { reason }); } catch(_){}
+        showBanner(
+          "AI tailoring failed — basic info filled, review before submitting.",
+          "user",
+          { subtext: `Error: ${reason.substring(0, 80)}. Your contact info has been filled — complete the rest manually.` }
+        );
       }
+
+      // ── Multi-page auto-advance ────────────────────────────────────────────────
+      // After filling the current page, click Next/Continue if present and repeat
+      // until we reach the final page (Submit visible, or no more Next button).
+      // We stop BEFORE clicking Submit — user stays in control of the final action.
+      const tailoredForPages = tailoredData?.tailoredResult || null;
+      await autoAdvancePages(tailoredForPages, pendingJob);
+      // ─────────────────────────────────────────────────────────────────────────
 
       // Attempt programmatic resume upload, fall back to download
       try { AALog && AALog.form("ats.resumeUpload.start", {}); } catch(_){}
@@ -778,7 +819,16 @@
         });
       }
 
-      if (uploaded) {
+      if (isICIMS || isTaleo) {
+        const atsName = isICIMS ? "iCIMS" : "Taleo";
+        showBanner(
+          `${atsName} — basic fields filled. Review everything before submitting.`,
+          "user",
+          { subtext: uploaded
+            ? "Tailored resume uploaded. This ATS may need additional manual input — check all sections."
+            : "Check Downloads for your tailored resume PDF. Upload it and complete any remaining fields." }
+        );
+      } else if (uploaded) {
         showBanner("All done — review your answers and hit Submit when you're happy.", "success", { subtext: "Your tailored resume has been uploaded. You're in control of the final submit." });
       } else {
         showBanner("Fields filled — one more step: upload your tailored resume PDF, then submit.", "user", { subtext: "Check your Downloads folder for the tailored PDF." });
@@ -929,6 +979,64 @@
       showBanner(`Filled ${filled} fields — check any remaining fields and submit when ready.`, "user");
     }
     return filled;
+  }
+
+  /**
+   * Auto-advance through multi-page ATS forms.
+   * After the first page is filled, detect a "Next / Continue" button and click it.
+   * Re-fill each subsequent page, stop when we reach the final Submit page or run out of Next buttons.
+   * Never clicks Submit — user stays in control.
+   */
+  async function autoAdvancePages(tailoredResult, pendingJob, maxPages = 8) {
+    const NEXT_TEXTS  = ["next", "continue", "next step", "next page", "proceed", "save and continue", "save & continue", "next section"];
+    const FINAL_TEXTS = ["submit", "send application", "submit application", "complete application", "finish", "review and submit"];
+
+    for (let page = 1; page <= maxPages; page++) {
+      await sleep(800);
+
+      // Find all visible buttons
+      const allBtns = Array.from(queryAllDeep("button, [role='button'], input[type='submit'], input[type='button'], a[role='button']"));
+      const visible  = allBtns.filter(b => b.offsetParent !== null && b.offsetWidth > 0);
+
+      // Check if final Submit button is present — stop before clicking it
+      const hasFinal = visible.some(b => {
+        const t = (b.textContent || b.value || "").trim().toLowerCase();
+        return FINAL_TEXTS.some(f => t === f || t.includes(f));
+      });
+      if (hasFinal) {
+        console.log(`AutoApply: Multi-page — reached final Submit page after ${page} page(s)`);
+        try { AALog && AALog.form("ats.multiPage.finalPage", { page }); } catch(_){}
+        return; // Stop — user submits manually
+      }
+
+      // Find a Next/Continue button
+      const nextBtn = visible.find(b => {
+        const t = (b.textContent || b.value || b.getAttribute("aria-label") || "").trim().toLowerCase();
+        return NEXT_TEXTS.some(n => t === n || t.startsWith(n));
+      });
+      if (!nextBtn) {
+        console.log(`AutoApply: Multi-page — no Next button on page ${page}, stopping`);
+        return; // No more pages
+      }
+
+      console.log(`AutoApply: Multi-page — clicking Next on page ${page}: "${(nextBtn.textContent || "").trim().slice(0, 40)}"`);
+      try { AALog && AALog.form("ats.multiPage.nextClick", { page, btnText: (nextBtn.textContent || "").trim().slice(0, 40) }); } catch(_){}
+      showBanner(`Advancing to next section (page ${page + 1})...`, "ai", { subtext: "Filling your details..." });
+      nextBtn.click();
+
+      // Wait for next page to render
+      await sleep(2000);
+
+      // Re-fill the new page
+      try {
+        await fillBasicProfile();
+        if (tailoredResult) await fillGenericForm(tailoredResult, pendingJob);
+        try { AALog && AALog.form("ats.multiPage.pageFilled", { page: page + 1 }); } catch(_){}
+      } catch (fillErr) {
+        console.warn(`AutoApply: Multi-page fill error on page ${page + 1}:`, fillErr.message);
+      }
+    }
+    console.log("AutoApply: Multi-page — reached max page limit");
   }
 
   /** Normalise a degree string from a resume to the standard label used in most ATS dropdowns */
@@ -1183,6 +1291,12 @@
     element.dispatchEvent(new Event("change", { bubbles: true }));
     // React 17+ also listens for this
     element.dispatchEvent(new Event("blur", { bubbles: true }));
+    // Extra: InputEvent for date/number inputs in newer React forms
+    if (element.type === "date" || element.type === "number" || element.type === "month") {
+      try {
+        element.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+      } catch (_) {}
+    }
   }
 
   /**
@@ -1250,21 +1364,22 @@
     }
 
     // Strategy 2: match by placeholder, name, id, or aria-label (including shadow DOM)
+    // Normalise underscores → spaces so "education_start_date" matches "start date"
     const inputs = queryAllDeep(
       "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea",
       doc
     );
     for (const input of inputs) {
       const placeholder = (input.placeholder || "").toLowerCase();
-      const name = (input.name || "").toLowerCase();
-      const id = (input.id || "").toLowerCase();
+      const name = (input.name || "").toLowerCase().replace(/_/g, " ");
+      const id = (input.id || "").toLowerCase().replace(/_/g, " ");
       const ariaLabel = (input.getAttribute("aria-label") || "").toLowerCase();
 
       if (labelTexts.some((t) =>
         placeholder.includes(t) || name.includes(t) || id.includes(t) || ariaLabel.includes(t)
       )) {
         if (!input.value) {
-          console.log(`AutoApply: Filling input (${name || id || placeholder}) with "${value.substring(0, 20)}..."`);
+          console.log(`AutoApply: Filling input (${input.name || input.id || placeholder}) with "${value.substring(0, 20)}..."`);
           setNativeValue(input, value);
           return true;
         }
@@ -1532,15 +1647,20 @@
     // Find all <select> elements and check their associated label
     const selects = queryAllDeep("select", doc);
     for (const sel of selects) {
-      const labelText = getFieldLabel(sel).toLowerCase();
+      const rawLabel = getFieldLabel(sel).toLowerCase();
+      const labelText = rawLabel.replace(/_/g, " ");
       const matchesLabel = labelTexts.some(t => labelText.includes(t));
       if (!matchesLabel) {
-        // Also check nearby text nodes
-        const container = sel.closest("div, fieldset, section, li");
-        if (container) {
-          const nearbyText = (container.querySelector("label, p, span, div")?.textContent || "").toLowerCase();
-          if (!labelTexts.some(t => nearbyText.includes(t))) continue;
-        } else continue;
+        // Also check nearby text nodes and element name/id
+        const selName = (sel.name || sel.id || "").toLowerCase().replace(/_/g, " ");
+        if (labelTexts.some(t => selName.includes(t))) { /* matched by name/id — fall through */ }
+        else {
+          const container = sel.closest("div, fieldset, section, li");
+          if (container) {
+            const nearbyText = (container.querySelector("label, p, span, div")?.textContent || "").toLowerCase().replace(/_/g, " ");
+            if (!labelTexts.some(t => nearbyText.includes(t))) continue;
+          } else continue;
+        }
       }
 
       // Try to find matching option (by text or value)
@@ -1727,6 +1847,124 @@
   }
 
   /**
+   * Fill iCIMS-specific form fields using the selector patterns iCIMS uses.
+   * iCIMS renders standard HTML inputs but with predictable id/name patterns.
+   * Returns the count of fields filled.
+   */
+  function fillICIMSForm(user) {
+    let filled = 0;
+    const mappings = [
+      { selectors: ['input[id*="firstname" i]', 'input[name*="firstname" i]', 'input[id*="first_name" i]', 'input[name*="first_name" i]'], value: user.firstName },
+      { selectors: ['input[id*="lastname" i]', 'input[name*="lastname" i]', 'input[id*="last_name" i]', 'input[name*="last_name" i]'], value: user.lastName },
+      { selectors: ['input[id*="email" i]', 'input[name*="email" i]', 'input[type="email"]'], value: user.email },
+      { selectors: ['input[id*="phone" i]', 'input[name*="phone" i]', 'input[id*="mobile" i]', 'input[name*="mobile" i]'], value: user.phone },
+      { selectors: ['input[id*="address" i]', 'input[name*="address" i]', 'input[id*="street" i]'], value: user.address },
+      { selectors: ['input[id*="city" i]', 'input[name*="city" i]'], value: user.city || "Vancouver" },
+      { selectors: ['input[id*="postal" i]', 'input[name*="postal" i]', 'input[id*="zip" i]', 'input[name*="zip" i]'], value: user.postalCode },
+      { selectors: ['input[id*="linkedin" i]', 'input[name*="linkedin" i]'], value: user.linkedin },
+    ];
+
+    for (const { selectors, value } of mappings) {
+      if (!value) continue;
+      for (const sel of selectors) {
+        try {
+          const input = document.querySelector(sel);
+          if (input && !input.value) {
+            setNativeValue(input, value);
+            filled++;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    console.log(`AutoApply: iCIMS-specific fill: ${filled} fields`);
+    return filled;
+  }
+
+  /**
+   * Fill Oracle Taleo-specific form fields.
+   * Taleo uses predictable flex field IDs (flex_First_Name_1, etc.) and
+   * older name-attribute patterns (ftfn, ftln, ftem, ftph).
+   * Returns the count of fields filled.
+   */
+  function fillTaleoForm(user) {
+    let filled = 0;
+    const mappings = [
+      {
+        selectors: [
+          'input[id="flex_First_Name_1"]',
+          'input[name*="ftfn"]',
+          'input[id*="fname" i]',
+          'input[id*="firstname" i]',
+          'input[name*="firstname" i]',
+        ],
+        value: user.firstName,
+      },
+      {
+        selectors: [
+          'input[id="flex_Last_Name_1"]',
+          'input[name*="ftln"]',
+          'input[id*="lname" i]',
+          'input[id*="lastname" i]',
+          'input[name*="lastname" i]',
+        ],
+        value: user.lastName,
+      },
+      {
+        selectors: [
+          'input[id="flex_Email_Address_1"]',
+          'input[name*="ftem"]',
+          'input[id*="email" i]',
+          'input[name*="email" i]',
+          'input[type="email"]',
+        ],
+        value: user.email,
+      },
+      {
+        selectors: [
+          'input[id="flex_Phone_1"]',
+          'input[name*="ftph"]',
+          'input[id*="phone" i]',
+          'input[name*="phone" i]',
+        ],
+        value: user.phone,
+      },
+      {
+        selectors: [
+          'input[id*="address" i]',
+          'input[name*="address" i]',
+        ],
+        value: user.address,
+      },
+      {
+        selectors: [
+          'input[id*="city" i]',
+          'input[name*="city" i]',
+        ],
+        value: user.city || "Vancouver",
+      },
+    ];
+
+    for (const { selectors, value } of mappings) {
+      if (!value) continue;
+      for (const sel of selectors) {
+        try {
+          const input = document.querySelector(sel);
+          if (input && !input.value) {
+            setNativeValue(input, value);
+            filled++;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    console.log(`AutoApply: Taleo-specific fill: ${filled} fields`);
+    return filled;
+  }
+
+  /**
    * showBanner(message, type, opts)
    *
    * type:
@@ -1822,11 +2060,11 @@
       const pdfBtn = hasPdf
         ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇ Resume PDF</button>` : "";
 
-      // Fallback resume link — always available on user-turn and success banners
-      // so the user can grab their tailored resume even if the PDF wasn't auto-uploaded
-      const resumeLinkStyle = `${btnStyle}background:rgba(255,255,255,0.9);color:#1E3A5F;text-decoration:none;`;
+      // Fallback resume button — downloads the tailored PDF from storage
+      // (shown when hasPdf is false, i.e. PDF not yet generated or upload not confirmed)
+      const resumeLinkStyle = `${btnStyle}background:rgba(255,255,255,0.9);color:#1E3A5F;cursor:pointer;border:none;`;
       const resumeLink = (type === "user" || type === "success" || type === "error")
-        ? `<a id="aa-link-resume" href="${AUTOAPPLY_URL}/tailor" target="_blank" style="${resumeLinkStyle}">⬇ Get resume</a>`
+        ? `<button id="aa-link-resume" style="${resumeLinkStyle}">⬇ Get resume</button>`
         : "";
 
       let actionRow = "";
@@ -1894,20 +2132,38 @@
         chrome.storage.local.remove(["pendingApplication"]);
         showBanner("Job skipped — you can close this tab.", "info");
       });
-      document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
-        chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress"], (r) => {
-          if (!r.tailoredResumePdf) return;
-          const bp = r._aa_batchProgress;
-          const company = (bp?.company || "Company").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
-          const role    = (bp?.title   || "Resume").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
-          const filename = `${company}_${role}_Resume.pdf`;
-          chrome.runtime.sendMessage({
-            type: "DOWNLOAD_RESUME",
-            job: { company: bp?.company || "Company", jobTitle: bp?.title || "Resume" },
-          });
-          console.log("AutoApply: Banner PDF download triggered:", filename);
+      // Shared download handler — used by both "⬇ Resume PDF" and "⬇ Get resume" buttons
+      function triggerResumeDownload() {
+        chrome.storage.local.get(["tailoredResumePdf", "tailoredResumeFilename", "_aa_batchProgress", "pendingApplication"], (r) => {
+          if (!r.tailoredResumePdf) {
+            // No PDF generated yet — fall back to sending DOWNLOAD_RESUME which
+            // triggers the background to generate and download on the fly
+            const bp  = r._aa_batchProgress;
+            const job = r.pendingApplication;
+            const company  = bp?.company  || job?.company  || "Company";
+            const jobTitle = bp?.title    || job?.jobTitle || "Resume";
+            chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { company, jobTitle } });
+            return;
+          }
+          // PDF is in storage — download it directly without hitting the server
+          const bp  = r._aa_batchProgress;
+          const job = r.pendingApplication;
+          const company  = (bp?.company  || job?.company  || "Company").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+          const jobTitle = (bp?.title    || job?.jobTitle || "Resume").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+          const filename = r.tailoredResumeFilename || `${company}_${jobTitle}_Resume.pdf`;
+          // Build a data URL and click an anchor to trigger the browser download
+          const dataUrl = `data:application/pdf;base64,${r.tailoredResumePdf}`;
+          const a = document.createElement("a");
+          a.href = dataUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          console.log("AutoApply: Resume downloaded:", filename);
         });
-      });
+      }
+      document.getElementById("aa-btn-download-resume")?.addEventListener("click", triggerResumeDownload);
+      document.getElementById("aa-link-resume")?.addEventListener("click", triggerResumeDownload);
       document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
         chrome.storage.local.set({ _aa_paused: true });
         showBanner("⏸ Paused — click Resume when ready.", "user", { showResume: true });

@@ -534,9 +534,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const job = message.job;
     console.log("AutoApply BG: Application completed for", job.jobTitle, "at", job.company);
 
-    // Clear apply tab tracking and pending state — this application is done
+    // Clear apply tab tracking — this application is done.
+    // Do NOT remove pendingApplication here: in a batch the next job's
+    // pendingApplication may already be stored, and removing it would
+    // cause "No active application found" on the next ATS page.
     applyTabId = null;
-    chrome.storage.local.remove(["pendingApplication"]);
 
     // Store completed application in a list for the dashboard to read
     chrome.storage.local.get(["completedApplications"], (stored) => {
@@ -910,8 +912,28 @@ async function injectATSScript(tabId, url) {
 }
 
 /**
+ * Retry a function up to maxAttempts times with a delay between attempts.
+ * On final failure, re-throws the last error.
+ */
+async function withRetry(fn, maxAttempts = 3, delayMs = 2000, label = "operation") {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      console.warn(`AutoApply BG: ${label} attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+      try { AALog && AALog.error(`bg.retry.${label}`, { attempt, maxAttempts, error: err.message }); } catch(_){}
+      if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * Call the AutoApply API to tailor the resume for the given job.
  * Optimized: Step 1 (analyze-job) and storage fetch run in parallel.
+ * Each API step retries up to 3 times before failing.
  */
 async function handleTailorAndFill(job) {
   // Clear any stale PDF from a previous job immediately — this prevents the
@@ -921,7 +943,7 @@ async function handleTailorAndFill(job) {
 
   // Run Step 1 and storage fetch in parallel (Step 1 doesn't depend on stored data)
   const [analyzeRes, stored] = await Promise.all([
-    fetch_analyze_job(job),
+    withRetry(() => fetch_analyze_job(job), 3, 2000, "analyzeJob"),
     chrome.storage.local.get(["parsedResume", "autoapplyUrl", "userProfile"]),
   ]);
 
@@ -965,32 +987,21 @@ async function handleTailorAndFill(job) {
   console.log("AutoApply BG: Step 1 done. Parsed job title:", parsedJob.title || parsedJob.jobTitle);
   try { AALog && AALog.api("bg.api.analyzeJob.done", { title: parsedJob.title || parsedJob.jobTitle, keys: Object.keys(parsedJob || {}) }); } catch(_){}
 
-  // Step 2: Tailor the resume
+  // Step 2: Tailor the resume (with retry)
   console.log("AutoApply BG: Step 2/3 — Tailoring resume for", job.jobTitle);
   try { AALog && AALog.api("bg.api.tailorResume.start", { jobTitle: job.jobTitle, company: job.company }); } catch(_){}
-  let tailorRes;
-  try {
-    tailorRes = await fetch(`${apiUrl}/api/tailor-resume`, {
+  const tailorData = await withRetry(async () => {
+    const res = await fetch(`${apiUrl}/api/tailor-resume`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        parsedResume: resumeForApi,
-        parsedJob,
-        mode: "fast",
-      }),
+      body: JSON.stringify({ parsedResume: resumeForApi, parsedJob, mode: "fast" }),
     });
-  } catch (fetchErr) {
-    console.error("AutoApply BG: Network error on tailor-resume:", fetchErr);
-    throw new Error(`Network error calling tailor-resume: ${fetchErr.message}`);
-  }
-
-  if (!tailorRes.ok) {
-    const errBody = await tailorRes.text().catch(() => "");
-    console.error("AutoApply BG: tailor-resume failed:", tailorRes.status, errBody);
-    throw new Error(`Resume tailoring failed (${tailorRes.status}): ${errBody.substring(0, 100)}`);
-  }
-
-  const tailorData = await tailorRes.json();
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`Resume tailoring failed (${res.status}): ${errBody.substring(0, 100)}`);
+    }
+    return res.json();
+  }, 3, 2000, "tailorResume");
   // API returns { tailoredResult: { matchScore, tailoredResume, coverLetter, ... } }
   const tailoredResult = tailorData.tailoredResult || tailorData;
   console.log("AutoApply BG: Step 2 done. Match score:", tailoredResult.matchScore);
