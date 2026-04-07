@@ -1711,18 +1711,30 @@
     }
     const timerStart = banner._timerStart;
 
+    // Reset ALL inherited/page styles on the banner root so site CSS can't bleed in
     banner.style.cssText = `
-      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      all: initial;
+      position: fixed !important;
+      top: 0 !important; left: 0 !important; right: 0 !important;
+      z-index: 2147483647 !important;
+      display: block !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif !important;
+      font-size: 14px !important;
+      line-height: 1.4 !important;
+      color: #fff !important;
+      backdrop-filter: blur(12px) !important;
+      -webkit-backdrop-filter: blur(12px) !important;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.18) !important;
     `;
 
     const typeConfig = {
-      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "⚡", actor: "Working" },
-      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "⚡", actor: "Working" },
-      user:    { bg: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", icon: "👆", actor: "Action needed" },
-      success: { bg: "linear-gradient(135deg, #047857 0%, #059669 100%)", icon: "✓", actor: "Done" },
-      error:   { bg: "linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)", icon: "!", actor: "Needs attention" },
+      ai:      { bg: "rgba(79, 70, 229, 0.82)",  icon: "⚡", actor: "Working" },
+      info:    { bg: "rgba(79, 70, 229, 0.82)",  icon: "⚡", actor: "Working" },
+      user:    { bg: "rgba(180, 83, 9, 0.85)",   icon: "👆", actor: "Action needed" },
+      success: { bg: "rgba(4, 120, 87, 0.82)",   icon: "✓", actor: "Done" },
+      error:   { bg: "rgba(185, 28, 28, 0.85)",  icon: "!", actor: "Needs attention" },
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
@@ -1741,18 +1753,17 @@
 
       // ── Top meta row: job counter + company · role (only during batch) ───────
       const metaRow = hasBatch ? (() => {
-        const counter = `<span style="font-size:11px;font-weight:700;background:rgba(0,0,0,0.2);border-radius:4px;padding:1px 7px;white-space:nowrap;letter-spacing:0.2px;">Job ${bp.current} / ${bp.total}</span>`;
-        const company = bp.company ? `<span style="font-size:11px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">${bp.company}</span>` : "";
-        const role    = bp.title   ? `<span style="font-size:11px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">${bp.title}</span>` : "";
-        const salary  = bp.salaryRange ? `<span style="font-size:11px;opacity:0.8;white-space:nowrap;">💰 ${bp.salaryRange}</span>` : "";
-        const timer   = isAi ? `<span id="aa-elapsed-timer" style="margin-left:auto;font-size:11px;font-weight:700;opacity:0.8;font-variant-numeric:tabular-nums;white-space:nowrap;">0:00</span>` : "";
-        return `<div style="display:flex;align-items:center;gap:8px;overflow:hidden;margin-bottom:5px;">${counter}${company}${role}${salary}${timer}</div>`;
-      })() : (isAi ? `<div style="display:flex;justify-content:flex-end;margin-bottom:4px;"><span id="aa-elapsed-timer" style="font-size:11px;font-weight:700;opacity:0.7;font-variant-numeric:tabular-nums;">0:00</span></div>` : "");
+        const counter = `<span style="display:inline-block;font-size:11px;font-weight:700;color:#fff;background:rgba(0,0,0,0.22);border-radius:4px;padding:1px 7px;white-space:nowrap;letter-spacing:0.2px;margin:0;">Job ${bp.current} / ${bp.total}</span>`;
+        const company = bp.company ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;margin:0;">${bp.company}</span>` : "";
+        const role    = bp.title   ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;margin:0;">${bp.title}</span>` : "";
+        const salary  = bp.salaryRange ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.82);white-space:nowrap;margin:0;">💰 ${bp.salaryRange}</span>` : "";
+        const timer   = isAi ? `<span id="aa-elapsed-timer" style="display:inline-block;margin-left:auto;font-size:11px;font-weight:700;color:rgba(255,255,255,0.8);font-variant-numeric:tabular-nums;white-space:nowrap;">0:00</span>` : "";
+        return `<div style="display:flex;align-items:center;gap:8px;overflow:hidden;margin:0 0 6px 0;padding:0;flex-wrap:nowrap;">${counter}${company}${role}${salary}${timer}</div>`;
+      })() : (isAi ? `<div style="display:flex;justify-content:flex-end;margin:0 0 4px 0;padding:0;"><span id="aa-elapsed-timer" style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.75);font-variant-numeric:tabular-nums;">0:00</span></div>` : "");
 
-      // ── Main message row ─────────────────────────────────────────────────────
-      const statusMsg = `<span style="font-size:14px;font-weight:600;line-height:1.3;">${message}</span>`;
+      // ── Subtext row ──────────────────────────────────────────────────────────
       const subtextRow = opts.subtext
-        ? `<div style="font-size:12px;opacity:0.75;margin-top:3px;">${opts.subtext}</div>`
+        ? `<div style="font-size:12px;color:rgba(255,255,255,0.75);margin:3px 0 0 0;padding:0;">${opts.subtext}</div>`
         : "";
 
       // ── Action buttons ───────────────────────────────────────────────────────
@@ -1783,12 +1794,20 @@
       }
 
       banner.style.background = cfg.bg;
-      banner.style.color = "#fff";
       banner.innerHTML = `
-        <div style="position:relative;padding:10px 18px 10px;">
+        <div style="
+          all: initial;
+          display: block;
+          position: relative;
+          padding: 10px 20px 12px;
+          box-sizing: border-box;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+          color: #fff;
+          line-height: 1.4;
+        ">
           ${progressBar}
           ${metaRow}
-          <div>${statusMsg}</div>
+          <div style="font-size:14px;font-weight:600;color:#fff;margin:0;padding:0;">${message}</div>
           ${subtextRow}
           ${actionRow}
         </div>`;
