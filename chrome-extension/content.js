@@ -1470,11 +1470,17 @@
       " data-job-id="${job.id}" class="autoapply-job-item">
         ${job.status !== "pending"
           ? `<span style="font-size: 14px; flex-shrink: 0;">${getStatusIcon(job.status)}</span>`
-          : `<input type="checkbox" ${selectedJobIds.has(job.id) ? "checked" : ""} style="
-              width: 20px; height: 20px; accent-color: #4F46E5; cursor: pointer; flex-shrink: 0;
-              border-radius: 4px; border: 2px solid ${selectedJobIds.has(job.id) ? "#4F46E5" : "#C7D2FE"};
-              ${isApplying ? "opacity: 0.5;" : ""}
-            " ${isApplying ? "disabled" : ""} />`
+          : `<div style="
+                width: 18px; height: 18px; flex-shrink: 0; border-radius: 4px;
+                border: 2px solid ${selectedJobIds.has(job.id) ? "#4F46E5" : "#C7D2FE"};
+                background: ${selectedJobIds.has(job.id) ? "#4F46E5" : "#fff"};
+                display: flex; align-items: center; justify-content: center;
+                transition: background 0.15s, border-color 0.15s;
+                ${isApplying ? "opacity: 0.5;" : ""}
+              ">${selectedJobIds.has(job.id)
+                ? `<svg width="11" height="9" viewBox="0 0 11 9" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1 4.5L3.8 7.5L10 1.5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+                : ""
+              }</div>`
         }
         <div style="flex: 1; min-width: 0;">
           <p style="margin: 0; font-size: 12px; font-weight: 500; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
