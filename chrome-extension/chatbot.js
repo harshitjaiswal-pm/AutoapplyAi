@@ -60,7 +60,7 @@
         border-radius: 16px !important;
         box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08) !important;
         z-index: 2147483641 !important;
-        display: flex !important; flex-direction: column !important;
+        flex-direction: column !important;
         overflow: hidden !important;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif !important;
         font-size: 13px !important; line-height: 1.5 !important; color: #111827 !important;
@@ -292,7 +292,7 @@
     if (document.getElementById(PANEL_ID)) return;
     const panel = document.createElement("div");
     panel.id = PANEL_ID;
-    panel.style.display = "none";
+    panel.style.setProperty("display", "none", "important");
     panel.innerHTML = `
       <div class="aa-chat-header">
         <div class="aa-chat-header-dot"></div>
@@ -373,7 +373,7 @@
     isOpen = true;
     const panel = document.getElementById(PANEL_ID);
     if (panel) {
-      panel.style.display = "flex";
+      panel.style.setProperty("display", "flex", "important");
       panel.style.flexDirection = "column";
       renderMessages();
       setTimeout(() => document.getElementById("aa-chat-input")?.focus(), 80);
@@ -383,7 +383,7 @@
   function closePanel() {
     isOpen = false;
     const panel = document.getElementById(PANEL_ID);
-    if (panel) panel.style.display = "none";
+    if (panel) panel.style.setProperty("display", "none", "important");
     exitInspectMode();
   }
 
