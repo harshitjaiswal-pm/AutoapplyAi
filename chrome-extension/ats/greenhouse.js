@@ -337,6 +337,27 @@
       return true;
     }
 
+    // Fallback 2: company-hosted page with embedded Greenhouse iframe
+    // Pattern: company.com/careers?gh_jid=12345 + <script src="boards.greenhouse.io/embed/job_board/js?for=co">
+    // + <iframe id="grnhse_iframe">
+    const ghIframe = document.getElementById('grnhse_iframe');
+    const ghJid = new URLSearchParams(window.location.search).get('gh_jid');
+    if (ghIframe && ghJid) {
+      // Extract company slug from the embed script tag
+      const embedScript = document.querySelector('script[src*="boards.greenhouse.io/embed/job_board/js"]');
+      const forMatch = embedScript?.src?.match(/[?&]for=([^&]+)/);
+      const company = forMatch?.[1];
+      if (company) {
+        const appUrl = `https://boards.greenhouse.io/${company}/jobs/${ghJid}/application`;
+        console.log("AutoApply: Embedded GH iframe detected — navigating to:", appUrl);
+        window.location.href = appUrl;
+        return true;
+      }
+      // Last resort: try scrolling to the iframe and let the user see it
+      ghIframe.scrollIntoView({ behavior: 'smooth' });
+      console.log("AutoApply: GH iframe found but company slug unknown — showing iframe");
+    }
+
     return false;
   }
 
