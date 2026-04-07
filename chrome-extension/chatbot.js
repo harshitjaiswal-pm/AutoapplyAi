@@ -35,19 +35,20 @@
       #${BTN_ID} {
         position: fixed;
         bottom: 24px;
-        right: 24px;
+        left: 24px;
         width: 48px;
         height: 48px;
         border-radius: 50%;
         background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
         border: none;
         cursor: pointer;
-        z-index: 2147483646;
+        z-index: 2147483640;
         box-shadow: 0 4px 20px rgba(79,70,229,0.4);
         display: flex;
         align-items: center;
         justify-content: center;
         transition: transform 0.15s, box-shadow 0.15s;
+        pointer-events: auto;
       }
       #${BTN_ID}:hover {
         transform: scale(1.08);
@@ -61,14 +62,14 @@
       #${PANEL_ID} {
         position: fixed;
         bottom: 84px;
-        right: 24px;
+        left: 24px;
         width: 360px;
         max-height: 520px;
         min-height: 320px;
         background: #fff;
         border-radius: 16px;
         box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
-        z-index: 2147483647;
+        z-index: 2147483641;
         display: flex;
         flex-direction: column;
         overflow: hidden;
