@@ -1594,10 +1594,24 @@
       const label = ownerDoc.querySelector(`label[for="${id}"]`);
       if (label) return label.textContent?.trim() || "";
     }
-    const container = element.closest("div, fieldset, li");
-    if (container) {
-      const label = container.querySelector("label");
-      if (label) return label.textContent?.trim() || "";
+    // Walk up to 6 ancestors looking for a label-like element.
+    // Checks label, then h3/h4/p/strong for ATS systems (Breezy HR) that use
+    // heading elements instead of <label> to caption their custom questions.
+    let node = element.parentElement;
+    for (let i = 0; i < 6; i++) {
+      if (!node) break;
+      const lbl = node.querySelector("label");
+      if (lbl) return lbl.textContent?.trim() || "";
+      // Breezy HR pattern: question text is in an <h3> sibling of dropdown-container
+      const heading = node.querySelector("h3, h4, h5, p, strong");
+      if (heading) {
+        const text = heading.textContent?.trim() || "";
+        // Sanity: must look like a question/label (< 200 chars, not a block of options text)
+        if (text && text.length < 200) return text;
+      }
+      // Stop traversing once we hit a known question-wrapper boundary
+      if (node.matches?.("li, fieldset, form, section")) break;
+      node = node.parentElement;
     }
     return element.getAttribute("aria-label") || element.placeholder || "";
   }
