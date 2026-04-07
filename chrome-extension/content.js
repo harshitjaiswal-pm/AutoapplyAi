@@ -256,18 +256,22 @@
       // Look for links that point directly to an external ATS or to LinkedIn's apply flow
       let applyUrl = null;
       const atsPatterns = ["greenhouse.io", "lever.co", "workday", "ashbyhq.com", "icims.com",
-        "smartrecruiters.com", "jobvite.com", "successfactors", "taleo.net", "breezy.hr"];
+        "smartrecruiters.com", "jobvite.com", "successfactors", "taleo.net", "breezy.hr",
+        "bamboohr.com", "recruitee.com", "workable.com", "personio.com", "rippling.com",
+        "gusto.com/careers", "jazz.co", "applytojob.com", "teamtailor.com", "pinpointhq.com"];
       for (const a of doc.querySelectorAll("a[href]")) {
         const href = a.href || "";
         if (atsPatterns.some((p) => href.includes(p))) { applyUrl = href; break; }
       }
-      // Fallback: look for "Apply" link text pointing outside linkedin
+      // Fallback: look for "Apply" link text pointing outside LinkedIn entirely
+      // Must exclude ALL linkedin.com URLs — not just /login — to avoid opening
+      // LinkedIn's own apply-redirect page which just bounces back to the jobs list.
       if (!applyUrl) {
         for (const a of doc.querySelectorAll("a[href]")) {
           const text = (a.textContent || "").trim().toLowerCase();
           const href = a.href || "";
           if ((text === "apply" || text === "apply now") &&
-              href && !href.includes("linkedin.com/login") && href.startsWith("http")) {
+              href && href.startsWith("http") && !href.includes("linkedin.com")) {
             applyUrl = href;
             break;
           }
