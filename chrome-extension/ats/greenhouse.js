@@ -436,7 +436,8 @@
     // Greenhouse uses React Select v5. Dropdowns are filled via main world,
     // then text fields are re-filled after React re-renders (faster timing).
     const dropdownFields = [
-      { labels: ["pronouns"],                                                  value: user.pronouns || "He/Him" },
+      // [AutoQA fix 2026-04-07] Removed hardcoded "He/Him" default — only fill pronouns if user has set them explicitly
+      { labels: ["pronouns"],                                                  value: user.pronouns },
       { labels: ["sponsorship", "immigration", "require immigration"],         value: user.requireSponsorship === "No" ? "No" : (user.requireSponsorship || "No") },
       { labels: ["state", "province", "reside in"],                           value: user.province || "Ontario" },
       { labels: ["how did you", "hear about", "learn about", "first learn"],  value: user.howDidYouHear || "LinkedIn" },

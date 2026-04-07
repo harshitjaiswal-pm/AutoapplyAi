@@ -447,11 +447,15 @@
 
   async function attemptResumeUpload() {
     // Get the tailored resume PDF from storage
-    const stored = await chrome.storage.local.get(["tailoredResumePdf"]);
+    // [AutoQA fix 2026-04-07] Also read _aa_batchProgress to populate job context for DOWNLOAD_RESUME filename
+    const stored = await chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress"]);
+    const bp = stored._aa_batchProgress || {};
+    const jobCtx = { company: bp.company || "", jobTitle: bp.title || bp.jobTitle || "" };
+
     if (!stored.tailoredResumePdf) {
       LOG("No tailored resume PDF in storage — downloading instead");
       // Fall back to download
-      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: {} });
+      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobCtx });
       return;
     }
 
@@ -459,7 +463,7 @@
     const fileInput = document.querySelector('input[type="file"][name*="resume"], input[type="file"]');
     if (!fileInput) {
       LOG("No file input found for resume upload");
-      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: {} });
+      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobCtx });
       return;
     }
 

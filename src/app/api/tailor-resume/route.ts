@@ -76,8 +76,9 @@ export async function POST(request: NextRequest) {
       ],
     });
 
+    // [AutoQA fix 2026-04-07] Added optional chaining — content array could be empty if model returns no text block
     let responseText =
-      message.content[0].type === "text" ? message.content[0].text : "";
+      message.content?.[0]?.type === "text" ? message.content[0].text : "";
 
     // Strip markdown code fences if present (Haiku sometimes adds these)
     responseText = responseText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();

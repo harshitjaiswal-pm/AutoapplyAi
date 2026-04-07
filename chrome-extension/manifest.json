@@ -87,9 +87,7 @@
       "run_at": "document_idle",
       "exclude_matches": [
         "https://*.vercel.app/*",
-        "http://localhost:3000/*",
-        "chrome://*/*",
-        "chrome-extension://*/*"
+        "http://localhost:3000/*"
       ]
     }
   ],
