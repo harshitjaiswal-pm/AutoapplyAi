@@ -7,7 +7,20 @@ import Anthropic from "@anthropic-ai/sdk";
  * Conversational assistant for the Chrome Extension chatbot panel.
  * Receives a message + optional page context (URL, title, visible text, selected element)
  * and returns a helpful reply.
+ *
+ * CORS is open so Chrome extension content scripts can call this directly.
  */
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+// Handle CORS preflight
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
 
 const CHAT_SYSTEM = `You are a helpful job search assistant built into a browser extension called AutoApply.
 
@@ -52,14 +65,14 @@ export async function POST(request: NextRequest) {
     };
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return NextResponse.json({ error: "No messages provided." }, { status: 400 });
+      return NextResponse.json({ error: "No messages provided." }, { status: 400, headers: CORS_HEADERS });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey || apiKey === "your-api-key-here") {
       return NextResponse.json(
         { error: "Anthropic API key not configured." },
-        { status: 500 }
+        { status: 500, headers: CORS_HEADERS }
       );
     }
 
@@ -101,9 +114,9 @@ export async function POST(request: NextRequest) {
 
     const reply = response.content[0].type === "text" ? response.content[0].text : "";
 
-    return NextResponse.json({ reply });
+    return NextResponse.json({ reply }, { headers: CORS_HEADERS });
   } catch (err) {
     console.error("Chat API error:", err);
-    return NextResponse.json({ error: "Failed to get a response. Try again." }, { status: 500 });
+    return NextResponse.json({ error: "Failed to get a response. Try again." }, { status: 500, headers: CORS_HEADERS });
   }
 }
