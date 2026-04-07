@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Link from "next/link";
+import { Providers } from "./providers";
+import { NavAuth } from "@/components/NavAuth";
 
 export const metadata: Metadata = {
   title: "AutoApply AI",
@@ -15,31 +17,35 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen bg-white">
-        {/* Nav */}
-        <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-xl border-b border-neutral-100">
-          <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="w-6 h-6 bg-indigo-600 rounded-md flex items-center justify-center">
-                <span className="text-white text-xs font-bold">A</span>
+        <Providers>
+          {/* Nav */}
+          <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-xl border-b border-neutral-100">
+            <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+              <Link href="/" className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-indigo-600 rounded-md flex items-center justify-center">
+                  <span className="text-white text-xs font-bold">A</span>
+                </div>
+                <span className="text-sm font-semibold text-neutral-900 tracking-tight">
+                  AutoApply
+                </span>
+              </Link>
+
+              <div className="flex items-center gap-1">
+                <NavLink href="/">Home</NavLink>
+                <NavLink href="/tailor">Tailor</NavLink>
+                <NavLink href="/pipeline">Pipeline</NavLink>
+                <NavLink href="/dashboard">Dashboard</NavLink>
               </div>
-              <span className="text-sm font-semibold text-neutral-900 tracking-tight">
-                AutoApply
-              </span>
-            </Link>
 
-            <div className="flex items-center gap-1">
-              <NavLink href="/">Home</NavLink>
-              <NavLink href="/tailor">Tailor</NavLink>
-              <NavLink href="/pipeline">Pipeline</NavLink>
-              <NavLink href="/dashboard">Dashboard</NavLink>
+              <NavAuth />
             </div>
-          </div>
-        </nav>
+          </nav>
 
-        {/* Spacer for fixed nav */}
-        <div className="h-14" />
+          {/* Spacer for fixed nav */}
+          <div className="h-14" />
 
-        <main className="max-w-6xl mx-auto px-6">{children}</main>
+          <main className="max-w-6xl mx-auto px-6">{children}</main>
+        </Providers>
       </body>
     </html>
   );
