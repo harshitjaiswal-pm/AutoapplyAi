@@ -422,6 +422,23 @@
     const detailBefore = document.querySelector(detailSelector);
     const beforeSnapshot = (detailBefore?.innerText || "").slice(0, 500);
 
+    // If the detail panel already shows this job, skip the click entirely.
+    // Re-clicking an already-selected job card can trigger full-page navigation
+    // on some LinkedIn job types (e.g. promoted Amazon listings) which kills
+    // the content script before the confirmation modal can appear.
+    const beforeLower = beforeSnapshot.toLowerCase();
+    const titleFirst20already = (job.title || "").toLowerCase().substring(0, 20);
+    const companyFirst15already = (job.company || "").toLowerCase().substring(0, 15);
+    const alreadyLoaded =
+      (titleFirst20already.length >= 4 && beforeLower.includes(titleFirst20already)) ||
+      (companyFirst15already.length >= 3 && beforeLower.includes(companyFirst15already));
+    if (alreadyLoaded) {
+      console.log(`AutoApply: Job "${job.title}" already in detail panel — skipping click`);
+      try { AALog && AALog.nav("linkedin.clickCard.alreadyLoaded", { title: job.title }); } catch(_){}
+      await new Promise((r) => setTimeout(r, 400));
+      return true;
+    }
+
     // Click the title anchor inside the card — LinkedIn's SPA navigation is
     // only triggered by the <a> tag, not the outer <li> container.
     const titleAnchor = card.querySelector('a.job-card-container__link')
@@ -968,6 +985,8 @@
         break;
       }
 
+      if (!isApplying) break; // Stop was clicked externally (panel button) while modal was open
+
       if (decision === "skip") {
         updateJobStatus(job.id, "skipped");
         skippedCount++;
@@ -1004,7 +1023,10 @@
       if (fetchedApplyUrl) {
         // Open the external ATS URL directly — no need to click the LinkedIn Apply button
         try { AALog && AALog.nav("linkedin.apply.fetchedUrl", { jobId: job.id, url: fetchedApplyUrl.slice(0, 120) }); } catch(_){}
-        chrome.runtime.sendMessage({ type: "OPEN_ATS_TAB", url: fetchedApplyUrl });
+        const openRes = await new Promise(resolve =>
+          chrome.runtime.sendMessage({ type: "OPEN_ATS_TAB", url: fetchedApplyUrl }, resolve)
+        );
+        if (openRes?.tabId) job.atsTabId = openRes.tabId;
         applyType = "external";
       } else {
         // Re-click the job card to make sure the correct detail panel is loaded.
@@ -1019,11 +1041,19 @@
         try { AALog && AALog.nav("linkedin.apply.result", { jobId: job.id, applyType }); } catch(_){}
       }
 
+      if (!isApplying) break; // Stop clicked while opening ATS
+
       if (applyType === "external") {
+        // Capture the ATS tab ID for the "Continue" button
+        const atsTabId = await new Promise((resolve) => {
+          chrome.storage.local.get(["_aa_lastAtsTabId"], (r) => resolve(r._aa_lastAtsTabId || null));
+        });
+        job.atsTabId = atsTabId;
         updateJobStatus(job.id, "opened");
         appliedCount++;
         updateStatus(`Tab opened: ${job.title}. ATS auto-filling...`);
         await new Promise((r) => setTimeout(r, 3000));
+        if (!isApplying) break; // Stop clicked during post-open wait
       } else if (applyType === "easy_apply") {
         updateJobStatus(job.id, "skipped");
         skippedCount++;
@@ -1054,8 +1084,11 @@
     isApplying = false;
     skipRequested = false;
     hideProgressOverlay();
+    // Close the confirmation modal if it is currently blocking the UI
+    const modal = document.getElementById("autoapply-confirm-modal");
+    if (modal) modal.style.display = "none";
     chrome.storage.local.set({ _aa_batchProgress: { active: false } });
-    updateStatus("Stopped by user.", "error");
+    updateStatus("Stopped.", "error");
     updateActionBar();
   }
 
@@ -1243,7 +1276,7 @@
         position: fixed;
         bottom: 24px;
         right: 24px;
-        z-index: 10000;
+        z-index: 200000;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       ">
         <!-- Collapsed toggle button -->
@@ -1513,11 +1546,24 @@
             ${job.status === "skipped" ? "background: #F3F4F6; color: #6B7280;" : ""}
           ">${job.status}</span>` : ""}
           ${job.status === "applying" ? `<span id="job-timer-${job.id}" style="font-size:10px;font-weight:700;color:#92400E;font-variant-numeric:tabular-nums;">0:00</span>` : ""}
+          ${job.status === "opened" && job.atsTabId ? `<button class="aa-continue-btn" data-tab-id="${job.atsTabId}" style="
+            font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;
+            background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;cursor:pointer;margin-top:2px;
+          ">↗ Continue</button>` : ""}
         </div>
       </div>
     `
       )
       .join("");
+
+    // Wire "↗ Continue" buttons — work regardless of isApplying state
+    list.querySelectorAll(".aa-continue-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const tabId = parseInt(btn.getAttribute("data-tab-id"), 10);
+        if (tabId) chrome.runtime.sendMessage({ type: "FOCUS_TAB", tabId });
+      });
+    });
 
     if (!isApplying) {
       list.querySelectorAll(".autoapply-job-item").forEach((item) => {

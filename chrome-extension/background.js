@@ -164,9 +164,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "OPEN_ATS_TAB") {
     try { AALog && AALog.nav("bg.openAtsTab", { url: (message.url || "").slice(0, 120) }); } catch(_){}
     if (message.url) {
-      chrome.tabs.create({ url: message.url, active: false });
+      chrome.tabs.create({ url: message.url, active: false }, (tab) => {
+        // Store tab ID so content.js can track which tab belongs to this job
+        chrome.storage.local.set({ _aa_lastAtsTabId: tab.id });
+        sendResponse({ success: true, tabId: tab.id });
+      });
+      return true; // async sendResponse
     }
     sendResponse({ success: true });
+    return false;
+  }
+
+  /* ── From LinkedIn content.js: Focus an already-opened ATS tab ── */
+  if (message.type === "FOCUS_TAB") {
+    const tid = message.tabId;
+    if (tid) {
+      chrome.tabs.get(tid, (tab) => {
+        if (chrome.runtime.lastError || !tab) { sendResponse({ success: false }); return; }
+        chrome.tabs.update(tid, { active: true }, () => {
+          chrome.windows.update(tab.windowId, { focused: true });
+          sendResponse({ success: true });
+        });
+      });
+      return true; // async
+    }
+    sendResponse({ success: false });
     return false;
   }
 
@@ -863,6 +885,7 @@ async function injectATSScript(tabId, url) {
   }
   injectedTabIds.set(tabId, { url, timestamp: Date.now() });
   applyTabId = tabId; // Track which tab owns the active application
+  chrome.storage.local.set({ _aa_lastAtsTabId: tabId }); // Let content.js track per-job tab
   try { AALog && AALog.nav("bg.inject.start", { tabId, url }); } catch(_){}
   const urlLower = url.toLowerCase();
 

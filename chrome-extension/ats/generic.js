@@ -829,9 +829,11 @@
             : "Check Downloads for your tailored resume PDF. Upload it and complete any remaining fields." }
         );
       } else if (uploaded) {
-        showBanner("All done — review your answers and hit Submit when you're happy.", "success", { subtext: "Your tailored resume has been uploaded. You're in control of the final submit." });
+        // Use "user" (amber/persistent) not "success" so the banner never auto-dismisses
+        // while the user still needs to review + submit — and the ⬇ Resume PDF button stays visible.
+        showBanner("YOUR TURN — Resume uploaded, fields filled. Review and submit when ready.", "user", { subtext: "Your tailored resume has been uploaded automatically." });
       } else {
-        showBanner("Fields filled — one more step: upload your tailored resume PDF, then submit.", "user", { subtext: "Check your Downloads folder for the tailored PDF." });
+        showBanner("YOUR TURN — Fields filled. Download your resume PDF and upload it, then submit.", "user", { subtext: "Click ⬇ Resume PDF to download your tailored resume, then drag it into the upload field." });
       }
       chrome.storage.local.remove(["pendingApplication"]);
 
