@@ -128,8 +128,8 @@
   /* ═══════════════════ NAVIGATION ═══════════════════ */
 
   async function navigateToForm() {
-    // 1. Standard Workday Apply button
-    let applyBtn = document.querySelector('[data-automation-id="adventureButton"]');
+    // 1. Wait for the Workday Apply button to render (React SPA may be slow)
+    let applyBtn = await waitForElement('[data-automation-id="adventureButton"]', 6000);
 
     // 2. Generic fallback — any link/button whose visible text is "Apply" or similar
     if (!applyBtn) {
@@ -192,6 +192,9 @@
     const pageJD = scrapeWorkdayJD();
     const jobDescription = pageJD || pendingJob.jobDescription;
 
+    // Store pay range in batch progress so the banner can display it
+    storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
+
     // ── Fire tailoring immediately as a background Promise — don't block on it ──
     // Step 1 only needs base profile data; tailoring is needed for Step 2/3.
     const tailoringPromise = sendMessageWithTimeout({
@@ -205,7 +208,17 @@
       return null; // Graceful degradation — fill with base data
     });
 
-    if (step === 1) {
+    if (step === "login") {
+      // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
+      // Stop here and prompt the user to sign in, then click Retry.
+      showBanner(
+        "⚠️ Login required — create an account or sign in, then click Retry.",
+        "user",
+        { subtext: "Workday requires an account for this employer. AutoApply will resume after you sign in." }
+      );
+      return; // don't spin waiting for a step that will never arrive
+
+    } else if (step === 1) {
       // Fill Step 1 immediately with base profile — no tailoring needed here
       showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
       await fillStep1(null, pendingJob);
@@ -218,14 +231,16 @@
       }
 
       // Now we're on Step 2 — wait for tailoring (likely already done by now)
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — it will download automatically." });
+      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — a download button will appear when it's ready." });
       const tailoredData = await tailoringPromise;
+      showBanner("Resume tailored ✓ — uploading to application...", "ai", { subtext: "Filling your experience, questions and uploading your tailored PDF." });
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
     } else if (step === 2) {
       // Landed directly on Step 2 — wait for tailoring then upload
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — it will download automatically." });
+      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — a download button will appear when it's ready." });
       const tailoredData = await tailoringPromise;
+      showBanner("Resume tailored ✓ — uploading to application...", "ai", { subtext: "Filling your experience, questions and uploading your tailored PDF." });
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
     } else if (step === 3) {
@@ -273,16 +288,14 @@
       return;
     }
 
-    // Programmatic upload failed — download PDF and wait for manual upload
-    chrome.runtime.sendMessage({
-      type: "DOWNLOAD_RESUME",
-      job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
-    });
-
+    // Programmatic upload failed — show download button, then wait for manual upload
     showBanner(
-      "Your tailored resume is downloading now — upload it here to continue.",
+      "Tailored resume ready — download it, then upload it above.",
       "user",
-      { subtext: "📥 Check your Downloads folder · drag the PDF into the upload box above · AutoApply will take over automatically." }
+      {
+        subtext: "Drag the PDF into the upload box above · AutoApply will take over automatically.",
+        downloadBtn: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
+      }
     );
 
     LOG("Waiting for user to upload resume...");
@@ -312,8 +325,9 @@
    */
   async function continueFromStep2(tailoredData, pendingJob) {
     // ── Step 2 → Step 3 ───────────────────────────────────────────────────────
-    showBanner("Filling your experience details...", "ai", { subtext: "Advancing to Application Questions..." });
+    showBanner("Filling your experience details...", "ai", { subtext: "Filling work experience, education and optional fields..." });
     await fillStep2ExtraFields(tailoredData?.tailoredResult, pendingJob); // fill LinkedIn, website etc.
+    await fillMyExperiencePage(tailoredData?.tailoredResult, pendingJob); // fill Work Exp / Education / Certs
 
     const to3 = await advanceToStep(3);
     if (!to3) {
@@ -496,12 +510,26 @@
   async function advanceToStep(nextStep) {
     LOG(`Advancing to Step ${nextStep}...`);
 
+    // Honour pause — wait here until user clicks Resume
+    await waitForResume();
+
     // Check for pre-existing validation errors on the page
     if (hasPageErrors()) {
       const errorTexts = collectErrorTexts();
       LOG(`WARNING: validation errors on page before clicking Next:`, errorTexts.join(", "));
-      showBanner(`Form has validation errors — please fix the highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
-      return false;
+
+      // If the ONLY errors are address/postal code (profile data gaps), proceed anyway
+      // — Workday will catch these after the click and we show a clear message
+      const allAddressRelated = errorTexts.every(e =>
+        /address|postal|zip|postcode/i.test(e)
+      );
+      if (allAddressRelated && errorTexts.length > 0) {
+        LOG("Only address/postal errors — proceeding anyway and letting Workday validate");
+        // Fall through to Next click
+      } else if (errorTexts.length > 0) {
+        showBanner(`Form has validation errors — please fix the highlighted fields.`, "user", { subtext: errorTexts.join(" · ") });
+        return false;
+      }
     }
 
     // Find and click the Next button
@@ -545,6 +573,15 @@
   }
 
   function getCurrentStep() {
+    // Detect Workday "Create Account / Sign In" gating page BEFORE anything else
+    const h2Text = (document.querySelector('h2')?.textContent || "").toLowerCase();
+    if (
+      h2Text.includes("create account") || h2Text.includes("sign in") ||
+      document.querySelector('input[type="password"]')
+    ) {
+      return "login"; // special sentinel — handled in processCurrentStep
+    }
+
     // Try step indicator first
     const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
     if (activeStep) {
@@ -652,8 +689,36 @@
 
     const dropdownPromises = [];
 
-    // "How Did You Hear About Us?" — formField-source (hierarchical searchable)
-    dropdownPromises.push(selectSearchableDropdown("formField-source", "Job Sites", "LinkedIn", "Career Websites", "Other"));
+    // "How Did You Hear About Us?" — scan all formField containers by label first.
+    // Companies use different field IDs (formField-source, formField-hearAboutUs, etc.)
+    // and different option lists, so we search broadly then pick the best available option.
+    {
+      const hearKeywords = ["how did you hear", "how did you find out", "how did you learn", "source of hire", "referral source", "source of referral"];
+      let hearFieldId = null;
+      const allFf = document.querySelectorAll('[data-automation-id^="formField-"]');
+      for (const ff of allFf) {
+        const lbl = (ff.querySelector("label")?.textContent?.trim() || "").toLowerCase();
+        if (hearKeywords.some(kw => lbl.includes(kw))) {
+          hearFieldId = ff.getAttribute("data-automation-id");
+          LOG(`Found "How Did You Hear" field: ${hearFieldId} ("${lbl.substring(0,50)}")`);
+          break;
+        }
+      }
+      if (hearFieldId) {
+        const hearField = document.querySelector(`[data-automation-id="${hearFieldId}"]`);
+        if (hearField?.querySelector("input")) {
+          // Searchable field — try multiple terms in order of preference
+          // Terms cover common option names across companies
+          dropdownPromises.push(selectSearchableDropdown(hearFieldId,
+            "Job Board", "LinkedIn", "Social Media", "Career Website",
+            "Job Site", "Online", "Indeed", "Referral", "Other"));
+        } else if (hearField?.querySelector("button")) {
+          dropdownPromises.push(selectDropdown(hearFieldId, "LinkedIn"));
+        }
+      }
+      // If no "How Did You Hear" field found, skip — don't blindly call formField-source
+      // (some Workday instances use formField-source for phone country code)
+    }
 
     // Province/Territory
     if (province) {
@@ -662,11 +727,97 @@
 
     // Phone Device Type — default to Mobile
     dropdownPromises.push(selectDropdown("formField-phoneType", "Mobile"));
+    // Also try label-based fallback for non-standard phone type fields (e.g. BMO "Phone Device Type")
+    dropdownPromises.push(selectDropdownByLabel(["phone device type", "phone type", "device type"], "Mobile"));
 
     // Wait for all dropdowns — use allSettled so one failure never blocks the others
     await Promise.allSettled(dropdownPromises);
 
+    // ── Radio buttons on Step 1 (company-specific, e.g. "Have you worked for Airbus before?") ──
+    // Answer "No" for any "previously/already worked for" questions on the info page.
+    answerStep1RadioQuestions();
+
     LOG("Step 1 filled");
+  }
+
+  /**
+   * Answer Yes/No radio button questions that appear on the "My Information" step.
+   * Companies like Airbus add custom questions here (e.g. "Have you already worked for Airbus?").
+   */
+  function answerStep1RadioQuestions() {
+    const negativeKeywords = [
+      "already worked for", "previously worked for", "have you worked for",
+      "former employee", "currently employed by", "ever worked at",
+      "have you ever worked", "previously employed",
+      // "Have you worked with us before?" variants
+      "worked with us before", "have you worked here", "worked here before",
+      "previously worked with", "worked for this company", "worked for this organization",
+      "been employed by", "been an employee",
+    ];
+    const positiveKeywords = [
+      "eligible to work", "authorized to work", "right to work",
+      "legally eligible", "at least 18", "at least 16",
+    ];
+
+    // Find all radio groups on the page
+    const radioGroups = new Map();
+    for (const radio of document.querySelectorAll('input[type="radio"]')) {
+      const name = radio.name || radio.getAttribute("data-automation-id") || "";
+      if (!name) continue;
+      if (!radioGroups.has(name)) radioGroups.set(name, []);
+      radioGroups.get(name).push(radio);
+    }
+
+    for (const [name, radios] of radioGroups) {
+      // Find the label for this radio group
+      const groupLabel = (
+        radios[0]?.closest('fieldset')?.querySelector('legend')?.textContent ||
+        radios[0]?.closest('[data-automation-id]')?.querySelector('label')?.textContent ||
+        radios[0]?.closest('div[class]')?.previousElementSibling?.textContent ||
+        ""
+      ).trim().toLowerCase();
+
+      if (!groupLabel) continue;
+
+      const wantYes = positiveKeywords.some(kw => groupLabel.includes(kw));
+      const wantNo  = negativeKeywords.some(kw => groupLabel.includes(kw));
+      if (!wantYes && !wantNo) continue;
+
+      const target = wantYes ? "yes" : "no";
+      for (const radio of radios) {
+        const radioLabel = (
+          radio.closest("label")?.textContent ||
+          document.querySelector(`label[for="${radio.id}"]`)?.textContent ||
+          radio.value || ""
+        ).trim().toLowerCase();
+
+        if (radioLabel.includes(target)) {
+          if (!radio.checked) {
+            radio.click();
+            LOG(`Step 1 radio: "${groupLabel.substring(0, 50)}" → ${target}`);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * Select a Workday button-based dropdown by scanning label text on the page.
+   * Useful for non-standard automation IDs.
+   */
+  async function selectDropdownByLabel(labelKeywords, value) {
+    const fields = document.querySelectorAll('[data-automation-id^="formField-"]');
+    for (const field of fields) {
+      const labelEl = field.querySelector("label");
+      const labelText = (labelEl?.textContent?.trim() || "").toLowerCase();
+      if (!labelKeywords.some(kw => labelText.includes(kw.toLowerCase()))) continue;
+      const fieldId = field.getAttribute("data-automation-id");
+      if (fieldId) {
+        await selectDropdown(fieldId, value);
+        return;
+      }
+    }
   }
 
   /**
@@ -809,54 +960,703 @@
     LOG("Step 3 — Application Questions");
     await sleep(500);
 
-    if (!tailoredResult) {
-      LOG("No tailored result — skipping application questions");
-      return;
+    // Fill textareas (cover letter, why interested, etc.) — only needs tailored data
+    if (tailoredResult) {
+      const textareas = document.querySelectorAll("textarea");
+      for (const ta of textareas) {
+        if (ta.value?.trim()) continue; // Already filled
+
+        const label = getFieldLabel(ta).toLowerCase();
+
+        if (label.includes("cover") || label.includes("letter")) {
+          setWorkdayValue(ta, tailoredResult.coverLetter || "");
+        } else if (label.includes("why") || label.includes("interest") || label.includes("motivation")) {
+          setWorkdayValue(ta, tailoredResult.coverLetter || "");
+        } else if (label.includes("additional") || label.includes("anything else")) {
+          setWorkdayValue(ta, tailoredResult.additionalInfo || "");
+        }
+      }
+      await sleep(200);
+    } else {
+      LOG("No tailored result — skipping cover letter / textarea questions but continuing with standard HR dropdowns");
     }
 
-    // Fill textareas (cover letter, why interested, etc.)
-    const textareas = document.querySelectorAll("textarea");
-    for (const ta of textareas) {
-      if (ta.value?.trim()) continue; // Already filled
+    // ── DROPDOWN QUESTION FILLING ─────────────────────────────────────────────
+    // Maps label keyword patterns → preferred answer option text.
+    // selectDropdown() does a case-insensitive .includes() match on the option list,
+    // so "Yes" matches "Yes (I am authorized)", "No" matches "No, I do not", etc.
+    const dropdownAnswerRules = [
+      // ── Work authorization (Canada-specific) ──────────────────────────────────
+      // BMO / Canadian banks use long option text like "Canadian citizen, a Permanent Resident..."
+      // Try "Permanent" first (matches PR option); falls back to "citizen" for citizens.
+      // For generic Workday (US) where options are just "Yes" / "No", use "Yes".
+      { keywords: ["legally eligible to work in canada", "eligible to work in canada", "right to work in canada", "work in canada"], answer: "Permanent" },
+      // Generic work authorization (non-Canada Workday)
+      { keywords: ["authorized to work", "legally authorized", "work authorization", "eligible to work", "right to work", "authorization to work"], answer: "Yes" },
 
-      const label = getFieldLabel(ta).toLowerCase();
+      // ── Canadian identity / compliance (BMO, TD, RBC, Scotiabank, CIBC etc.) ──
+      { keywords: ["valid social insurance number", "social insurance number (sin)", "social insurance number"], answer: "Yes" },
+      { keywords: ["at least 16 years of age", "16 years of age", "minimum age"], answer: "Yes" },
+      // Outside activities / conflicts of interest
+      { keywords: ["outside activities", "outside business activities", "volunteer activities, employment", "outside employment", "business activities"], answer: "No" },
+      // Internal audit / KPMG / Big4 affiliation
+      { keywords: ["kpmg", "corporate auditor", "pwc", "deloitte", "ernst & young", "ey ", "big 4", "public accounting firm"], answer: "No" },
+      // Current employer use of Workday
+      { keywords: ["use or work on the workday system", "workday system", "use workday", "work on workday", "current job, do you use"], answer: "No" },
+      // Previously worked at Workday — No
+      { keywords: ["previously worked for or are you currently working for workday", "former workday", "workday as an employee or contractor"], answer: "No" },
 
-      if (label.includes("cover") || label.includes("letter")) {
-        setWorkdayValue(ta, tailoredResult.coverLetter || "");
-      } else if (label.includes("why") || label.includes("interest") || label.includes("motivation")) {
-        setWorkdayValue(ta, tailoredResult.coverLetter || "");
-      } else if (label.includes("additional") || label.includes("anything else")) {
-        setWorkdayValue(ta, tailoredResult.additionalInfo || "");
+      // ── Visa / immigration sponsorship — always No ────────────────────────────
+      { keywords: ["sponsorship", "immigration filing", "visa sponsorship", "require any immigration", "work permit sponsorship", "permanent residency filing"], answer: "No" },
+
+      // ── Relocation ────────────────────────────────────────────────────────────
+      { keywords: ["consider relocating", "willing to relocate", "open to relocation", "relocation"], answer: "I am local" },
+
+      // ── Non-compete / non-solicitation ────────────────────────────────────────
+      { keywords: ["non-compete", "non-solicitation", "noncompete", "competitive restrictions", "restrictive covenant"], answer: "No" },
+
+      // ── Years of experience ───────────────────────────────────────────────────
+      { keywords: ["years of experience", "experience level", "years of relevant"], answer: tailoredResult?.yearsOfExperience || "5" },
+
+      // ── Diversity & inclusion (voluntary — prefer "Prefer not to answer") ─────
+      { keywords: ["gender identity", "gender identit"], answer: "Prefer not to answer" },
+      { keywords: ["sexual orientation"], answer: "Prefer not to answer" },
+      { keywords: ["visible minority", "racial minority", "racialized"], answer: "Prefer not to answer" },
+      { keywords: ["indigenous", "aboriginal", "first nations", "inuit", "métis", "metis"], answer: "Prefer not to answer" },
+      { keywords: ["disability", "require accommodation", "accommodation request", "person with a disability"], answer: "Prefer not to answer" },
+      // Gender (broad match — must come AFTER more specific "gender identity")
+      { keywords: ["what is your gender", "gender?"], answer: "Prefer not to answer" },
+
+      // ── Canadian military ─────────────────────────────────────────────────────
+      { keywords: ["canadian military", "military service", "armed forces", "veteran status"], answer: "No" },
+    ];
+
+    const formFields = document.querySelectorAll('[data-automation-id^="formField-"]');
+    const dropdownPromises = [];
+
+    for (const field of formFields) {
+      const labelEl = field.querySelector("label");
+      const label = (labelEl?.textContent?.trim() || "").toLowerCase();
+      if (!label) continue;
+
+      // Only target button-based dropdowns (Workday custom selects)
+      const btn = field.querySelector("button");
+      if (!btn) continue;
+
+      // Skip if already has a value (not showing "Select One" / "Select")
+      const currentText = (btn.textContent?.trim() || "").toLowerCase();
+      if (currentText && !currentText.includes("select")) {
+        LOG(`Dropdown already filled: "${label.substring(0, 50)}" = "${currentText.substring(0, 30)}"`);
+        continue;
+      }
+
+      const fieldId = field.getAttribute("data-automation-id");
+
+      // Find matching rule
+      let matched = false;
+      for (const rule of dropdownAnswerRules) {
+        if (rule.keywords.some(kw => label.includes(kw.toLowerCase()))) {
+          LOG(`Matched dropdown: "${label.substring(0, 60)}" → "${rule.answer}"`);
+          dropdownPromises.push(selectDropdown(fieldId, rule.answer));
+          matched = true;
+          break;
+        }
+      }
+
+      if (!matched) {
+        LOG(`Unmatched dropdown question: "${label.substring(0, 80)}" — skipping`);
       }
     }
 
-    await sleep(200);
-
-    // PARALLEL YES/NO QUESTION ANSWERING
-    const yesNoPromises = [
+    // Also handle radio-button style Yes/No questions (some Workday variants use these)
+    const radioPromises = [
       answerYesNoQuestion("authorized to work", true),
       answerYesNoQuestion("legally authorized", true),
       answerYesNoQuestion("require sponsorship", false),
       answerYesNoQuestion("willing to relocate", true),
+      answerYesNoQuestion("workday system", false),
+      answerYesNoQuestion("immigration", false),
+      answerYesNoQuestion("visa sponsorship", false),
+      answerYesNoQuestion("non-compete", false),
+      answerYesNoQuestion("non-solicitation", false),
+      answerYesNoQuestion("previously worked for", false),
+      answerYesNoQuestion("worked with us before", false),
+      answerYesNoQuestion("worked here before", false),
+      answerYesNoQuestion("been employed by", false),
+      answerYesNoQuestion("have you worked with us", false),
     ];
 
-    await Promise.all(yesNoPromises);
+    await Promise.allSettled([...dropdownPromises, ...radioPromises]);
 
-    // Handle dropdown questions
-    const formFields = document.querySelectorAll('[data-automation-id^="formField-"]');
-    for (const field of formFields) {
-      const label = field.querySelector("label")?.textContent?.toLowerCase() || "";
-      const btn = field.querySelector("button[aria-haspopup]");
-
-      if (btn && !btn.textContent?.includes("Select")) continue; // Already has a selection
-
-      // Common dropdown questions
-      if (label.includes("years of experience") || label.includes("experience level")) {
-        await selectDropdown(field.getAttribute("data-automation-id"), "5");
-      }
+    // ── Compensation / salary text inputs ─────────────────────────────────────
+    // Some Workday instances render compensation as a plain text field rather than a dropdown.
+    const profile = await chrome.storage.local.get(["userProfile", "parsedResume"]);
+    const user = profile.userProfile || {};
+    const maxPay = extractMaxPayFromJD(job?.jobDescription) || user.salaryExpectation || user.compensation || "";
+    if (maxPay) {
+      const compLabels = ["compensation", "salary expectation", "desired salary", "expected salary", "pay expectation", "base salary"];
+      fillByLabelText(compLabels, maxPay);
     }
 
     LOG("Step 3 filled");
+  }
+
+  /** Extract max base pay from a JD string. Returns integer string or null. */
+  function extractMaxPayFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, "");
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      if (val >= 30000 && val <= 2000000) amounts.push(val);
+    }
+    if (amounts.length === 0) return null;
+    return String(Math.round(Math.max(...amounts)));
+  }
+
+  /**
+   * Extract pay range from a JD string as a formatted label, e.g. "$120K–$190K".
+   * Returns null if no salary found.
+   */
+  function extractPayRangeFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, "");
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      if (val >= 30000 && val <= 2000000) amounts.push(val);
+    }
+    if (amounts.length === 0) return null;
+    const fmt = n => n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
+    const min = Math.min(...amounts);
+    const max = Math.max(...amounts);
+    return min === max ? fmt(max) : `${fmt(min)}–${fmt(max)}`;
+  }
+
+  /** Store salary range into _aa_batchProgress so showBanner can display it. */
+  function storeSalaryRangeInProgress(salaryRange) {
+    if (!salaryRange) return;
+    chrome.storage.local.get(["_aa_batchProgress"], ({ _aa_batchProgress: bp }) => {
+      if (bp) chrome.storage.local.set({ _aa_batchProgress: { ...bp, salaryRange } });
+    });
+  }
+
+  /* ═══════════════════ MY EXPERIENCE PAGE FILLING ═══════════════════ */
+
+  /**
+   * Fill Work Experience, Education, and Certification sections on Step 2.
+   * Called after resume upload is confirmed, before clicking Next.
+   */
+  async function fillMyExperiencePage(tailoredResult, pendingJob) {
+    const stored = await chrome.storage.local.get(["parsedResume", "userProfile"]);
+    const resume = stored.parsedResume || {};
+    const workExp = resume.workExperience || [];
+    const education = resume.education || [];
+
+    LOG(`fillMyExperiencePage: ${workExp.length} work entries, ${education.length} education entries`);
+
+    if (workExp.length > 0) await fillWorkExperienceEntries(workExp);
+    if (education.length > 0) await fillEducationEntries(education);
+  }
+
+  /**
+   * Find the "Add" or "Add Another" button for a named section (Work Experience / Education).
+   * Searches for a button near a heading that contains the section name.
+   */
+  function findSectionAddButton(sectionKeyword, preferAnother = false) {
+    // Find all section headings that mention the keyword
+    const headings = Array.from(document.querySelectorAll('h2, h3, h4, legend, p, span, div[class*="title"], div[class*="header"]'))
+      .filter(el => {
+        const t = (el.textContent || "").trim().toLowerCase();
+        return t === sectionKeyword.toLowerCase() || (t.startsWith(sectionKeyword.toLowerCase()) && t.length < sectionKeyword.length + 5);
+      });
+
+    for (const heading of headings) {
+      // Walk up to a section container, then find buttons within it
+      let section = heading.parentElement;
+      for (let d = 0; d < 6 && section && section !== document.body; d++, section = section.parentElement) {
+        const buttons = Array.from(section.querySelectorAll("button"));
+        const addAnother = buttons.find(b => /add another/i.test(b.textContent));
+        const add = buttons.find(b => /^add$/i.test(b.textContent.trim()));
+        if (preferAnother && addAnother) return addAnother;
+        if (!preferAnother && add) return add;
+        if (addAnother || add) return addAnother || add;
+      }
+    }
+
+    // Fallback: find any "Add" button next to a section that matches the keyword
+    for (const btn of document.querySelectorAll("button")) {
+      const btnText = btn.textContent.trim().toLowerCase();
+      if (btnText !== "add" && !btnText.startsWith("add another")) continue;
+      // Check if a nearby heading mentions our keyword
+      let el = btn.parentElement;
+      for (let d = 0; d < 8 && el && el !== document.body; d++, el = el.parentElement) {
+        if ((el.textContent || "").toLowerCase().includes(sectionKeyword.toLowerCase())) {
+          if (preferAnother && /add another/i.test(btn.textContent)) return btn;
+          if (!preferAnother && /^add$/i.test(btn.textContent.trim())) return btn;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Fill Work Experience form blocks.
+   * Workday renders each entry as a named section ("Work Experience 1", etc.)
+   * with Job Title, Company, Location, From, To, Role Description fields.
+   * If the section starts empty (Airbus-style), clicks "Add" to create entries first.
+   */
+  async function fillWorkExperienceEntries(workExp) {
+    // Find work experience entry containers using multiple strategies
+    let containers = findExperienceContainers("work");
+    LOG(`Work experience: found ${containers.length} containers for ${workExp.length} entries`);
+
+    // If no containers found, section starts empty — click "Add" to create the first entry
+    if (containers.length === 0) {
+      const addBtn = findSectionAddButton("work experience");
+      if (addBtn) {
+        LOG("Clicking 'Add' to create first work experience entry");
+        addBtn.click();
+        await sleep(1500);
+        containers = findExperienceContainers("work");
+        LOG(`After clicking Add: found ${containers.length} containers`);
+      } else {
+        LOG("No 'Add' button found for Work Experience — skipping");
+        return;
+      }
+    }
+
+    for (let i = 0; i < workExp.length; i++) {
+      // For entries beyond the first, click "Add Another" to create a new block
+      if (i > 0) {
+        const addAnother = findSectionAddButton("work experience", true) ||
+                           findSectionAddButton("work experience", false);
+        if (addAnother) {
+          LOG(`Clicking 'Add Another' for WE entry ${i + 1}`);
+          addAnother.click();
+          await sleep(1500);
+          containers = findExperienceContainers("work");
+        } else {
+          LOG(`No 'Add Another' button for WE entry ${i + 1} — stopping at ${i} entries`);
+          break;
+        }
+      }
+
+      const container = containers[i];
+      if (!container) break;
+      const exp = workExp[i];
+      LOG(`Filling WE ${i + 1}: "${exp.title}" at "${exp.company}"`);
+
+      // Job Title — this was previously missing, causing "Job Title required" errors
+      await fillLabeledFieldInBlock(container, ["job title", "title", "position", "role"], exp.title);
+
+      // Company
+      await fillLabeledFieldInBlock(container, ["company", "employer", "organization"], exp.company);
+
+      // Location
+      if (exp.location) {
+        await fillLabeledFieldInBlock(container, ["location", "city"], exp.location);
+      }
+
+      // "I currently work here" checkbox
+      const isCurrent = !exp.endDate ||
+        /^(present|current|now|today)$/i.test(String(exp.endDate).trim());
+
+      if (isCurrent) {
+        const checkbox = findCurrentJobCheckbox(container);
+        if (checkbox && !checkbox.checked) {
+          checkbox.click();
+          await sleep(400);
+        }
+      }
+
+      // From date
+      const fromMMYYYY = parseToMMYYYY(exp.startDate);
+      if (fromMMYYYY) {
+        await fillDateFieldInBlock(container, ["from", "start date", "start"], fromMMYYYY);
+      }
+
+      // To date (skip if current job — Workday hides or disables it)
+      if (!isCurrent && exp.endDate) {
+        const toMMYYYY = parseToMMYYYY(exp.endDate);
+        if (toMMYYYY) {
+          await fillDateFieldInBlock(container, ["to", "end date", "end"], toMMYYYY);
+        }
+      }
+
+      // Role Description
+      const textarea = container.querySelector("textarea");
+      if (textarea && !textarea.value?.trim() && exp.description) {
+        setWorkdayValue(textarea, exp.description);
+        await sleep(100);
+      }
+
+      await sleep(300);
+    }
+  }
+
+  /**
+   * Fill Education form blocks.
+   * Handles both standard inputs and Airbus-style searchable autocomplete for School name.
+   * If section starts empty, clicks "Add" to create entries first.
+   */
+  async function fillEducationEntries(education) {
+    let containers = findExperienceContainers("education");
+    LOG(`Education: found ${containers.length} containers for ${education.length} entries`);
+
+    // If no containers found, try clicking "Add" (some Workday instances start empty)
+    if (containers.length === 0) {
+      const addBtn = findSectionAddButton("education");
+      if (addBtn) {
+        LOG("Clicking 'Add' to create first education entry");
+        addBtn.click();
+        await sleep(1500);
+        containers = findExperienceContainers("education");
+      }
+    }
+
+    for (let i = 0; i < education.length; i++) {
+      // For entries beyond the first, click "Add Another"
+      if (i > 0) {
+        const addAnother = findSectionAddButton("education", true) ||
+                           Array.from(document.querySelectorAll("button"))
+                             .find(b => /add another/i.test(b.textContent));
+        if (addAnother) {
+          LOG(`Clicking 'Add Another' for Education entry ${i + 1}`);
+          addAnother.click();
+          await sleep(1500);
+          containers = findExperienceContainers("education");
+        } else {
+          LOG(`No 'Add Another' for education entry ${i + 1} — stopping`);
+          break;
+        }
+      }
+
+      const container = containers[i];
+      if (!container) break;
+      const edu = education[i];
+      LOG(`Filling Education ${i + 1}: "${edu.degree}" at "${edu.school}"`);
+
+      // School / University — try standard fill first, then searchable autocomplete
+      const schoolFilled = await fillLabeledFieldInBlock(container, ["school", "institution", "university", "college", "school or university"], edu.school);
+      if (!schoolFilled) {
+        // Airbus-style: searchable autocomplete — type partial name, wait for suggestions, press Enter
+        await fillSearchableAutocomplete(container, ["school", "institution", "university", "college", "school or university"], edu.school);
+      }
+
+      // Degree — standard dropdown (Airbus uses values prefixed by country code, e.g. "CA - Bachelor")
+      await fillLabeledFieldInBlock(container, ["degree", "qualification", "degree level"], edu.degree);
+      // Try dropdown select by degree keyword
+      const degreeField = findFieldByLabelInContainer(container, ["degree", "qualification"]);
+      if (degreeField) {
+        const select = degreeField.querySelector("select") || container.querySelector("select");
+        if (select) {
+          fillSelectByKeyword(select, edu.degree);
+        } else {
+          // Button-based Workday dropdown for degree
+          const fieldAutoId = degreeField.getAttribute?.("data-automation-id");
+          if (fieldAutoId) await selectDropdown(fieldAutoId, edu.degree);
+        }
+      }
+
+      // Field of Study — also often a searchable autocomplete on Airbus
+      const fos = edu.fieldOfStudy || edu.major;
+      if (fos) {
+        const fosFilled = await fillLabeledFieldInBlock(container, ["field of study", "major", "area of study", "discipline"], fos);
+        if (!fosFilled) {
+          await fillSearchableAutocomplete(container, ["field of study", "major", "area of study"], fos);
+        }
+      }
+
+      if (edu.gpa) await fillLabeledFieldInBlock(container, ["gpa", "grade", "grade point"], edu.gpa);
+
+      const fromMMYYYY = parseToMMYYYY(edu.startDate);
+      if (fromMMYYYY) await fillDateFieldInBlock(container, ["from", "start date", "start"], fromMMYYYY);
+
+      const isCurrent = !edu.endDate || /^(present|current)$/i.test(String(edu.endDate).trim());
+      if (!isCurrent && edu.endDate) {
+        const toMMYYYY = parseToMMYYYY(edu.endDate);
+        if (toMMYYYY) await fillDateFieldInBlock(container, ["to", "end date", "end", "graduation"], toMMYYYY);
+      }
+
+      await sleep(300);
+    }
+  }
+
+  /**
+   * Fill a searchable autocomplete field (type text → wait for suggestion → Enter/click).
+   * Used for Airbus-style "School or University" and "Field of Study" fields.
+   */
+  async function fillSearchableAutocomplete(container, labelKeywords, value) {
+    if (!value) return;
+    const input = findInputByLabelInBlock(container, labelKeywords);
+    if (!input) return;
+
+    // Type the first ~30 chars to trigger autocomplete
+    const query = value.substring(0, 30);
+    setWorkdayValue(input, query);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(1200); // Wait for suggestions to load
+
+    // Try to click the first suggestion in the dropdown list
+    const listbox = document.querySelector('[role="listbox"], [data-automation-id*="promptOption"], ul[class*="suggest"]');
+    if (listbox) {
+      const firstOpt = listbox.querySelector('[role="option"], li');
+      if (firstOpt) {
+        firstOpt.click();
+        LOG(`Autocomplete: selected "${firstOpt.textContent?.trim().substring(0, 40)}" for "${labelKeywords[0]}"`);
+        await sleep(400);
+        return;
+      }
+    }
+
+    // No suggestions — type "Other" and press Enter (Airbus fallback)
+    setWorkdayValue(input, "Other");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(800);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
+    await sleep(400);
+    LOG(`Autocomplete: no suggestions found for "${value}", used "Other"`);
+  }
+
+  /**
+   * Find a form field container within a block by label keywords.
+   */
+  function findFieldByLabelInContainer(container, labelKeywords) {
+    const fields = container.querySelectorAll('[data-automation-id^="formField-"]');
+    for (const field of fields) {
+      const label = (field.querySelector("label")?.textContent || "").toLowerCase();
+      if (labelKeywords.some(kw => label.includes(kw.toLowerCase()))) return field;
+    }
+    return null;
+  }
+
+  /**
+   * Fill a <select> by matching option text against a keyword (case-insensitive).
+   */
+  function fillSelectByKeyword(select, keyword) {
+    if (!keyword) return;
+    const kw = keyword.toLowerCase();
+    for (const opt of select.options) {
+      if (opt.text.toLowerCase().includes(kw) || kw.includes(opt.text.toLowerCase().replace(/^[a-z]{2}\s*[-–]\s*/i, ""))) {
+        select.value = opt.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        LOG(`Select: chose "${opt.text}" for keyword "${keyword}"`);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Find all entry containers (Work Experience or Education blocks) on the page.
+   * Uses a cascade of strategies since Workday DOM structure varies.
+   */
+  function findExperienceContainers(type) {
+    const isWork = type === "work";
+    const sectionKeywords = isWork ? ["work experience", "employment", "job"] : ["education", "schooling", "academic"];
+    const entryPattern = isWork ? /work experience\s+\d+/i : /education\s+\d+/i;
+
+    // Strategy 1: Workday data-automation-id numbered entries
+    // e.g. [data-automation-id="workExperience-0"], [data-automation-id="education-0"]
+    const autoIdPrefix = isWork ? "workExperience" : "education";
+    const byId = Array.from(document.querySelectorAll(
+      `[data-automation-id^="${autoIdPrefix}-"], [data-automation-id*="WorkExperience--"], [data-automation-id*="Education--"]`
+    )).filter(el => !el.querySelector(`[data-automation-id^="${autoIdPrefix}-"]`)); // exclude nested matches
+
+    if (byId.length > 0) {
+      LOG(`findExperienceContainers(${type}): Strategy 1 found ${byId.length}`);
+      return byId;
+    }
+
+    // Strategy 2: Find by "Work Experience N" / "Education N" heading text
+    const headingContainers = [];
+    const allText = document.querySelectorAll('h2, h3, h4, legend, span, div');
+    for (const el of allText) {
+      const text = (el.textContent?.trim() || "");
+      if (!entryPattern.test(text)) continue;
+      if (text.length > 40) continue; // Skip broad containers that just happen to contain the phrase
+
+      // Walk up to find a block container (has multiple inputs)
+      let container = el.parentElement;
+      let depth = 0;
+      while (container && container !== document.body && depth < 8) {
+        const inputs = container.querySelectorAll('input:not([type="hidden"]), textarea');
+        if (inputs.length >= 2) break;
+        container = container.parentElement;
+        depth++;
+      }
+      if (container && container !== document.body && !headingContainers.includes(container)) {
+        headingContainers.push(container);
+      }
+    }
+
+    if (headingContainers.length > 0) {
+      LOG(`findExperienceContainers(${type}): Strategy 2 found ${headingContainers.length}`);
+      return headingContainers;
+    }
+
+    // Strategy 3: Find by "Job Title" / "School" label presence
+    // Each block has a unique "Job Title" or "School" label — find those inputs
+    // and collect their parent block containers
+    const anchorLabel = isWork ? ["job title", "title"] : ["school", "institution", "university"];
+    const anchorInputs = findAllLabeledInputs(anchorLabel);
+    const byAnchor = [];
+
+    for (const input of anchorInputs) {
+      let container = input.parentElement;
+      let depth = 0;
+      while (container && container !== document.body && depth < 10) {
+        // Look for a container that has "Company" / "School" label inside
+        const labels = Array.from(container.querySelectorAll("label"));
+        const hasAnchor = labels.some(l => {
+          const t = (l.textContent?.trim() || "").toLowerCase();
+          return isWork ? t.includes("company") || t.includes("employer") : t.includes("degree") || t.includes("school");
+        });
+        if (hasAnchor && container.querySelectorAll('input, textarea').length >= 3) break;
+        container = container.parentElement;
+        depth++;
+      }
+      if (container && container !== document.body && !byAnchor.includes(container)) {
+        byAnchor.push(container);
+      }
+    }
+
+    LOG(`findExperienceContainers(${type}): Strategy 3 found ${byAnchor.length}`);
+    return byAnchor;
+  }
+
+  /**
+   * Find all inputs whose label contains one of the given keywords, anywhere on the page.
+   */
+  function findAllLabeledInputs(labelKeywords) {
+    const result = [];
+    for (const label of document.querySelectorAll("label")) {
+      const text = (label.textContent?.trim() || "").toLowerCase();
+      if (!labelKeywords.some(kw => text.includes(kw.toLowerCase()))) continue;
+      const forId = label.getAttribute("for");
+      let input = forId ? document.getElementById(forId) : null;
+      if (!input) input = label.querySelector('input:not([type="hidden"]):not([type="file"])');
+      if (input) result.push(input);
+    }
+    return result;
+  }
+
+  /**
+   * Within a container block, find an input whose label contains one of the given keywords.
+   * Returns the input element or null.
+   */
+  function findInputByLabelInBlock(container, labelKeywords) {
+    for (const label of container.querySelectorAll("label")) {
+      const text = (label.textContent?.trim() || "").toLowerCase();
+      if (!labelKeywords.some(kw => text.includes(kw.toLowerCase()))) continue;
+      const forId = label.getAttribute("for");
+      let input = forId ? document.getElementById(forId) : null;
+      if (!input) input = label.closest('[data-automation-id]')?.querySelector('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+      if (!input) input = label.parentElement?.querySelector('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+      if (input) return input;
+    }
+    // Also try data-automation-id scan within container
+    for (const kw of labelKeywords) {
+      const el = container.querySelector(`[data-automation-id*="${kw}" i] input, [placeholder*="${kw}" i]`);
+      if (el) return el.tagName === "INPUT" ? el : el.querySelector('input');
+    }
+    return null;
+  }
+
+  /** Fill a labeled text field within a container block, if it's empty. */
+  async function fillLabeledFieldInBlock(container, labelKeywords, value) {
+    if (!value) return false;
+    const input = findInputByLabelInBlock(container, labelKeywords);
+    if (!input || input.value?.trim()) return false;
+    setWorkdayValue(input, String(value));
+    await sleep(80);
+    return true;
+  }
+
+  /**
+   * Fill a date field (MM/YYYY format) within a container block.
+   * Workday date fields are text inputs that accept "MM/YYYY".
+   */
+  async function fillDateFieldInBlock(container, labelKeywords, mmYYYY) {
+    if (!mmYYYY) return false;
+    const input = findInputByLabelInBlock(container, labelKeywords);
+    if (!input || input.value?.trim()) return false;
+
+    // Set value using setWorkdayValue
+    setWorkdayValue(input, mmYYYY);
+    await sleep(100);
+
+    // If Workday didn't accept it, try simulating keypresses digit-by-digit
+    if (!input.value?.trim()) {
+      input.focus();
+      for (const ch of mmYYYY.replace("/", "")) {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keypress", { key: ch, bubbles: true }));
+        input.value += ch;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, data: ch, inputType: "insertText" }));
+        input.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true }));
+        await sleep(30);
+      }
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+
+    return true;
+  }
+
+  /** Find the "I currently work here" checkbox within a work experience block. */
+  function findCurrentJobCheckbox(container) {
+    return Array.from(container.querySelectorAll('input[type="checkbox"]')).find(cb => {
+      const labelEl = cb.closest("label") || document.querySelector(`label[for="${cb.id}"]`);
+      const text = (labelEl?.textContent?.trim() || "").toLowerCase();
+      return text.includes("currently") || text.includes("present") || text.includes("still work");
+    });
+  }
+
+  /**
+   * Parse a date string to MM/YYYY format.
+   * Handles: ISO (2020-01), natural language (January 2020), year-only (2020).
+   * Returns null for "Present", "Current", or unparseable strings.
+   */
+  function parseToMMYYYY(dateStr) {
+    if (!dateStr) return null;
+    const d = String(dateStr).trim();
+    if (/^(present|current|now|today)$/i.test(d)) return null;
+
+    // ISO: 2020-01 or 2020-01-15
+    const iso = d.match(/^(\d{4})-(\d{2})/);
+    if (iso) return `${iso[2]}/${iso[1]}`;
+
+    // Year only: 2020
+    const yearOnly = d.match(/^(\d{4})$/);
+    if (yearOnly) return `01/${yearOnly[1]}`;
+
+    // Month Year: "January 2020", "Jan 2020", "jan 2020"
+    const months = { jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",
+                      jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12" };
+    const mY = d.match(/^([a-zA-Z]+)\.?\s+(\d{4})/);
+    if (mY) {
+      const mon = months[mY[1].substring(0, 3).toLowerCase()];
+      if (mon) return `${mon}/${mY[2]}`;
+    }
+
+    // Year Month: "2020 January"
+    const yM = d.match(/^(\d{4})\s+([a-zA-Z]+)/);
+    if (yM) {
+      const mon = months[yM[2].substring(0, 3).toLowerCase()];
+      if (mon) return `${mon}/${yM[1]}`;
+    }
+
+    // MM/YYYY already
+    if (/^\d{2}\/\d{4}$/.test(d)) return d;
+
+    return null;
   }
 
   /* ═══════════════════ INPUT HELPERS ═══════════════════ */
@@ -1214,9 +2014,19 @@
     // Get available options
     let options = document.querySelectorAll('[data-automation-id="promptOption"]');
 
+    /**
+     * Filter helper — excludes phone country code entries like "Canada (+1)"
+     * which appear in global promptOption lists when multiple dropdowns are open.
+     */
+    const filterOptions = (opts) => Array.from(opts).filter(o => {
+      const t = o.textContent?.trim() || "";
+      // Reject phone country code options (contain "(+digits)")
+      return !t.match(/\(\+\d/);
+    });
+
     // Try each search text in order
     for (const searchText of searchTexts) {
-      for (const opt of options) {
+      for (const opt of filterOptions(options)) {
         const text = opt.textContent?.trim() || "";
         if (text.toLowerCase().includes(searchText.toLowerCase())) {
           opt.click();
@@ -1224,8 +2034,8 @@
           await sleep(500);
 
           // Check if this opened a sub-menu (options changed)
-          const newOptions = document.querySelectorAll('[data-automation-id="promptOption"]');
-          if (newOptions.length > 0 && newOptions[0] !== options[0]) {
+          const newOptions = filterOptions(document.querySelectorAll('[data-automation-id="promptOption"]'));
+          if (newOptions.length > 0 && newOptions[0] !== filterOptions(options)[0]) {
             // Sub-menu opened — look for "Other" or first non-parent option
             for (const subOpt of newOptions) {
               const subText = subOpt.textContent?.trim() || "";
@@ -1250,19 +2060,28 @@
       }
     }
 
-    // Fallback: try typing to filter
-    setNativeValue(input, searchTexts[0] || "Other");
-    await sleep(500);
-
-    options = document.querySelectorAll('[data-automation-id="promptOption"]');
-    if (options.length > 0) {
-      options[0].click();
-      LOG(`Selected filtered option: "${options[0].textContent?.trim()}" for ${fieldAutomationId}`);
+    // Fallback: if any filtered options exist, pick the first non-phone one
+    const filteredOpts = filterOptions(document.querySelectorAll('[data-automation-id="promptOption"]'));
+    if (filteredOpts.length > 0) {
+      filteredOpts[0].click();
+      LOG(`Selected first available option: "${filteredOpts[0].textContent?.trim()}" for ${fieldAutomationId}`);
       await sleep(200);
       return true;
     }
 
-    // Close popup
+    // Last resort: type to filter
+    setNativeValue(input, searchTexts[0] || "Other");
+    await sleep(500);
+
+    const typedOpts = filterOptions(document.querySelectorAll('[data-automation-id="promptOption"]'));
+    if (typedOpts.length > 0) {
+      typedOpts[0].click();
+      LOG(`Selected typed-filter option: "${typedOpts[0].textContent?.trim()}" for ${fieldAutomationId}`);
+      await sleep(200);
+      return true;
+    }
+
+    // Close popup — nothing worked, don't corrupt other fields
     document.body.click();
     LOG(`Could not select option for ${fieldAutomationId}`);
     return false;
@@ -1330,7 +2149,8 @@
   function getFieldLabel(element) {
     const id = element.id;
     if (id) {
-      const label = document.querySelector(`label[for="${id}"]`);
+      const ownerDoc = element.ownerDocument || document;
+      const label = ownerDoc.querySelector(`label[for="${id}"]`);
       if (label) return label.textContent?.trim() || "";
     }
     const container = element.closest('[data-automation-id^="formField-"]') ||
@@ -1490,17 +2310,22 @@
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
-    chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumePdf"], (result) => {
       const bp = result._aa_batchProgress;
       const hasBatch = bp && bp.total > 0;
+      const hasPdf = !!result.tailoredResumePdf;
 
-      // ── Row 1: Batch counter + job title/company
+      // ── Row 1: Batch counter + job title/company/salary pills
       const batchTag = hasBatch
         ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
         : "";
-      const jobLabel = hasBatch && bp.title
-        ? `<span style="font-size:12px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bp.title}${bp.company ? " · " + bp.company : ""}</span>`
-        : "";
+      const pillStyle = `font-size:12px;opacity:0.9;background:rgba(255,255,255,0.15);border-radius:5px;padding:2px 8px;white-space:nowrap;`;
+      const companyTag = (hasBatch && bp.company)
+        ? `<span style="${pillStyle}">${bp.company}</span>` : "";
+      const roleTag = (hasBatch && bp.title)
+        ? `<span style="${pillStyle}">${bp.title}</span>` : "";
+      const salaryTag = (hasBatch && bp.salaryRange)
+        ? `<span style="${pillStyle}">💰 ${bp.salaryRange}</span>` : "";
 
       // ── Row 2: Progress bar (only when batch active)
       const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
@@ -1521,26 +2346,46 @@
         ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
         : "";
 
-      // ── Action buttons (error and user-turn states get quick actions)
+      // Resume download button — always shown when PDF is ready
+      const pdfBtnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;`;
+      const pdfBtn = hasPdf
+        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
+        : "";
+
+      // ── Action buttons
       const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
+      const pauseBtn = isAi
+        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.18);color:#fff;margin-left:auto;">⏸ Pause</button>`
+        : "";
+      const resumeBtn = opts.showResume
+        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.3);color:#fff;">▶ Resume</button>`
+        : "";
+
       let actionRow = "";
       if (type === "error") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
       } else if (type === "user") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          ${resumeBtn}
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
+      } else if (isAi) {
+        // AI state: show pause button + PDF download if available
+        const innerBtns = [pdfBtn, pauseBtn].filter(Boolean).join("");
+        actionRow = innerBtns ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">${innerBtns}</div>` : "";
       }
 
       banner.style.background = cfg.bg;
       banner.style.color = "#fff";
       banner.innerHTML = `
         <div style="padding:8px 18px 7px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${batchTag}${companyTag}${roleTag}${salaryTag}</div>
           ${progressBar}
           <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
           ${subtextRow}
@@ -1559,6 +2404,31 @@
         chrome.storage.local.remove(["pendingApplication"]);
         showBanner("Job skipped. You can close this tab.", "success");
       });
+      document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
+        chrome.storage.local.get(["_aa_batchProgress"], (r) => {
+          const bpData = r._aa_batchProgress;
+          chrome.runtime.sendMessage({
+            type: "DOWNLOAD_RESUME",
+            job: { company: bpData?.company || opts.downloadBtn?.company || "Company",
+                   jobTitle: bpData?.title  || opts.downloadBtn?.jobTitle || "Resume" },
+          });
+          const btn = document.getElementById("aa-btn-download-resume");
+          if (btn) { btn.textContent = "⬇️ Download again"; btn.disabled = false; }
+        });
+      });
+      document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
+        LOG("Paused by user");
+        chrome.storage.local.set({ _aa_paused: true });
+        showBanner("⏸ Paused — click Resume when ready.", "user", {
+          subtext: "AutoApply will continue from where it left off.",
+          showResume: true,
+        });
+      });
+      document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
+        LOG("Resumed by user");
+        chrome.storage.local.set({ _aa_paused: false });
+        showBanner("Resuming...", "ai", { subtext: "Picking up where we left off." });
+      });
 
       // Start ticking after DOM is updated
       if (isAi && timerStart) {
@@ -1575,5 +2445,19 @@
 
     if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
     if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
+  }
+
+  /**
+   * Pause-aware delay: waits until _aa_paused is false before returning.
+   * Called before advancing steps so the user can pause mid-application.
+   */
+  async function waitForResume() {
+    while (true) {
+      const paused = await new Promise(resolve =>
+        chrome.storage.local.get(["_aa_paused"], r => resolve(r._aa_paused))
+      );
+      if (!paused) return;
+      await sleep(600);
+    }
   }
 })();

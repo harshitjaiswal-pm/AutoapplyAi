@@ -74,6 +74,8 @@
     }
 
     const pendingJob = stored.pendingApplication;
+    // Remove pendingApplication immediately so any re-injection (SW restart) exits early
+    chrome.storage.local.remove(["pendingApplication"]);
     console.log("AutoApply: Processing Greenhouse application for", pendingJob.jobTitle);
     showBanner("Preparing your application...", "ai");
 
@@ -101,32 +103,43 @@
       const pageJD = scrapeGreenhouseJD();
       const jobDescription = pageJD || pendingJob.jobDescription;
 
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "This may take 15–30 seconds." });
+      // Store pay range in batch progress so banner can display it
+      storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
 
-      // Request tailoring with timeout
-      const tailoredData = await sendMessageWithTimeout({
+      // ── STEP 1: Fill basic fields IMMEDIATELY — don't leave form empty ──
+      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+      await fillBasicFieldsOnly();
+
+      // ── STEP 2: Fire tailoring as a background Promise ──
+      showBanner("Tailoring your resume for this role...", "ai", {
+        subtext: "Basic info filled ✓ — personalising resume now...",
+      });
+      const tailoringPromise = sendMessageWithTimeout({
         type: "TAILOR_AND_FILL",
         job: { ...pendingJob, jobDescription },
-      }, 90000); // 90 second timeout for AI processing
+      }, 90000).catch(err => ({ error: err.message }));
+
+      // ── STEP 3: Wait for tailoring, then fill remaining fields ──
+      const tailoredData = await tailoringPromise;
 
       if (tailoredData?.error) {
         console.error("AutoApply: Tailoring error:", tailoredData.error);
-        showBanner("Tailoring had an issue — filling with base profile data.", "error", { subtext: tailoredData.error });
-        await fillBasicFieldsOnly();
+        showBanner("Tailoring had an issue — basic info already filled.", "error", { subtext: tailoredData.error });
+        showBanner("Review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
         return;
       }
 
       if (!tailoredData?.tailoredResult) {
-        showBanner("Tailoring returned no data — filling with base profile data.", "error");
-        await fillBasicFieldsOnly();
+        showBanner("Tailoring returned no data — basic info already filled.", "error");
+        showBanner("Review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
         return;
       }
 
-      showBanner("Filling application form...", "ai");
+      showBanner("Filling remaining fields with tailored content...", "ai");
       console.log("AutoApply: Got tailored result, filling Greenhouse form");
 
-      // Fill form fields
-      await fillGreenhouseForm(tailoredData.tailoredResult, pendingJob);
+      // Fill all fields (cover letter, dropdowns, custom Q&A) with tailored data
+      await fillGreenhouseForm(tailoredData.tailoredResult, pendingJob, jobDescription);
 
       // Attempt resume file upload
       await attemptResumeUpload();
@@ -162,6 +175,7 @@
       console.error("AutoApply: Greenhouse error", err);
       showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
       await fillBasicFieldsOnly();
+      showBanner("Basic info filled — review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
     }
   }
 
@@ -179,6 +193,52 @@
           resolve(response);
         }
       });
+    });
+  }
+
+  /**
+   * Extract the maximum base pay from a job description string.
+   * Handles: $120,000–$190,000 / $120K–$190K / up to $190K / USD 190,000/yr etc.
+   * Returns the max as a plain integer string (e.g. "190000"), or null if not found.
+   */
+  function extractMaxPayFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, ""); // strip commas: 190,000 → 190000
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000; // K suffix
+      if (val >= 30000 && val <= 2000000) amounts.push(val); // sanity-check salary range
+    }
+    if (amounts.length === 0) return null;
+    return String(Math.round(Math.max(...amounts)));
+  }
+
+  /** Formatted pay range for banner display, e.g. "$120K–$190K". */
+  function extractPayRangeFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, "");
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      if (val >= 30000 && val <= 2000000) amounts.push(val);
+    }
+    if (amounts.length === 0) return null;
+    const fmt = n => n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
+    const min = Math.min(...amounts);
+    const max = Math.max(...amounts);
+    return min === max ? fmt(max) : `${fmt(min)}–${fmt(max)}`;
+  }
+
+  function storeSalaryRangeInProgress(salaryRange) {
+    if (!salaryRange) return;
+    chrome.storage.local.get(["_aa_batchProgress"], ({ _aa_batchProgress: bp }) => {
+      if (bp) chrome.storage.local.set({ _aa_batchProgress: { ...bp, salaryRange } });
     });
   }
 
@@ -292,14 +352,14 @@
     fillAllFields(user, null);
   }
 
-  async function fillGreenhouseForm(tailoredResult, job) {
+  async function fillGreenhouseForm(tailoredResult, job, jobDescription) {
     const profile = await chrome.storage.local.get(["userProfile"]);
     const user = profile.userProfile || {};
     console.log("AutoApply: User profile keys:", Object.keys(user));
-    fillAllFields(user, tailoredResult);
+    fillAllFields(user, tailoredResult, jobDescription);
   }
 
-  function fillAllFields(user, tailoredResult) {
+  function fillAllFields(user, tailoredResult, jobDescription) {
     let filled = 0;
 
     // ── Basic fields (selector-based, most reliable for Greenhouse) ──
@@ -366,7 +426,7 @@
 
     // ── Free-text custom questions ──
     const customTextFields = [
-      { labels: ["compensation", "salary", "salary expectation", "compensation expectation"], value: user.salaryExpectation || user.compensation || "" },
+      { labels: ["compensation", "salary", "salary expectation", "compensation expectation", "desired salary", "expected salary", "pay expectation"], value: extractMaxPayFromJD(jobDescription) || user.salaryExpectation || user.compensation || "" },
       { labels: ["start date", "earliest start", "when can you start"],                       value: user.startDate || "2 weeks notice" },
     ];
     for (const { labels, value } of customTextFields) {
@@ -712,7 +772,8 @@
   function getFieldLabel(element) {
     const id = element.id;
     if (id) {
-      const label = document.querySelector(`label[for="${id}"]`);
+      const ownerDoc = element.ownerDocument || document;
+      const label = ownerDoc.querySelector(`label[for="${id}"]`);
       if (label) return label.textContent?.trim() || "";
     }
     const container = element.closest("div, fieldset, li, section");
@@ -759,16 +820,21 @@
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
-    chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumePdf"], (result) => {
       const bp = result._aa_batchProgress;
       const hasBatch = bp && bp.total > 0;
+      const hasPdf = !!result.tailoredResumePdf;
 
       const batchTag = hasBatch
         ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
         : "";
-      const jobLabel = hasBatch && bp.title
-        ? `<span style="font-size:12px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bp.title}${bp.company ? " · " + bp.company : ""}</span>`
-        : "";
+      const pillStyle = `font-size:12px;opacity:0.9;background:rgba(255,255,255,0.15);border-radius:5px;padding:2px 8px;white-space:nowrap;`;
+      const companyTag = (hasBatch && bp.company)
+        ? `<span style="${pillStyle}">${bp.company}</span>` : "";
+      const roleTag = (hasBatch && bp.title)
+        ? `<span style="${pillStyle}">${bp.title}</span>` : "";
+      const salaryTag = (hasBatch && bp.salaryRange)
+        ? `<span style="${pillStyle}">💰 ${bp.salaryRange}</span>` : "";
 
       const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
       const progressBar = hasBatch ? `
@@ -786,26 +852,41 @@
         ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
         : "";
 
-      // ── Action buttons (error and user-turn states get quick actions)
+      // Resume download button — always shown when PDF is ready
+      const pdfBtnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;`;
+      const pdfBtn = hasPdf
+        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
+        : "";
+
       const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
+      const pauseBtn = isAi
+        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.2);color:#fff;">⏸ Pause</button>`
+        : "";
+      const resumeBtn = opts.showResume
+        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.9);color:#B45309;">▶ Resume</button>`
+        : "";
       let actionRow = "";
       if (type === "error") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
       } else if (type === "user") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
+      } else if (isAi || resumeBtn || pdfBtn) {
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${pauseBtn}${resumeBtn}${pdfBtn}</div>`;
       }
 
       banner.style.background = cfg.bg;
       banner.style.color = "#fff";
       banner.innerHTML = `
         <div style="padding:8px 18px 7px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${batchTag}${companyTag}${roleTag}${salaryTag}</div>
           ${progressBar}
           <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
           ${subtextRow}
@@ -832,6 +913,25 @@
       document.getElementById("aa-btn-skip")?.addEventListener("click", () => {
         chrome.storage.local.remove(["pendingApplication"]);
         showBanner("Job skipped. You can close this tab.", "success");
+      });
+      document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
+        chrome.storage.local.get(["_aa_batchProgress"], (r) => {
+          const bpData = r._aa_batchProgress;
+          chrome.runtime.sendMessage({
+            type: "DOWNLOAD_RESUME",
+            job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
+          });
+          const btn = document.getElementById("aa-btn-download-resume");
+          if (btn) { btn.textContent = "⬇️ Download again"; btn.disabled = false; btn.style.opacity = "1"; }
+        });
+      });
+      document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
+        chrome.storage.local.set({ _aa_paused: true });
+        showBanner("⏸ Paused — click Resume when ready.", "user", { showResume: true });
+      });
+      document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
+        chrome.storage.local.set({ _aa_paused: false });
+        showBanner("Resuming...", "ai", { subtext: "Picking up where we left off..." });
       });
     });
 

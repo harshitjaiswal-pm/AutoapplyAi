@@ -245,6 +245,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
     <button class="tab-btn" data-tab="profile">Profile</button>
+    <button class="tab-btn" data-tab="logs">Logs</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -366,6 +367,49 @@
 
     <button class="btn" id="save-profile">Save Profile</button>
     <div class="save-feedback" id="save-feedback">Saved!</div>
+  </div>
+
+  <!-- Logs Tab -->
+  <div id="logs" class="tab-content dashboard" style="padding:16px;">
+    <div class="stat-row">
+      <span class="stat-label">Total log entries</span>
+      <span class="stat-value" id="log-count">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Errors</span>
+      <span class="stat-value" id="log-error-count" style="color:#DC2626;">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">API calls</span>
+      <span class="stat-value" id="log-api-count">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Form events</span>
+      <span class="stat-value" id="log-form-count">0</span>
+    </div>
+
+    <div id="log-preview" style="
+      margin-top: 12px;
+      max-height: 180px;
+      overflow-y: auto;
+      background: #0F172A;
+      color: #E2E8F0;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 10px;
+      padding: 8px;
+      border-radius: 6px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    ">No logs yet. Start an apply run to capture events.</div>
+
+    <div class="settings-section">
+      <button class="btn" id="log-copy">Copy JSON to clipboard</button>
+      <button class="btn btn-secondary" id="log-download">Download logs (.json)</button>
+      <button class="btn btn-secondary" id="log-download-md">Download report (.md)</button>
+      <button class="btn btn-secondary" id="log-refresh">Refresh</button>
+      <button class="btn btn-secondary" id="log-clear" style="color:#DC2626;">Clear logs</button>
+      <div class="save-feedback" id="log-feedback">Copied!</div>
+    </div>
   </div>
 </body>
 

@@ -9,7 +9,118 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initialize profile
   initProfile();
+
+  // Initialize logs
+  initLogs();
 });
+
+/* ─────────────── LOGS TAB ─────────────── */
+
+const LOG_STORAGE_KEY = "_aa_logs";
+
+function initLogs() {
+  document.getElementById("log-refresh").addEventListener("click", refreshLogs);
+  document.getElementById("log-copy").addEventListener("click", copyLogs);
+  document.getElementById("log-download").addEventListener("click", () => downloadLogs("json"));
+  document.getElementById("log-download-md").addEventListener("click", () => downloadLogs("markdown"));
+  document.getElementById("log-clear").addEventListener("click", () => {
+    if (!confirm("Clear all captured logs?")) return;
+    chrome.storage.local.set({ [LOG_STORAGE_KEY]: [] }, refreshLogs);
+  });
+
+  // Auto-refresh whenever the Logs tab becomes active
+  document.querySelector('[data-tab="logs"]').addEventListener("click", refreshLogs);
+  refreshLogs();
+}
+
+function getLogs(cb) {
+  chrome.storage.local.get([LOG_STORAGE_KEY], (result) => {
+    cb(Array.isArray(result[LOG_STORAGE_KEY]) ? result[LOG_STORAGE_KEY] : []);
+  });
+}
+
+function refreshLogs() {
+  getLogs((entries) => {
+    const total = entries.length;
+    const errors = entries.filter((e) => e.category === "ERROR").length;
+    const api = entries.filter((e) => e.category === "API").length;
+    const form = entries.filter((e) => e.category === "FORM").length;
+
+    document.getElementById("log-count").textContent = total;
+    document.getElementById("log-error-count").textContent = errors;
+    document.getElementById("log-api-count").textContent = api;
+    document.getElementById("log-form-count").textContent = form;
+
+    const preview = document.getElementById("log-preview");
+    if (total === 0) {
+      preview.textContent = "No logs yet. Start an apply run to capture events.";
+      return;
+    }
+    // Show the last 25 entries as a compact trace
+    const recent = entries.slice(-25);
+    preview.textContent = recent
+      .map((e) => {
+        const t = (e.ts || "").split("T")[1]?.replace("Z", "") || "";
+        return `[${t}] ${e.category.padEnd(6)} ${e.ctx} · ${e.stage}`;
+      })
+      .join("\n");
+  });
+}
+
+function copyLogs() {
+  getLogs((entries) => {
+    const json = JSON.stringify(entries, null, 2);
+    navigator.clipboard.writeText(json).then(() => {
+      const fb = document.getElementById("log-feedback");
+      fb.textContent = `Copied ${entries.length} entries!`;
+      fb.classList.add("show");
+      setTimeout(() => fb.classList.remove("show"), 2000);
+    }).catch((err) => {
+      alert("Clipboard copy failed: " + err.message + "\n\nFall back to Download instead.");
+    });
+  });
+}
+
+function downloadLogs(format) {
+  getLogs((entries) => {
+    let content, mime, ext;
+    if (format === "markdown") {
+      const lines = [
+        "# AutoApply debug log",
+        `Exported: ${new Date().toISOString()}`,
+        `Entries: ${entries.length}`,
+        "",
+      ];
+      for (const e of entries) {
+        lines.push(`## [${e.category}] ${e.stage}`);
+        lines.push(`- ts: ${e.ts}`);
+        lines.push(`- ctx: ${e.ctx}`);
+        if (e.url) lines.push(`- url: ${e.url}`);
+        lines.push("```json");
+        try { lines.push(JSON.stringify(e.data, null, 2)); } catch (_) { lines.push("[unserialisable]"); }
+        lines.push("```");
+        lines.push("");
+      }
+      content = lines.join("\n");
+      mime = "text/markdown";
+      ext = "md";
+    } else {
+      content = JSON.stringify(entries, null, 2);
+      mime = "application/json";
+      ext = "json";
+    }
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    chrome.downloads.download({
+      url,
+      filename: `autoapply-logs-${stamp}.${ext}`,
+      saveAs: true,
+    }, () => {
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    });
+  });
+}
 
 /* ─────────────── TAB MANAGEMENT ─────────────── */
 

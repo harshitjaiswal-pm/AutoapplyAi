@@ -58,6 +58,28 @@
       "matches": ["https://*.icims.com/*"],
       "js": ["logger.js", "ats/generic.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://jobs.smartrecruiters.com/*"],
+      "js": ["logger.js", "ats/generic.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["logger.js", "ats/universal.js"],
+      "run_at": "document_idle",
+      "exclude_matches": [
+        "https://www.linkedin.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*",
+        "https://jobs.lever.co/*",
+        "https://*.ashbyhq.com/*",
+        "https://*.icims.com/*",
+        "https://jobs.smartrecruiters.com/*",
+        "https://*.vercel.app/*",
+        "http://localhost:3000/*"
+      ]
     }
   ],
   "web_accessible_resources": [

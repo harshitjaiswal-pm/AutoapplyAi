@@ -104,6 +104,14 @@
         await sleep(2000); // React still settling — retry once
         filled = fillBasicProfileInDoc(user, document);
       }
+      // Province dropdown
+      const provinceValue = user.province || "British Columbia";
+      if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, document)) {
+        filled++;
+      }
+      // Button-style Yes/No questions (criminal record → No, work eligibility → Yes)
+      const btnFilled = await fillButtonStyleYesNo(document);
+      filled += btnFilled;
       console.log(`AutoApply: Child frame filled ${filled} fields`);
 
       // Step 4: Attempt resume upload, fall back to download
@@ -251,9 +259,16 @@
     if (visibleInputs.length <= 3 && hasSignInText) return true;
 
     // Signal 4: Sign-in text + no resume upload + no application-style text inputs
+    // BUT: if there is a visible Apply button on the page this is a job listing, not a sign-in wall
     const hasResumeUpload = !!document.querySelector('input[type="file"]');
     const hasRichInputs = !!document.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
-    if (hasSignInText && !hasResumeUpload && !hasRichInputs && visibleInputs.length <= 5) return true;
+    const applyButtonTexts = new Set(["apply", "apply now", "apply today", "apply here", "apply for this job", "apply for this role", "apply externally", "start application"]);
+    const hasApplyButton = Array.from(document.querySelectorAll('a[href], button, [role="button"]'))
+      .some(el => {
+        const text = (el.textContent?.trim() || "").toLowerCase().replace(/\s+/g, " ");
+        return applyButtonTexts.has(text) || text.startsWith("apply for ");
+      });
+    if (hasSignInText && !hasResumeUpload && !hasRichInputs && visibleInputs.length <= 5 && !hasApplyButton) return true;
 
     return false;
   }
@@ -425,6 +440,13 @@
     const candidates = Array.from(document.querySelectorAll('a[href], button, [role="button"]'))
       .filter(el => !el.closest('nav, header, [role="navigation"], [class*="navbar"], [class*="site-header"]'));
 
+    // Helper: arm background.js to inject into any new tab that opens from a click
+    async function armChildTabExpectation() {
+      try {
+        await new Promise(resolve => chrome.runtime.sendMessage({ type: "EXPECT_CHILD_TAB" }, resolve));
+      } catch (_) {}
+    }
+
     // Pass 1: exact text match
     for (const el of candidates) {
       const text = (el.textContent?.trim() || "").toLowerCase().replace(/\s+/g, " ");
@@ -432,6 +454,7 @@
         console.log("AutoApply: Clicking exact Apply button:", el.textContent?.trim());
         el.scrollIntoView({ behavior: "smooth", block: "center" });
         await sleep(300);
+        await armChildTabExpectation();
         el.click();
         return true;
       }
@@ -445,6 +468,7 @@
         console.log("AutoApply: Clicking prefix Apply button:", el.textContent?.trim());
         el.scrollIntoView({ behavior: "smooth", block: "center" });
         await sleep(300);
+        await armChildTabExpectation();
         el.click();
         return true;
       }
@@ -468,6 +492,7 @@
         console.log("AutoApply: Clicking Ashby/tab Application tab:", tab.textContent?.trim());
         tab.scrollIntoView({ behavior: "smooth", block: "center" });
         await sleep(300);
+        await armChildTabExpectation();
         tab.click();
         return true;
       }
@@ -480,6 +505,7 @@
         console.log("AutoApply: Clicking aria-label Apply button:", el.getAttribute("aria-label"));
         el.scrollIntoView({ behavior: "smooth", block: "center" });
         await sleep(300);
+        await armChildTabExpectation();
         el.click();
         return true;
       }
@@ -568,28 +594,36 @@
   }
 
   async function init() {
+    // ── Sign-in wall check FIRST — before anything else ──
+    // Must run before the pendingApplication check so login pages always get
+    // a clear banner even when the batch has already moved on (pendingApplication
+    // may have been overwritten by the next job's 3-second window).
+    if (detectSignInWall()) {
+      console.warn("AutoApply: Sign-in wall detected at", location.href);
+      try { AALog && AALog.state("ats.signinWall.detected", { url: location.href }); } catch(_){}
+      showBanner(
+        "⚠️ Login required — AutoApply can't apply here automatically.",
+        "user",
+        {
+          subtext: "This job site requires you to log in or create an account. Apply manually or skip this job.",
+        }
+      );
+      return;
+    }
+
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     if (!stored.pendingApplication) {
       console.log("AutoApply: No pending application found");
+      // If we can't determine the job context, show a gentle notice rather than nothing
+      showBanner("AutoApply: no active application detected for this page.", "user", {
+        subtext: "If you started an application from LinkedIn, it may have already been processed.",
+      });
       return;
     }
 
     const pendingJob = stored.pendingApplication;
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
     showBanner("Opening application...", "ai");
-
-    // ── Early sign-in wall check ──
-    // Run before firing the tailoring API call so we don't waste tokens on a
-    // page that requires authentication before showing the application form.
-    // Give the page a moment to fully render first (init() already waits 3s).
-    if (detectSignInWall()) {
-      console.warn("AutoApply: Sign-in wall detected at", location.href);
-      try { AALog && AALog.state("ats.signinWall.detected", { url: location.href }); } catch(_){}
-      showBanner("⚠️ Sign-in required — log in to this site, then click Try Again.", "user", {
-        subtext: "AutoApply detected a login or registration page and cannot fill it automatically.",
-      });
-      return;
-    }
 
     // Detect Ashby embedded pages — checks URL AND DOM signals
     // (DOM check handles SPA navigation that removes ashby_jid= from URL)
@@ -922,25 +956,37 @@
         }
       }
 
+      const maxPay = extractMaxPayFromJD(job?.jobDescription || "");
+
       const fieldMappings = [
         { labels: ["email", "e-mail", "email address"], value: user.email },
         { labels: ["phone", "telephone", "mobile", "phone number"], value: user.phone },
         { labels: ["linkedin", "linkedin url", "linkedin profile"], value: user.linkedin },
         { labels: ["github", "github url", "github profile"], value: user.github },
-        { labels: ["portfolio", "website", "personal website", "portfolio url"], value: user.portfolio },
+        { labels: ["portfolio", "website", "personal website", "portfolio url", "website url"], value: user.portfolio || user.website },
         { labels: ["preferred name", "nickname", "what should we call you"], value: user.preferredName },
         { labels: ["pronoun", "pronouns", "preferred pronoun"], value: user.pronouns },
         { labels: ["city", "location", "address", "city, province", "city, state"], value: user.province ? `Vancouver, ${user.province}, Canada` : "" },
         { labels: ["current company", "current employer", "company name", "current organization", "employer"], value: user.currentCompany },
         { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
-        { labels: ["sponsorship", "visa sponsorship", "require sponsorship", "work authorization"], value: user.requireSponsorship },
-        { labels: ["work authorization", "authorized to work", "legally authorized", "eligibility"], value: user.workAuthorization },
+        // Salary expectation — fill with max pay from JD, fallback to profile value
+        { labels: ["salary", "compensation", "salary expectation", "minimum salary", "base salary", "minimum base salary", "salary expectations", "minimum base", "expected salary", "desired salary", "pay expectation"], value: maxPay || user.salaryExpectation || user.compensation },
       ];
 
       for (const mapping of fieldMappings) {
         if (!mapping.value) continue;
         if (fillByLabel(mapping.labels, mapping.value, doc)) filled++;
       }
+
+      // Province/territory dropdown — try select element first, then text input
+      const provinceValue = user.province || "British Columbia";
+      if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, doc)) {
+        filled++;
+      }
+
+      // Button-style Yes/No questions (Ashby uses toggle buttons, not radio inputs)
+      const btnFilled = await fillButtonStyleYesNo(doc);
+      filled += btnFilled;
 
       // Fill cover letter in large textareas
       if (tailoredResult.coverLetter) {
@@ -1340,7 +1386,8 @@
   function getFieldLabel(element) {
     const id = element.id;
     if (id) {
-      const label = document.querySelector(`label[for="${id}"]`);
+      const ownerDoc = element.ownerDocument || document;
+      const label = ownerDoc.querySelector(`label[for="${id}"]`);
       if (label) return label.textContent?.trim() || "";
     }
     const container = element.closest("div, fieldset, li");
@@ -1349,6 +1396,217 @@
       if (label) return label.textContent?.trim() || "";
     }
     return element.getAttribute("aria-label") || element.placeholder || "";
+  }
+
+  /**
+   * Extract the maximum dollar amount from a job description string.
+   * Used to fill compensation/salary expectation fields.
+   */
+  function extractMaxPayFromJD(jdText) {
+    if (!jdText) return "";
+    const matches = [];
+    const regex = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = regex.exec(jdText)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      // Sanity-filter: only accept realistic salary values ($30K–$2M)
+      if (val >= 30000 && val <= 2000000) matches.push(val);
+    }
+    if (matches.length === 0) return "";
+    return String(Math.round(Math.max(...matches)));
+  }
+
+  /**
+   * Fill a <select> dropdown by finding its label, then selecting the matching option.
+   * Returns true if a match was found and selected.
+   */
+  function fillSelectByLabel(labelTexts, value, doc = document) {
+    if (!value) return false;
+    const valueLower = value.toLowerCase();
+
+    // Find all <select> elements and check their associated label
+    const selects = queryAllDeep("select", doc);
+    for (const sel of selects) {
+      const labelText = getFieldLabel(sel).toLowerCase();
+      const matchesLabel = labelTexts.some(t => labelText.includes(t));
+      if (!matchesLabel) {
+        // Also check nearby text nodes
+        const container = sel.closest("div, fieldset, section, li");
+        if (container) {
+          const nearbyText = (container.querySelector("label, p, span, div")?.textContent || "").toLowerCase();
+          if (!labelTexts.some(t => nearbyText.includes(t))) continue;
+        } else continue;
+      }
+
+      // Try to find matching option (by text or value)
+      const options = Array.from(sel.options);
+      let matchedOption = options.find(o =>
+        o.text.toLowerCase() === valueLower ||
+        o.value.toLowerCase() === valueLower
+      );
+      // Partial match fallback
+      if (!matchedOption) {
+        matchedOption = options.find(o =>
+          o.text.toLowerCase().includes(valueLower) ||
+          valueLower.includes(o.text.toLowerCase().replace(/\s+/g, ""))
+        );
+      }
+      // Province abbreviation matching (e.g. "BC" → "British Columbia")
+      if (!matchedOption) {
+        const abbrevMap = {
+          "bc": "british columbia", "ab": "alberta", "on": "ontario",
+          "qc": "quebec", "mb": "manitoba", "sk": "saskatchewan",
+          "ns": "nova scotia", "nb": "new brunswick", "nl": "newfoundland",
+          "pe": "prince edward island", "nt": "northwest territories",
+          "yt": "yukon", "nu": "nunavut",
+        };
+        const expanded = abbrevMap[valueLower] || valueLower;
+        matchedOption = options.find(o => o.text.toLowerCase().includes(expanded) || expanded.includes(o.text.toLowerCase()));
+      }
+
+      if (matchedOption) {
+        sel.value = matchedOption.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        sel.dispatchEvent(new Event("input", { bubbles: true }));
+        console.log(`AutoApply: Selected "${matchedOption.text}" in province/territory dropdown`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Fill button-style Yes/No questions (Ashby renders these as <button> toggles,
+   * not native radio inputs — so fillByLabel() misses them entirely).
+   *
+   * Rules:
+   *  - Criminal record / conviction → "No"
+   *  - Work eligibility in Canada → "Yes"
+   *  - Visa / immigration sponsorship → "No"
+   *
+   * Returns the count of buttons clicked.
+   */
+  async function fillButtonStyleYesNo(doc = document) {
+    const rules = [
+      {
+        keywords: ["convicted", "criminal", "charges", "offense", "offence", "felony", "misdemeanor", "criminal record"],
+        answer: "no",
+        label: "criminal record",
+      },
+      {
+        keywords: ["legally eligible to work", "eligible to work in canada", "authorized to work in canada", "right to work in canada", "legally allowed to work"],
+        answer: "yes",
+        label: "work eligibility",
+      },
+      {
+        keywords: ["require.*sponsorship", "need.*sponsorship", "visa sponsorship", "immigration sponsorship", "work authorization sponsorship"],
+        answer: "no",
+        label: "visa sponsorship",
+        useRegex: true,
+      },
+    ];
+
+    let clicked = 0;
+
+    // Walk all potential question-containers in the document
+    const allEls = queryAllDeep("label, legend, p, div, span, h3, h4, h5", doc);
+
+    for (const el of allEls) {
+      // Skip elements that are themselves buttons or inside buttons
+      if (el.closest("button, [role='button']")) continue;
+      // Skip elements with too many direct children (layout containers)
+      if (el.children.length > 6) continue;
+
+      const questionText = (el.textContent || "").trim().toLowerCase();
+      if (questionText.length < 8 || questionText.length > 400) continue;
+
+      // Find matching rule
+      let matchedAnswer = null;
+      for (const rule of rules) {
+        let matched = false;
+        if (rule.useRegex) {
+          matched = rule.keywords.some(kw => new RegExp(kw, "i").test(questionText));
+        } else {
+          matched = rule.keywords.some(kw => questionText.includes(kw));
+        }
+        if (matched) { matchedAnswer = rule.answer; break; }
+      }
+      if (!matchedAnswer) continue;
+
+      // Look for Yes/No buttons in the nearest enclosing container
+      const container = el.closest("div, fieldset, section, li, form") || el.parentElement;
+      if (!container) continue;
+
+      // Find button candidates: <button>, [role=radio], [role=option], styled radio inputs
+      const btnCandidates = Array.from(container.querySelectorAll(
+        'button, [role="radio"], [role="option"], [role="button"], label input[type="radio"]'
+      ));
+
+      // Also search shadow DOM
+      const shadowBtns = queryAllDeep('button, [role="radio"], [role="option"]', container);
+      const allBtns = [...new Set([...btnCandidates, ...shadowBtns])];
+
+      let foundAndClicked = false;
+      for (const btn of allBtns) {
+        const rawText = (btn.textContent || btn.value || btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        const isYes = rawText === "yes" || rawText.startsWith("yes");
+        const isNo  = rawText === "no"  || rawText.startsWith("no");
+        if (!isYes && !isNo) continue;
+
+        const isCorrectAnswer = (matchedAnswer === "yes" && isYes) || (matchedAnswer === "no" && isNo);
+        if (!isCorrectAnswer) continue;
+
+        // Check if already selected — avoid redundant clicks
+        const alreadySelected =
+          btn.classList.contains("selected") ||
+          btn.classList.contains("active") ||
+          btn.getAttribute("aria-selected") === "true" ||
+          btn.getAttribute("aria-pressed") === "true" ||
+          btn.getAttribute("aria-checked") === "true" ||
+          (btn.type === "radio" && btn.checked);
+
+        if (!alreadySelected) {
+          console.log(`AutoApply: Clicking "${rawText}" for question: "${questionText.slice(0, 70)}"`);
+          btn.click();
+          await sleep(150);
+          clicked++;
+        } else {
+          console.log(`AutoApply: Already selected "${rawText}" for: "${questionText.slice(0, 70)}"`);
+        }
+        foundAndClicked = true;
+        break; // found the right button for this question
+      }
+
+      // If we didn't find labelled buttons in direct container, search one level up
+      if (!foundAndClicked && container.parentElement) {
+        const parent = container.parentElement;
+        const parentBtns = Array.from(parent.querySelectorAll('button, [role="radio"], [role="option"]'));
+        for (const btn of parentBtns) {
+          const rawText = (btn.textContent || btn.value || "").trim().toLowerCase();
+          const isYes = rawText === "yes" || rawText.startsWith("yes");
+          const isNo  = rawText === "no"  || rawText.startsWith("no");
+          if (!isYes && !isNo) continue;
+          const isCorrectAnswer = (matchedAnswer === "yes" && isYes) || (matchedAnswer === "no" && isNo);
+          if (!isCorrectAnswer) continue;
+
+          const alreadySelected =
+            btn.getAttribute("aria-selected") === "true" ||
+            btn.getAttribute("aria-pressed") === "true" ||
+            (btn.type === "radio" && btn.checked);
+          if (!alreadySelected) {
+            console.log(`AutoApply: (parent) Clicking "${rawText}" for: "${questionText.slice(0, 70)}"`);
+            btn.click();
+            await sleep(150);
+            clicked++;
+          }
+          break;
+        }
+      }
+    }
+
+    console.log(`AutoApply: fillButtonStyleYesNo clicked ${clicked} buttons`);
+    return clicked;
   }
 
   /**
@@ -1398,16 +1656,22 @@
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
-    chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumePdf"], (result) => {
       const bp = result._aa_batchProgress;
       const hasBatch = bp && bp.total > 0;
+      const hasPdf = !!result.tailoredResumePdf;
 
       const batchTag = hasBatch
         ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
         : "";
-      const jobLabel = hasBatch && bp.title
-        ? `<span style="font-size:12px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bp.title}${bp.company ? " · " + bp.company : ""}</span>`
-        : "";
+
+      const pillStyle = `font-size:12px;opacity:0.9;background:rgba(255,255,255,0.15);border-radius:5px;padding:2px 8px;white-space:nowrap;`;
+      const companyTag = (hasBatch && bp.company)
+        ? `<span style="${pillStyle}">${bp.company}</span>` : "";
+      const roleTag = (hasBatch && bp.title)
+        ? `<span style="${pillStyle}">${bp.title}</span>` : "";
+      const salaryTag = (hasBatch && bp.salaryRange)
+        ? `<span style="${pillStyle}">💰 ${bp.salaryRange}</span>` : "";
 
       const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
       const progressBar = hasBatch ? `
@@ -1425,26 +1689,43 @@
         ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
         : "";
 
+      // Resume download button — always shown when PDF is in storage
+      const pdfBtnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;`;
+      const pdfBtn = hasPdf
+        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
+        : "";
+
       // ── Action buttons (error and user-turn states get quick actions)
       const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
+      const pauseBtn = isAi
+        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.2);color:#fff;">⏸ Pause</button>`
+        : "";
+      const resumeBtn = opts.showResume
+        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.9);color:#B45309;">▶ Resume</button>`
+        : "";
       let actionRow = "";
       if (type === "error") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
       } else if (type === "user") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
+      } else if (isAi || resumeBtn || pdfBtn) {
+        // AI / success states: show pause + resume + resume download
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${pauseBtn}${resumeBtn}${pdfBtn}</div>`;
       }
 
       banner.style.background = cfg.bg;
       banner.style.color = "#fff";
       banner.innerHTML = `
         <div style="padding:8px 18px 7px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${batchTag}${companyTag}${roleTag}${salaryTag}</div>
           ${progressBar}
           <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
           ${subtextRow}
@@ -1471,6 +1752,28 @@
       document.getElementById("aa-btn-skip")?.addEventListener("click", () => {
         chrome.storage.local.remove(["pendingApplication"]);
         showBanner("Job skipped. You can close this tab.", "success");
+      });
+      document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
+        chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress"], (r) => {
+          if (!r.tailoredResumePdf) return;
+          const bp = r._aa_batchProgress;
+          const company = (bp?.company || "Company").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+          const role    = (bp?.title   || "Resume").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+          const filename = `${company}_${role}_Resume.pdf`;
+          chrome.runtime.sendMessage({
+            type: "DOWNLOAD_RESUME",
+            job: { company: bp?.company || "Company", jobTitle: bp?.title || "Resume" },
+          });
+          console.log("AutoApply: Banner PDF download triggered:", filename);
+        });
+      });
+      document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
+        chrome.storage.local.set({ _aa_paused: true });
+        showBanner("⏸ Paused — click Resume when ready.", "user", { showResume: true });
+      });
+      document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
+        chrome.storage.local.set({ _aa_paused: false });
+        showBanner("Resuming...", "ai", { subtext: "Picking up where we left off..." });
       });
     });
 

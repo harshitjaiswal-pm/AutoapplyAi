@@ -60,21 +60,29 @@
    *   B) /jobs/search-results/ (AI-powered search) → dismiss button aria-labels
    */
   function scrapeJobCards() {
+    const _logSafe = (typeof AALog !== "undefined") ? AALog : null;
+    _logSafe && _logSafe.scrape("linkedin.scrape.start", { url: location.href });
+
     // --- Strategy A: data-occludable-job-id (classic search) ---
     const cardItems = document.querySelectorAll("li[data-occludable-job-id]");
     if (cardItems.length > 0) {
       console.log(`AutoApply: Using Strategy A (data-occludable-job-id), found ${cardItems.length} cards`);
-      return scrapeStrategyA(cardItems);
+      const jobs = scrapeStrategyA(cardItems);
+      _logSafe && _logSafe.scrape("linkedin.scrape.strategyA.done", { count: jobs.length, jobs });
+      return jobs;
     }
 
     // --- Strategy B: dismiss button aria-labels (AI-powered search-results) ---
     const dismissBtns = document.querySelectorAll('button[aria-label*="Dismiss"][aria-label$=" job"]');
     if (dismissBtns.length > 0) {
       console.log(`AutoApply: Using Strategy B (dismiss buttons), found ${dismissBtns.length} cards`);
-      return scrapeStrategyB(dismissBtns);
+      const jobs = scrapeStrategyB(dismissBtns);
+      _logSafe && _logSafe.scrape("linkedin.scrape.strategyB.done", { count: jobs.length, jobs });
+      return jobs;
     }
 
     console.warn("AutoApply: No job cards found with any strategy");
+    _logSafe && _logSafe.error("linkedin.scrape.noCardsFound", { url: location.href, bodyLen: document.body?.innerText?.length || 0 });
     return [];
   }
 
@@ -200,7 +208,89 @@
   }
 
   /**
+   * Fetch job data (description + external apply URL) from LinkedIn's server-rendered
+   * job page. This is the PRIMARY source — more reliable than panel-scraping/clicking
+   * because LinkedIn ignores programmatic/untrusted click events from content scripts.
+   *
+   * Returns: { description: string|null, applyUrl: string|null }
+   */
+  async function fetchJobDescription(linkedinJobId) {
+    if (!linkedinJobId) return { description: null, applyUrl: null };
+    try {
+      try { AALog && AALog.scrape("linkedin.jd.fetch.start", { jobId: linkedinJobId }); } catch(_){}
+      const url = `https://www.linkedin.com/jobs/view/${linkedinJobId}/`;
+      const resp = await fetch(url, { credentials: "include" });
+      if (!resp.ok) {
+        try { AALog && AALog.error("linkedin.jd.fetch.httpError", { status: resp.status, jobId: linkedinJobId }); } catch(_){}
+        return { description: null, applyUrl: null };
+      }
+      const html = await resp.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+
+      // --- Extract job description ---
+      let description = null;
+      const jdSelectors = [
+        ".show-more-less-html__markup",
+        '[class*="show-more-less-html"]',
+        ".description__text",
+        '[data-test-id="job-details"]',
+        ".jobs-description-content__text",
+        ".jobs-description__content",
+        'section[data-section="description"]',
+      ];
+      for (const sel of jdSelectors) {
+        const el = doc.querySelector(sel);
+        const text = (el?.textContent || "").trim();
+        if (text.length > 100) { description = text; break; }
+      }
+      if (!description) {
+        let best = "";
+        for (const s of doc.querySelectorAll("section, article")) {
+          const t = (s.textContent || "").trim();
+          if (t.length > best.length && t.length < 50000) best = t;
+        }
+        if (best.length > 100) description = best;
+      }
+
+      // --- Extract external apply URL ---
+      // Look for links that point directly to an external ATS or to LinkedIn's apply flow
+      let applyUrl = null;
+      const atsPatterns = ["greenhouse.io", "lever.co", "workday", "ashbyhq.com", "icims.com",
+        "smartrecruiters.com", "jobvite.com", "successfactors", "taleo.net", "breezy.hr"];
+      for (const a of doc.querySelectorAll("a[href]")) {
+        const href = a.href || "";
+        if (atsPatterns.some((p) => href.includes(p))) { applyUrl = href; break; }
+      }
+      // Fallback: look for "Apply" link text pointing outside linkedin
+      if (!applyUrl) {
+        for (const a of doc.querySelectorAll("a[href]")) {
+          const text = (a.textContent || "").trim().toLowerCase();
+          const href = a.href || "";
+          if ((text === "apply" || text === "apply now") &&
+              href && !href.includes("linkedin.com/login") && href.startsWith("http")) {
+            applyUrl = href;
+            break;
+          }
+        }
+      }
+
+      try {
+        AALog && AALog.scrape("linkedin.jd.fetch.done", {
+          jobId: linkedinJobId,
+          descLen: (description || "").length,
+          applyUrl: applyUrl ? applyUrl.slice(0, 120) : null,
+        });
+      } catch(_){}
+      return { description, applyUrl };
+    } catch (e) {
+      try { AALog && AALog.error("linkedin.jd.fetch.error", { jobId: linkedinJobId, error: e.message }); } catch(_){}
+      return { description: null, applyUrl: null };
+    }
+  }
+
+  /**
    * Scrape JD from the right-side detail panel after clicking a job card.
+   * Used as FALLBACK when fetchJobDescription fails or returns empty.
    */
   function scrapeJobDescription() {
     // Strategy 1: "About the job" heading
@@ -316,12 +406,70 @@
 
     if (!card) {
       console.warn("AutoApply: No job card found for", job.title);
+      try { AALog && AALog.error("linkedin.clickCard.notFound", { title: job.title, dismissTitle: job.dismissTitle, jobId: job.id }); } catch(_){}
       return false;
     }
 
-    // Click the card to load job details in the right panel
-    card.click();
-    await new Promise((r) => setTimeout(r, 2500));
+    // Snapshot the detail panel's current content BEFORE clicking, so we
+    // can wait for it to actually change after the click. This is what
+    // prevents us from scraping the previous job's stale JD.
+    const detailSelector =
+      '.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"], [class*="jobs-details"]';
+    const detailBefore = document.querySelector(detailSelector);
+    const beforeSnapshot = (detailBefore?.innerText || "").slice(0, 500);
+
+    // Click the title anchor inside the card — LinkedIn's SPA navigation is
+    // only triggered by the <a> tag, not the outer <li> container.
+    const titleAnchor = card.querySelector('a.job-card-container__link')
+      || card.querySelector('a[href*="/jobs/view/"]')
+      || card.querySelector('a[href*="/jobs/collections/"]')
+      || card.querySelector('a');
+    if (titleAnchor) {
+      titleAnchor.click();
+    } else {
+      card.click(); // fallback for Strategy B containers
+    }
+
+    // Wait for the detail panel to visibly change. Poll up to 6s in 150ms
+    // ticks. If it never changes (same title re-clicked, or LinkedIn is
+    // slow), fall back to the original 2.5s sleep so we don't block forever.
+    const MAX_WAIT_MS = 6000;
+    const TICK_MS = 150;
+    const deadline = Date.now() + MAX_WAIT_MS;
+    let changed = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, TICK_MS));
+      const detailAfter = document.querySelector(detailSelector);
+      const afterSnapshot = (detailAfter?.innerText || "").slice(0, 500);
+      // Consider it changed when the panel text differs AND contains the job
+      // title or company name. If the text changed significantly but doesn't
+      // match (e.g. LinkedIn shows a different panel state), still break so we
+      // don't waste the full 6s polling budget — log a warning instead.
+      if (afterSnapshot && afterSnapshot !== beforeSnapshot) {
+        const afterLower = afterSnapshot.toLowerCase();
+        const titleFirst20 = (job.title || "").toLowerCase().substring(0, 20);
+        const companyFirst15 = (job.company || "").toLowerCase().substring(0, 15);
+        const titleMatch = titleFirst20.length >= 4 && afterLower.includes(titleFirst20);
+        const companyMatch = companyFirst15.length >= 3 && afterLower.includes(companyFirst15);
+        if (titleMatch || companyMatch) {
+          changed = true;
+          break;
+        }
+        // Text changed but expected job not confirmed — keep polling but note it
+        // (the panel might be mid-render; on the next tick it may confirm)
+      }
+    }
+
+    try {
+      AALog && AALog.nav("linkedin.clickCard.done", {
+        title: job.title,
+        changed,
+        waitedMs: Date.now() - (deadline - MAX_WAIT_MS),
+      });
+    } catch(_){}
+
+    // Extra settle time so lazy-loaded JD sections finish rendering.
+    await new Promise((r) => setTimeout(r, 400));
     return true;
   }
 
@@ -330,23 +478,49 @@
    * Returns the type: "external" | "easy_apply" | null
    */
   async function clickApplyButton() {
-    // Check if already applied to this job
-    const detailPanel = document.querySelector('.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"]');
-    const detailText = (detailPanel?.innerText || document.body.innerText).toLowerCase();
-    if (detailText.includes("applied") && (detailText.includes("see application") || detailText.includes("ago"))) {
-      // Check more carefully — look for "Applied X ago" pattern near the top
-      const appliedMatch = detailText.match(/applied\s+\d+\s+(day|week|month|hour|minute)/);
-      if (appliedMatch) {
-        console.log("AutoApply: Already applied to this job — skipping");
-        return "already_applied";
-      }
+    // Check if LinkedIn shows this job as already-applied.
+    // Three different patterns LinkedIn uses depending on job type:
+    //   1. Sidebar card: "Applied · 2 weeks ago · Easy Apply" (middle-dot separator, very specific)
+    //   2. Detail panel top card: "Applied 2 weeks ago" (no dot, for external apply)
+    //   3. Easy Apply panel: "Application submitted 1 week ago" (for Easy Apply jobs)
+    // To avoid false positives from job description text (e.g. "applied X months of experience"),
+    // we check the sidebar selected card first (most reliable), then restrict the detail panel
+    // check to the FIRST 1200 characters (top card area only, before the JD starts).
+
+    // 1. Check the currently-selected sidebar job card for applied status (most reliable signal)
+    const selectedCard = document.querySelector(
+      '.job-card-container--selected, .jobs-search-results__list-item--active .job-card-container, [aria-selected="true"] .job-card-container'
+    );
+    const sidebarText = (selectedCard?.innerText || '').toLowerCase();
+    const sidebarApplied = /applied\s*[·•\-]\s*\d+\s*(second|minute|hour|day|week|month)/i.test(sidebarText)
+                        || sidebarText.includes("application submitted");
+
+    // 2. Check the top portion of the detail panel (top card only, not the JD)
+    const detailPanel = document.querySelector(
+      '.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"]'
+    );
+    // Limit to first 1200 chars — the "Applied X ago" badge is in the header area;
+    // the job description starts further down and is the source of false positives.
+    const topPanelText = (detailPanel?.innerText || '').substring(0, 1200).toLowerCase();
+    const panelApplied = /applied\s+\d+\s*(second|minute|hour|day|week|month)/i.test(topPanelText)
+                      || topPanelText.includes("application submitted")
+                      || topPanelText.includes("see application");
+
+    if (sidebarApplied || panelApplied) {
+      console.log("AutoApply: Already applied to this job (LinkedIn shows applied status) — skipping");
+      try { AALog && AALog.nav("linkedin.clickApply.alreadyApplied", { sidebarApplied, panelApplied, sidebarPreview: sidebarText.slice(0, 200), topPanelPreview: topPanelText.slice(0, 200) }); } catch(_){}
+      return "already_applied";
     }
 
     // Look for apply buttons in the detail panel (right side)
     const allButtons = document.querySelectorAll("button, a");
+    try { AALog && AALog.nav("linkedin.clickApply.scanStart", { totalButtons: allButtons.length, detailPanelFound: !!detailPanel, topPanelLen: (detailPanel?.innerText || "").length }); } catch(_){}
 
     let bestApplyBtn = null;
     let bestType = null;
+    // Collect a diagnostic list of every candidate we considered so we can
+    // see exactly why nothing matched when applyType comes back null.
+    const candidates = [];
 
     for (const btn of allButtons) {
       const text = (btn.textContent || "").trim().toLowerCase();
@@ -368,6 +542,7 @@
       if (text.includes("easy apply") && !ariaLabel.includes("filter")) {
         bestApplyBtn = btn;
         bestType = "easy_apply";
+        candidates.push({ kind: "easy_apply", text: text.slice(0, 60), ariaLabel: ariaLabel.slice(0, 80) });
         continue; // Keep looking for an external Apply button which takes priority
       }
 
@@ -375,6 +550,7 @@
       if ((text === "apply" || text === "apply now" ||
            ariaLabel.includes("apply to") || ariaLabel.includes("apply for")) &&
           !text.includes("easy")) {
+        candidates.push({ kind: "apply_candidate", text: text.slice(0, 60), ariaLabel: ariaLabel.slice(0, 80), tag: btn.tagName, href: href.slice(0, 80) });
         // Prefer buttons that link to external company website
         if (btn.tagName === "A" || href || btn.querySelector("svg") ||
             ariaLabel.includes("opens") || ariaLabel.includes("company website") ||
@@ -391,15 +567,44 @@
       }
     }
 
-    if (!bestApplyBtn) return null;
+    if (!bestApplyBtn) {
+      // Diagnostic: scan for any button/link with "apply" in its text or aria
+      // to help figure out why nothing matched. Include what the top card
+      // looks like so we can inspect DOM structure remotely.
+      const loose = [];
+      for (const btn of allButtons) {
+        const t = (btn.textContent || "").trim().toLowerCase();
+        const a = (btn.getAttribute("aria-label") || "").toLowerCase();
+        if ((t.includes("apply") || a.includes("apply")) && loose.length < 20) {
+          loose.push({
+            text: t.slice(0, 60),
+            aria: a.slice(0, 80),
+            tag: btn.tagName,
+            inSidebar: !!(btn.closest && btn.closest('.jobs-search-results-list, .scaffold-layout__list')),
+            w: btn.offsetWidth, h: btn.offsetHeight,
+          });
+        }
+      }
+      try {
+        AALog && AALog.error("linkedin.clickApply.noButton", {
+          candidates,
+          looseMatches: loose,
+          topPanelPreview: (detailPanel?.innerText || "").slice(0, 600),
+        });
+      } catch(_){}
+      return null;
+    }
 
     if (bestType === "easy_apply") {
       // Don't click Easy Apply — just report it
+      try { AALog && AALog.nav("linkedin.clickApply.easyApply", { candidates }); } catch(_){}
       return "easy_apply";
     }
 
     // External apply — click it
-    console.log("AutoApply: Clicking external Apply button: " + (bestApplyBtn.getAttribute("aria-label") || bestApplyBtn.textContent.trim()));
+    const btnLabel = bestApplyBtn.getAttribute("aria-label") || bestApplyBtn.textContent.trim();
+    console.log("AutoApply: Clicking external Apply button: " + btnLabel);
+    try { AALog && AALog.nav("linkedin.clickApply.external", { label: btnLabel, candidates }); } catch(_){}
     bestApplyBtn.click();
     await new Promise((r) => setTimeout(r, 1500));
     return "external";
@@ -679,6 +884,8 @@
     const selectedJobs = scrapedJobs.filter((j) => selectedJobIds.has(j.id));
     if (selectedJobs.length === 0) return;
 
+    try { AALog && AALog.state("batch.start", { total: selectedJobs.length, jobs: selectedJobs.map(j => ({ id: j.id, title: j.title, company: j.company })) }); } catch(_){}
+
     isApplying = true;
     skipRequested = false;
     appliedCount = 0;
@@ -708,6 +915,8 @@
       const job = selectedJobs[i];
       const jobNumber = i + 1;
 
+      try { AALog && AALog.state("batch.jobStart", { jobNumber, total: selectedJobs.length, job }); } catch(_){}
+
       // Step 1: Click job card to load JD
       showProgressOverlay(jobNumber, selectedJobs.length, job);
       updateJobStatus(job.id, "applying", "Loading job details...");
@@ -721,11 +930,21 @@
       }
 
       updateJobStatus(job.id, "applying", "Reading job description...");
-      await scrollDetailPanel();
-      await new Promise((r) => setTimeout(r, 800));
       if (skipRequested) { skipRequested = false; updateJobStatus(job.id, "skipped"); skippedCount++; continue; }
 
-      const jobDescription = scrapeJobDescription();
+      // Primary: fetch JD directly from LinkedIn's server-rendered job page.
+      // This bypasses the UI navigation issue (LinkedIn ignores untrusted programmatic clicks).
+      // Fallback: scrape from the detail panel if fetch fails.
+      const fetched = await fetchJobDescription(job.linkedinJobId);
+      let jobDescription = fetched.description;
+      let fetchedApplyUrl = fetched.applyUrl; // May be null; used later to open the ATS tab
+      if (!jobDescription || jobDescription.length < 50) {
+        await scrollDetailPanel();
+        await new Promise((r) => setTimeout(r, 800));
+        jobDescription = scrapeJobDescription();
+        fetchedApplyUrl = null; // Panel scrape: must use clickApplyButton() instead
+      }
+      try { AALog && AALog.scrape("linkedin.jd.scraped", { jobId: job.id, title: job.title, jdLen: (jobDescription || "").length, jdPreview: (jobDescription || "").slice(0, 400), fetchedApplyUrl: fetchedApplyUrl ? fetchedApplyUrl.slice(0, 100) : null }); } catch(_){}
 
       // Step 2: JD is ready — show confirmation immediately, no tailoring on LinkedIn side.
       // Tailoring happens on the company ATS page in the background while Step 1 fills.
@@ -760,7 +979,7 @@
           _aa_totalJobs: selectedJobs.length,
           _aa_batchProgress: {
             current: jobNumber, total: selectedJobs.length,
-            jobTitle: job.title, company: job.company, location: job.location,
+            title: job.title, jobTitle: job.title, company: job.company, location: job.location,
             applied: appliedCount, skipped: skippedCount, active: true,
           },
         }, resolve);
@@ -771,10 +990,24 @@
         chrome.runtime.sendMessage({ type: "PREPARE_APPLICATION", job: jobData }, resolve);
       });
 
-      // Step 4: Click Apply button
+      // Step 4: Open the ATS application page.
+      // If we obtained an external apply URL from the fetched job page, open it directly.
+      // Otherwise fall back to clicking the LinkedIn Apply button in the detail panel.
       showProgressOverlay(jobNumber, selectedJobs.length, job);
       updateJobStatus(job.id, "applying", "Opening application...");
-      const applyType = await clickApplyButton();
+
+      let applyType = null;
+      if (fetchedApplyUrl) {
+        // Open the external ATS URL directly — no need to click the LinkedIn Apply button
+        try { AALog && AALog.nav("linkedin.apply.fetchedUrl", { jobId: job.id, url: fetchedApplyUrl.slice(0, 120) }); } catch(_){}
+        chrome.runtime.sendMessage({ type: "OPEN_ATS_TAB", url: fetchedApplyUrl });
+        applyType = "external";
+      } else {
+        // Fallback: click LinkedIn's Apply button (may be stale if panel wasn't updated)
+        try { AALog && AALog.nav("linkedin.apply.click", { jobId: job.id }); } catch(_){}
+        applyType = await clickApplyButton();
+        try { AALog && AALog.nav("linkedin.apply.result", { jobId: job.id, applyType }); } catch(_){}
+      }
 
       if (applyType === "external") {
         updateJobStatus(job.id, "opened");
@@ -791,6 +1024,7 @@
         updateStatus(`Already applied: ${job.title}`);
       } else {
         updateJobStatus(job.id, "failed");
+        try { AALog && AALog.error("linkedin.apply.failed", { jobId: job.id, applyType }); } catch(_){}
       }
 
       // Brief pause between jobs
@@ -1020,10 +1254,14 @@
           <span style="font-size: 16px;">A</span>
           AutoApply
           <span id="autoapply-count" style="
-            background: rgba(255,255,255,0.2);
-            padding: 2px 8px;
-            border-radius: 8px;
-            font-size: 11px;
+            background: #fff;
+            color: #4F46E5;
+            padding: 2px 9px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            min-width: 20px;
+            text-align: center;
           ">0</span>
         </button>
 
@@ -1208,7 +1446,17 @@
       return;
     }
 
-    list.innerHTML = scrapedJobs
+    const pendingCount = scrapedJobs.filter(j => j.status === "pending").length;
+    const selCount = selectedJobIds.size;
+    const countBar = `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px 8px;font-size:12px;color:#555;">
+        <span><b style="color:#4F46E5;font-size:13px;">${scrapedJobs.length}</b> jobs found</span>
+        <span style="background:${selCount > 0 ? "#4F46E5" : "#E5E7EB"};color:${selCount > 0 ? "#fff" : "#9CA3AF"};border-radius:10px;padding:2px 10px;font-weight:700;font-size:12px;transition:background 0.2s;">
+          ${selCount} selected
+        </span>
+      </div>`;
+
+    list.innerHTML = countBar + scrapedJobs
       .map(
         (job) => `
       <div style="
@@ -1220,11 +1468,13 @@
         ${job.status === "applied" ? "background: #F0FDF4;" : ""}
         ${job.status === "failed" ? "background: #FEF2F2;" : ""}
       " data-job-id="${job.id}" class="autoapply-job-item">
-        ${(isApplying || job.status !== "pending")
+        ${job.status !== "pending"
           ? `<span style="font-size: 14px; flex-shrink: 0;">${getStatusIcon(job.status)}</span>`
           : `<input type="checkbox" ${selectedJobIds.has(job.id) ? "checked" : ""} style="
-              width: 16px; height: 16px; accent-color: #4F46E5; cursor: pointer; flex-shrink: 0;
-            " />`
+              width: 20px; height: 20px; accent-color: #4F46E5; cursor: pointer; flex-shrink: 0;
+              border-radius: 4px; border: 2px solid ${selectedJobIds.has(job.id) ? "#4F46E5" : "#C7D2FE"};
+              ${isApplying ? "opacity: 0.5;" : ""}
+            " ${isApplying ? "disabled" : ""} />`
         }
         <div style="flex: 1; min-width: 0;">
           <p style="margin: 0; font-size: 12px; font-weight: 500; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
@@ -1289,33 +1539,22 @@
   // Initialize
   createFloatingUI();
 
-  // Only restore previous state if a batch is actively in progress.
-  // On a fresh page load or Scan Page click, always start clean.
-  chrome.storage.local.get(["_aa_batchProgress", "_aa_scrapedJobs", "_aa_selectedIds"], (result) => {
+  // On every page load, treat a LinkedIn refresh as an implicit "stop".
+  //
+  // Why: the batch-apply loop lives in-memory inside this content script. A
+  // page reload destroys that loop, so any previously-stored _aa_batchProgress
+  // with active:true is guaranteed to be stale — there is no live loop it
+  // could belong to. Restoring the banner from it would leave a frozen
+  // "Job N/M" widget that never updates again. Clearing it here gives the
+  // user a predictable, clean slate on every refresh.
+  chrome.storage.local.get(["_aa_batchProgress"], (result) => {
     const bp = result._aa_batchProgress;
-    const batchActive = bp && bp.active;
-
-    if (batchActive) {
-      // Batch is running — restore jobs so the UI stays consistent mid-apply
-      if (result._aa_scrapedJobs && Array.isArray(result._aa_scrapedJobs)) {
-        scrapedJobs = result._aa_scrapedJobs;
-        selectedJobIds = new Set(result._aa_selectedIds || []);
-      }
-      renderJobList();
-      updateStartButton();
-
-      // Auto-expand the panel and show progress overlay
-      const toggle = document.getElementById("autoapply-toggle");
-      const expanded = document.getElementById("autoapply-expanded");
-      if (toggle && expanded) {
-        toggle.style.display = "none";
-        expanded.style.display = "block";
-      }
-      showProgressOverlay(bp.current, bp.total, { title: bp.jobTitle, company: bp.company, location: bp.location });
-      updateStatus(`In progress: Job ${bp.current}/${bp.total} — ${bp.jobTitle}`);
-    } else {
-      // No active batch — start fresh. Clear any stale stored jobs.
-      chrome.storage.local.remove(["_aa_scrapedJobs", "_aa_selectedIds"]);
+    if (bp && bp.active) {
+      try { AALog && AALog.state("batch.staleCleared", { reason: "page_reload", prior: bp }); } catch(_){}
+      chrome.storage.local.set({ _aa_batchProgress: { active: false } });
     }
+    // Always wipe scraped jobs on reload so "Scan Page" is the only way to
+    // populate the panel — this matches the mental model the user expects.
+    chrome.storage.local.remove(["_aa_scrapedJobs", "_aa_selectedIds"]);
   });
 })();

@@ -62,6 +62,9 @@ function __aa_persistForeignLogs(entries) {
 let expectingNewTab = false;
 let expectingTimeout = null;
 
+// Track which tab owns the active application so we can detect navigation away
+let applyTabId = null;
+
 // Track tabs we've already injected into to prevent double-injection.
 // Cloudflare challenges and some ATSs cause the onUpdated event to fire
 // twice (challenge page load + real page load), so we need this guard in
@@ -71,6 +74,10 @@ const injectedTabIds = new Map(); // tabId -> { url, timestamp }
 // Clear tab from injected tracking when it's closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   injectedTabIds.delete(tabId);
+  if (tabId === applyTabId) {
+    console.log("AutoApply BG: apply tab closed — clearing applyTabId");
+    applyTabId = null;
+  }
 });
 
 // Known ATS domains for immediate tab detection
@@ -140,6 +147,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
     });
     return true;
+  }
+
+  /* ── From ATS generic.js: Re-arm expectingNewTab before clicking an apply button ── */
+  if (message.type === "EXPECT_CHILD_TAB") {
+    expectingNewTab = true;
+    clearTimeout(expectingTimeout);
+    expectingTimeout = setTimeout(() => {
+      expectingNewTab = false;
+    }, 30000);
+    sendResponse({ success: true });
+    return false;
   }
 
   /* ── From LinkedIn content.js: Open ATS URL directly (fetched from job page) ── */
@@ -516,6 +534,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const job = message.job;
     console.log("AutoApply BG: Application completed for", job.jobTitle, "at", job.company);
 
+    // Clear apply tab tracking — this application is done
+    applyTabId = null;
+
     // Store completed application in a list for the dashboard to read
     chrome.storage.local.get(["completedApplications"], (stored) => {
       const completed = stored.completedApplications || [];
@@ -550,6 +571,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
     });
     return true;
+  }
+
+  /* ── From amber fallback banner: user clicked Retry after login/redirect ── */
+  if (message.type === "RETRY_INJECT") {
+    const tabId = sender.tab?.id;
+    const url = sender.tab?.url;
+    if (tabId && url) {
+      console.log("AutoApply BG: RETRY_INJECT received — re-injecting ATS script into tab", tabId);
+      // Clear the dedup guard so injectATSScript doesn't skip this tab
+      injectedTabIds.delete(tabId);
+      injectInstantBanner(tabId);
+      setTimeout(() => injectATSScript(tabId, url), 500);
+    }
+    sendResponse({ success: true });
+    return false;
+  }
+
+  /* ── Dev utility: reload the extension from any content script ── */
+  if (message.type === "RELOAD_EXTENSION") {
+    sendResponse({ success: true });
+    setTimeout(() => chrome.runtime.reload(), 100);
+    return false;
   }
 
   /* ── From Workday ATS: Click a button-dropdown using CDP trusted click ──
@@ -669,6 +712,55 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
   const url = tab.url.toLowerCase();
 
+  // ── Navigation-persistence guard ──────────────────────────────────────────
+  // If the apply tab navigated to a non-ATS page (login redirect, cross-domain
+  // redirect, etc.) and we still have a pending application, inject an amber
+  // "Login required" sticky banner so the user knows what happened.
+  if (tabId === applyTabId && !url.includes("linkedin.com") && !url.startsWith("chrome") && !url.startsWith("about:")) {
+    const isKnownATSNow = KNOWN_ATS_DOMAINS.some(domain => url.includes(domain));
+    if (!isKnownATSNow) {
+      // Check if there's still a pending application before showing the banner
+      chrome.storage.local.get(["pendingApplication"], (stored) => {
+        if (!stored.pendingApplication) {
+          // Application already finished — stop tracking this tab
+          applyTabId = null;
+          return;
+        }
+        {
+          console.log("AutoApply BG: Apply tab navigated away from ATS to:", tab.url, "— injecting fallback banner");
+          // Clear dedup guard so re-injection works after Retry
+          injectedTabIds.delete(tabId);
+          chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              // Remove any existing banner first
+              const existing = document.getElementById("autoapply-banner");
+              if (existing) existing.remove();
+              const b = document.createElement("div");
+              b.id = "autoapply-banner";
+              b.style.cssText = [
+                "position:fixed", "top:0", "left:0", "right:0", "z-index:2147483647",
+                "background:linear-gradient(135deg,#B45309 0%,#D97706 100%)",
+                "color:#fff", "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+                "padding:10px 18px 9px", "box-shadow:0 4px 20px rgba(0,0,0,0.2)",
+              ].join(";");
+              b.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">⚠️ AUTOAPPLY AI</span>
+                  <span style="font-size:13px;font-weight:500;">Login required or page changed — sign in then click Retry</span>
+                  <button id="aa-retry-btn" style="margin-left:auto;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:#fff;border-radius:5px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">↩ Retry</button>
+                </div>`;
+              (document.body || document.documentElement).prepend(b);
+              document.getElementById("aa-retry-btn")?.addEventListener("click", () => {
+                chrome.runtime.sendMessage({ type: "RETRY_INJECT" });
+              });
+            },
+          }).catch(() => {});
+        }
+      });
+    }
+  }
+
   // Check if this is a known ATS domain — if so, treat it as the apply tab
   // regardless of expectingNewTab flag (handles race condition where page loads slowly)
   const isKnownATS = KNOWN_ATS_DOMAINS.some(domain => url.includes(domain));
@@ -678,10 +770,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     expectingNewTab = false;
     clearTimeout(expectingTimeout);
 
-    // Wait a moment for the page to fully render, then inject
+    // Show an instant "AutoApply is starting..." banner with 0ms delay so
+    // there is no visible gap between leaving LinkedIn and the ATS script loading.
+    injectInstantBanner(tabId);
+
+    // Then inject the full ATS script after the page has rendered
     setTimeout(() => {
       injectATSScript(tabId, tab.url);
-    }, 3000);
+    }, 2500);
     return;
   }
 
@@ -699,11 +795,41 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   expectingNewTab = false;
   clearTimeout(expectingTimeout);
 
-  // Wait a moment for the page to fully render, then inject
+  // Instant banner first, full script after render
+  injectInstantBanner(tabId);
   setTimeout(() => {
     injectATSScript(tabId, tab.url);
-  }, 3000);
+  }, 2500);
 });
+
+/**
+ * Immediately inject a lightweight "AutoApply is starting..." banner into a tab.
+ * Runs with 0ms delay so there is no visible gap when the user lands on the ATS page.
+ * The full ATS script will replace this banner once it loads (~2.5s later).
+ */
+function injectInstantBanner(tabId) {
+  chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (document.getElementById("autoapply-banner")) return; // already has one
+      const b = document.createElement("div");
+      b.id = "autoapply-banner";
+      b.style.cssText = [
+        "position:fixed", "top:0", "left:0", "right:0", "z-index:2147483647",
+        "background:linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%)",
+        "color:#fff", "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+        "padding:10px 18px 9px", "box-shadow:0 4px 20px rgba(0,0,0,0.2)",
+      ].join(";");
+      b.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">🤖 AUTOAPPLY AI</span>
+          <span style="font-size:13px;font-weight:500;">Opening application — please wait…</span>
+          <span style="font-size:12px;opacity:0.7;margin-left:auto;">Loading form filler…</span>
+        </div>`;
+      document.body ? document.body.prepend(b) : document.documentElement.prepend(b);
+    },
+  }).catch(() => {}); // page may not be ready yet — silently ignore
+}
 
 /**
  * Inject the appropriate ATS script into a tab.
@@ -719,6 +845,7 @@ async function injectATSScript(tabId, url) {
     return;
   }
   injectedTabIds.set(tabId, { url, timestamp: Date.now() });
+  applyTabId = tabId; // Track which tab owns the active application
   try { AALog && AALog.nav("bg.inject.start", { tabId, url }); } catch(_){}
   const urlLower = url.toLowerCase();
 

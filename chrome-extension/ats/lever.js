@@ -50,6 +50,8 @@
     }
 
     const pendingJob = stored.pendingApplication;
+    // Remove pendingApplication immediately so any re-injection (SW restart) exits early
+    chrome.storage.local.remove(["pendingApplication"]);
     LOG("Processing Lever application for", pendingJob.jobTitle);
     showBanner("Preparing your application...", "ai");
 
@@ -58,25 +60,37 @@
       const pageJD = scrapeLeverJD();
       const jobDescription = pageJD || pendingJob.jobDescription;
 
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "This may take 15–30 seconds." });
+      // Store pay range in batch progress so banner can display it
+      storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
 
-      // Request tailoring with timeout
-      const tailoredData = await sendMessageWithTimeout({
+      // ── STEP 1: Fill basic fields IMMEDIATELY from profile (no AI wait) ──
+      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background — basic fields filled now." });
+      await fillBasicFieldsOnly();
+
+      // ── STEP 2: Fire tailoring as background Promise — don't block ──
+      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Basic info filled ✓ — personalising resume now..." });
+      const tailoringPromise = sendMessageWithTimeout({
         type: "TAILOR_AND_FILL",
         job: { ...pendingJob, jobDescription },
-      }, 90000);
+      }, 90000).catch(err => {
+        LOG("Tailoring failed:", err.message);
+        return null;
+      });
+
+      // ── STEP 3: Wait for tailoring, then fill remaining fields ──
+      const tailoredData = await tailoringPromise;
 
       if (!tailoredData?.tailoredResult) {
-        LOG("Tailoring returned no data, filling basic info only");
-        showBanner("Tailoring returned no data — filling with base profile data.", "error");
-        await fillBasicFieldsOnly();
+        LOG("Tailoring returned no data — form filled with base profile data");
+        showBanner("Resume personalisation unavailable — form filled with your profile.", "user", { subtext: "Review highlighted fields and submit when ready." });
         return;
       }
 
-      showBanner("Filling application form...", "ai");
-      LOG("Got tailored result, filling Lever form");
+      showBanner("Resume tailored ✓ — filling remaining fields...", "ai");
+      LOG("Got tailored result, filling custom questions");
 
-      await fillLeverForm(tailoredData.tailoredResult, pendingJob);
+      // Fill cover letter, custom questions, and EEO fields with tailored data
+      await fillRemainingFields(tailoredData.tailoredResult, pendingJob, jobDescription);
 
       // Attempt programmatic resume upload
       await attemptResumeUpload();
@@ -85,13 +99,60 @@
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {
-      LOG("Error:", err.message);
-      showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
+      LOG("Error:", err.message, "\nStack:", err.stack);
+      window.__aa_last_err_stack = err.stack;
+      try { localStorage.setItem("_aa_last_err_stack", err.stack); } catch(_) {}
+      showBanner("Error filling form — basic info filled as fallback.", "error", { subtext: err.message });
       await fillBasicFieldsOnly();
+      LOG("Showing amber banner now");
+      showBanner("Basic info filled — review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
+      LOG("Amber banner shown");
     }
   }
 
   /* ── JD Scraping ── */
+
+  /** Extract max base pay from a JD string. Returns integer string or null. */
+  function extractMaxPayFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, "");
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      if (val >= 30000 && val <= 2000000) amounts.push(val);
+    }
+    if (amounts.length === 0) return null;
+    return String(Math.round(Math.max(...amounts)));
+  }
+
+  /** Formatted pay range for banner display, e.g. "$120K–$190K". */
+  function extractPayRangeFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, "");
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      if (val >= 30000 && val <= 2000000) amounts.push(val);
+    }
+    if (amounts.length === 0) return null;
+    const fmt = n => n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
+    const min = Math.min(...amounts);
+    const max = Math.max(...amounts);
+    return min === max ? fmt(max) : `${fmt(min)}–${fmt(max)}`;
+  }
+
+  function storeSalaryRangeInProgress(salaryRange) {
+    if (!salaryRange) return;
+    chrome.storage.local.get(["_aa_batchProgress"], ({ _aa_batchProgress: bp }) => {
+      if (bp) chrome.storage.local.set({ _aa_batchProgress: { ...bp, salaryRange } });
+    });
+  }
 
   function scrapeLeverJD() {
     const selectors = [
@@ -115,7 +176,29 @@
 
   /* ── Form Filling ── */
 
-  async function fillLeverForm(tailoredResult, job) {
+  /**
+   * Fill cover letter, custom questions, and EEO fields — called AFTER tailoring resolves.
+   * Basic fields (name/email/phone/LinkedIn) are already filled by fillBasicFieldsOnly().
+   */
+  async function fillRemainingFields(tailoredResult, job, jobDescription) {
+    LOG("fillRemainingFields entered");
+    const stored = await chrome.storage.local.get(["userProfile"]);
+    const user = stored.userProfile || {};
+
+    // Cover letter / additional info
+    if (tailoredResult?.coverLetter) {
+      fillTextarea('textarea[name*="comments"], textarea[name*="additional"], textarea[name*="coverLetter"]', tailoredResult.coverLetter);
+    }
+
+    // Custom questions (compensation, work auth, EEO, etc.)
+    await fillCustomQuestions(tailoredResult, user, jobDescription);
+
+    LOG("Remaining fields filled");
+  }
+
+  /** @deprecated — use fillRemainingFields for tailored content, fillBasicFieldsOnly for profile data */
+  async function fillLeverForm(tailoredResult, job, jobDescription) {
+    LOG("fillLeverForm entered, jobDescription type:", typeof jobDescription);
     const stored = await chrome.storage.local.get(["userProfile"]);
     const user = stored.userProfile || {};
 
@@ -142,12 +225,12 @@
     }
 
     // Cover letter / additional info
-    if (tailoredResult.coverLetter) {
+    if (tailoredResult?.coverLetter) {
       fillTextarea('textarea[name*="comments"], textarea[name*="additional"], textarea[name*="coverLetter"]', tailoredResult.coverLetter);
     }
 
     // Try to fill custom questions by matching labels
-    await fillCustomQuestions(tailoredResult, user);
+    await fillCustomQuestions(tailoredResult, user, jobDescription);
 
     LOG("Form filling complete");
   }
@@ -162,13 +245,22 @@
     fillInput('input[name="phone"]', user.phone || "");
     fillInput('input[name*="linkedin"], input[name*="urls[LinkedIn]"], input[name*="urls[0]"]', user.linkedin || "");
 
+    // GitHub / Portfolio (fill immediately — no tailoring needed)
+    if (user.github) {
+      fillInput('input[name*="github"], input[name*="urls[GitHub]"], input[name*="urls[1]"]', user.github);
+    }
+    if (user.portfolio || user.website) {
+      fillInput('input[name*="portfolio"], input[name*="urls[Portfolio]"], input[name*="website"], input[name*="urls[2]"]', user.portfolio || user.website);
+    }
+
     LOG("Basic fields filled");
   }
 
-  async function fillCustomQuestions(tailoredResult, user) {
+  async function fillCustomQuestions(tailoredResult, user, jobDescription) {
+    LOG("fillCustomQuestions called, jobDescription type:", typeof jobDescription);
     // Lever custom questions are typically in .custom-question containers
     const questions = document.querySelectorAll('.application-question, [class*="custom-question"], .additional-fields .field');
-    if (questions.length === 0) return;
+    if (questions.length === 0) { LOG("No custom questions found"); return; }
 
     LOG("Found", questions.length, "custom question containers");
 
@@ -176,6 +268,16 @@
       const label = q.querySelector("label, .field-label, legend");
       if (!label) continue;
       const labelText = label.textContent.trim().toLowerCase();
+
+      // Compensation / salary expectations
+      if (labelText.includes("compensation") || labelText.includes("salary") || labelText.includes("pay expectation") || labelText.includes("expected pay")) {
+        const input = q.querySelector("input[type='text'], input[type='number'], textarea");
+        if (input && !input.value?.trim()) {
+          const maxPay = extractMaxPayFromJD(jobDescription) || user.salaryExpectation || user.compensation || "";
+          if (maxPay) fillInputEl(input, maxPay);
+        }
+        continue;
+      }
 
       // Work authorization / sponsorship
       if (labelText.includes("sponsor") || labelText.includes("authorization") || labelText.includes("authorised") || labelText.includes("legally")) {
@@ -220,6 +322,122 @@
         if (input) {
           fillInputEl(input, user.city || user.location || "");
         }
+        continue;
+      }
+
+      // Criminal record / background check
+      if (labelText.includes("criminal") || labelText.includes("criminal record") || labelText.includes("background check")) {
+        const radios = q.querySelectorAll('input[type="radio"]');
+        const select = q.querySelector("select");
+        if (radios.length > 0) fillRadio(radios, "No");
+        else if (select) fillSelect(select, "No");
+        continue;
+      }
+
+      // ── EEO / Diversity fields ──────────────────────────────────────────────
+
+      // Age range — radio buttons (e.g. "Under 30", "30–39", "40–49", "50+", "Prefer not to answer")
+      if (labelText.includes("age range") || labelText.includes("age group") || labelText.includes("what is your age") || labelText.includes("how old are you")) {
+        const radios = q.querySelectorAll('input[type="radio"]');
+        if (radios.length > 0) {
+          // Try to pick age range from userProfile.age if set; otherwise "Prefer not to answer"
+          const age = parseInt(user.age, 10) || 0;
+          let targetLabel = "Prefer not to answer";
+          if (age > 0) {
+            if (age < 30) targetLabel = "under 30";
+            else if (age < 40) targetLabel = "30";
+            else if (age < 50) targetLabel = "40";
+            else if (age < 60) targetLabel = "50";
+            else targetLabel = "60";
+          }
+          // Try to find matching radio; fall back to "Prefer not to answer"
+          let matched = false;
+          for (const radio of radios) {
+            const rl = (radio.closest("label")?.textContent?.trim().toLowerCase() ||
+                        document.querySelector(`label[for="${radio.id}"]`)?.textContent?.trim().toLowerCase() ||
+                        radio.value?.toLowerCase() || "");
+            if (rl.includes(targetLabel.toLowerCase())) {
+              radio.checked = true;
+              radio.dispatchEvent(new Event("change", { bubbles: true }));
+              LOG(`EEO age range → "${rl}"`);
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) {
+            // Fall back to "Prefer not to answer"
+            for (const radio of radios) {
+              const rl = (radio.closest("label")?.textContent?.trim().toLowerCase() ||
+                          document.querySelector(`label[for="${radio.id}"]`)?.textContent?.trim().toLowerCase() ||
+                          radio.value?.toLowerCase() || "");
+              if (rl.includes("prefer not") || rl.includes("decline") || rl.includes("not to answer") || rl.includes("no answer")) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event("change", { bubbles: true }));
+                LOG(`EEO age range fallback → "Prefer not to answer"`);
+                break;
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      // Ethnicity / race — checkboxes ("Prefer not to answer" if available, else leave unchecked)
+      if (labelText.includes("ethnic") || labelText.includes("race") || labelText.includes("racial") ||
+          labelText.includes("ancestry") || labelText.includes("heritage")) {
+        const checkboxes = q.querySelectorAll('input[type="checkbox"]');
+        if (checkboxes.length > 0) {
+          // Find and check "Prefer not to answer" / "Decline to answer" option
+          let foundPrefer = false;
+          for (const cb of checkboxes) {
+            const cl = (cb.closest("label")?.textContent?.trim().toLowerCase() ||
+                        document.querySelector(`label[for="${cb.id}"]`)?.textContent?.trim().toLowerCase() ||
+                        cb.value?.toLowerCase() || "");
+            if (cl.includes("prefer not") || cl.includes("decline") || cl.includes("not to answer") || cl.includes("no answer") || cl.includes("i choose not")) {
+              if (!cb.checked) {
+                cb.checked = true;
+                cb.dispatchEvent(new Event("change", { bubbles: true }));
+                LOG(`EEO ethnicity → "Prefer not to answer"`);
+              }
+              foundPrefer = true;
+              break;
+            }
+          }
+          if (!foundPrefer) {
+            LOG("EEO ethnicity: no 'Prefer not to answer' option — leaving unchecked");
+          }
+        }
+        continue;
+      }
+
+      // Gender identity (EEO)
+      if (labelText.includes("gender identity") || labelText.includes("what is your gender") || labelText.includes("gender?")) {
+        const select = q.querySelector("select");
+        const radios = q.querySelectorAll('input[type="radio"]');
+        const value = "Prefer not to answer";
+        if (select) fillSelect(select, value);
+        else if (radios.length > 0) fillRadio(radios, "prefer not");
+        continue;
+      }
+
+      // Veteran / military status (EEO)
+      if (labelText.includes("veteran") || labelText.includes("military service") || labelText.includes("armed forces")) {
+        const select = q.querySelector("select");
+        const radios = q.querySelectorAll('input[type="radio"]');
+        // Common options: "I am not a protected veteran", "Prefer not to answer"
+        if (select) fillSelect(select, "not a protected");
+        else if (radios.length > 0) {
+          fillRadio(radios, "not a protected") || fillRadio(radios, "prefer not");
+        }
+        continue;
+      }
+
+      // Disability status (EEO)
+      if (labelText.includes("disability") || labelText.includes("disabled") || labelText.includes("accommodation")) {
+        const select = q.querySelector("select");
+        const radios = q.querySelectorAll('input[type="radio"]');
+        if (select) fillSelect(select, "prefer not");
+        else if (radios.length > 0) fillRadio(radios, "prefer not");
         continue;
       }
     }
@@ -341,19 +559,21 @@
   }
 
   function fillRadio(radios, value) {
-    if (!radios || !value) return;
+    if (!radios || !value) return false;
     const valueLower = value.toLowerCase();
     for (const radio of radios) {
       const label = radio.closest("label")?.textContent?.trim().toLowerCase()
+        || document.querySelector(`label[for="${radio.id}"]`)?.textContent?.trim().toLowerCase()
         || radio.nextSibling?.textContent?.trim().toLowerCase()
         || radio.value?.toLowerCase() || "";
       if (label.includes(valueLower) || valueLower.includes(label)) {
         radio.checked = true;
         radio.dispatchEvent(new Event("change", { bubbles: true }));
         LOG("Selected radio:", label);
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   /* ── Banner UI ── */
@@ -392,16 +612,21 @@
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
-    chrome.storage.local.get(["_aa_batchProgress"], (result) => {
+    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumePdf"], (result) => {
       const bp = result._aa_batchProgress;
       const hasBatch = bp && bp.total > 0;
+      const hasPdf = !!result.tailoredResumePdf;
 
       const batchTag = hasBatch
         ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
         : "";
-      const jobLabel = hasBatch && bp.title
-        ? `<span style="font-size:12px;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bp.title}${bp.company ? " · " + bp.company : ""}</span>`
-        : "";
+      const pillStyle = `font-size:12px;opacity:0.9;background:rgba(255,255,255,0.15);border-radius:5px;padding:2px 8px;white-space:nowrap;`;
+      const companyTag = (hasBatch && bp.company)
+        ? `<span style="${pillStyle}">${bp.company}</span>` : "";
+      const roleTag = (hasBatch && bp.title)
+        ? `<span style="${pillStyle}">${bp.title}</span>` : "";
+      const salaryTag = (hasBatch && bp.salaryRange)
+        ? `<span style="${pillStyle}">💰 ${bp.salaryRange}</span>` : "";
 
       const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
       const progressBar = hasBatch ? `
@@ -419,26 +644,44 @@
         ? `<div style="font-size:11px;opacity:0.75;margin-top:3px;padding-left:2px;">${opts.subtext}</div>`
         : "";
 
-      // ── Action buttons (error and user-turn states get quick actions)
+      // Resume download button — always shown when PDF is ready
+      const pdfBtnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;`;
+      const pdfBtn = hasPdf
+        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
+        : "";
+
       const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
+      const pauseBtn = isAi
+        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.18);color:#fff;margin-left:auto;">⏸ Pause</button>`
+        : "";
+      const resumeBtn = opts.showResume
+        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.3);color:#fff;">▶ Resume</button>`
+        : "";
+
       let actionRow = "";
       if (type === "error") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
       } else if (type === "user") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;">
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          ${resumeBtn}
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+          ${pdfBtn}
         </div>`;
+      } else if (isAi) {
+        const innerBtns = [pdfBtn, pauseBtn].filter(Boolean).join("");
+        actionRow = innerBtns ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">${innerBtns}</div>` : "";
       }
 
       banner.style.background = cfg.bg;
       banner.style.color = "#fff";
       banner.innerHTML = `
         <div style="padding:8px 18px 7px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${batchTag}${jobLabel}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${batchTag}${companyTag}${roleTag}${salaryTag}</div>
           ${progressBar}
           <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">${actorBadge}${statusMsg}${timerEl}</div>
           ${subtextRow}
@@ -465,6 +708,28 @@
       document.getElementById("aa-btn-skip")?.addEventListener("click", () => {
         chrome.storage.local.remove(["pendingApplication"]);
         showBanner("Job skipped. You can close this tab.", "success");
+      });
+      document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
+        chrome.storage.local.get(["_aa_batchProgress"], (r) => {
+          const bpData = r._aa_batchProgress;
+          chrome.runtime.sendMessage({
+            type: "DOWNLOAD_RESUME",
+            job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
+          });
+          const btn = document.getElementById("aa-btn-download-resume");
+          if (btn) { btn.textContent = "⬇️ Download again"; btn.disabled = false; }
+        });
+      });
+      document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
+        chrome.storage.local.set({ _aa_paused: true });
+        showBanner("⏸ Paused — click Resume when ready.", "user", {
+          subtext: "AutoApply will continue from where it left off.",
+          showResume: true,
+        });
+      });
+      document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
+        chrome.storage.local.set({ _aa_paused: false });
+        showBanner("Resuming...", "ai", { subtext: "Picking up where we left off." });
       });
     });
 
