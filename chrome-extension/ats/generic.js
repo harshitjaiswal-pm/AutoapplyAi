@@ -584,7 +584,7 @@
    * Wait until the page transitions to an application form,
    * or until the timeout elapses. Returns true if form found.
    */
-  async function waitForApplicationForm(timeoutMs = 20000) {
+  async function waitForApplicationForm(timeoutMs = 45000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (isOnApplicationForm()) return true;
@@ -634,6 +634,8 @@
     // visible delay. We only await the result when we need it for resume upload.
     const pageJD = scrapeGenericJD();
     const jobDescription = pageJD || pendingJob.jobDescription;
+    // Store salary range in batch progress so banner can display 💰 pill
+    storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
     try { AALog && AALog.api("ats.tailor.request", { company: pendingJob.company, jobTitle: pendingJob.jobTitle, jdLen: (jobDescription || "").length, jdSource: pageJD ? "ats-page" : "linkedin" }); } catch(_){}
     const _tailorStart = Date.now();
     const tailoringPromise = sendMessageWithTimeout({
@@ -722,7 +724,7 @@
           showBanner("Waiting for application form to load...", "ai",
             { subtext: "Tailoring resume in background..." });
         }
-        const formReady = await waitForApplicationForm(20000);
+        const formReady = await waitForApplicationForm(45000);
         if (!formReady) {
           showBanner("Could not detect application form — please navigate to it manually.", "user");
           return;
@@ -1415,6 +1417,32 @@
     }
     if (matches.length === 0) return "";
     return String(Math.round(Math.max(...matches)));
+  }
+
+  /** Formatted pay range for banner display, e.g. "$120K–$190K". */
+  function extractPayRangeFromJD(jdText) {
+    if (!jdText) return null;
+    const text = jdText.replace(/,/g, "");
+    const amounts = [];
+    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let val = parseFloat(m[1]);
+      if (m[2]) val *= 1000;
+      if (val >= 30000 && val <= 2000000) amounts.push(val);
+    }
+    if (amounts.length === 0) return null;
+    const fmt = n => n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n}`;
+    const min = Math.min(...amounts);
+    const max = Math.max(...amounts);
+    return min === max ? fmt(max) : `${fmt(min)}–${fmt(max)}`;
+  }
+
+  function storeSalaryRangeInProgress(salaryRange) {
+    if (!salaryRange) return;
+    chrome.storage.local.get(["_aa_batchProgress"], ({ _aa_batchProgress: bp }) => {
+      if (bp) chrome.storage.local.set({ _aa_batchProgress: { ...bp, salaryRange } });
+    });
   }
 
   /**

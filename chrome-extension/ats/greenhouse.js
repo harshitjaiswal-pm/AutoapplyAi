@@ -456,6 +456,16 @@
 
         // Validate fields and log any empty ones
         validateFilledFields(user, tailoredResult);
+
+        // Safety-net 3rd pass after 3s — catches slow React pages (e.g. Stripe, Coinbase)
+        // that haven't fully settled by the first re-fill window.
+        setTimeout(() => {
+          fillRadioCheckboxQuestions(user);
+          for (const { labels, value } of customTextFields) {
+            if (value) fillByLabel(labels, value, true);
+          }
+          console.log("AutoApply: Safety-net 3rd fill pass complete");
+        }, 3000);
       }, dropdownFillTimeMs);
     });
 
