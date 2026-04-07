@@ -86,6 +86,10 @@
     if (!isOnGreenhouseApplicationForm()) {
       console.log("AutoApply: On Greenhouse posting page — navigating to application form");
       showBanner("Opening application form...", "ai", { subtext: "Navigating to the application..." });
+      // Re-store pendingApplication before navigating so the destination page can read it.
+      // (It was removed above to guard against SW-restart double-injection on the SAME page,
+      //  but cross-page navigation creates a fresh window context, so we need it again.)
+      await chrome.storage.local.set({ pendingApplication: pendingJob });
       const navigated = await clickGreenhouseApplyButton();
       if (!navigated) {
         showBanner(
@@ -315,6 +319,8 @@
    * Returns true if a navigation was triggered.
    */
   async function clickGreenhouseApplyButton() {
+    // NOTE: pendingApplication was already re-stored by the caller before this runs,
+    // so the destination page will have access to it after any navigation.
     // Search for the Apply button by visible text
     const allClickable = Array.from(document.querySelectorAll('button, a[href], [role="button"]'));
     for (const el of allClickable) {
