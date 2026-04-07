@@ -115,7 +115,7 @@ export default function ResumeUploader() {
             <h2 className="text-sm font-semibold text-neutral-900">Your resume</h2>
           </div>
           <p className="text-[13px] text-neutral-400 mt-0.5 ml-7">
-            Upload a file or paste text
+            PDF, Word (.docx), or plain text — or paste below
           </p>
         </div>
 
@@ -153,7 +153,7 @@ export default function ResumeUploader() {
 
       <textarea
         className="w-full h-48 p-4 bg-neutral-50 border border-neutral-200 rounded-lg text-sm font-mono text-neutral-700 placeholder:text-neutral-300 focus:outline-none focus:ring-1 focus:ring-indigo-200 focus:border-indigo-200 resize-y transition-all"
-        placeholder="Paste your resume text here..."
+        placeholder="Or paste your resume text here (plain text, Markdown, or copied from a PDF)..."
         value={text}
         onChange={(e) => setText(e.target.value)}
         autoComplete="off"
@@ -163,19 +163,24 @@ export default function ResumeUploader() {
         <p className="text-[13px] text-red-500 animate-fade-in">{error}</p>
       )}
 
-      <button
-        onClick={() => parseResume(text)}
-        disabled={isParsingResume || isUploading || text.trim().length < 50}
-        className="text-sm font-medium bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors"
-      >
-        {isParsingResume ? (
-          <span className="flex items-center gap-2">
-            <Spinner /> Parsing...
-          </span>
-        ) : (
-          "Parse resume"
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => parseResume(text)}
+          disabled={isParsingResume || isUploading || text.trim().length < 50}
+          className="text-sm font-medium bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+        >
+          {isParsingResume ? (
+            <span className="flex items-center gap-2">
+              <Spinner /> Parsing...
+            </span>
+          ) : (
+            "Parse resume →"
+          )}
+        </button>
+        {text.trim().length > 0 && text.trim().length < 50 && (
+          <p className="text-[12px] text-neutral-400">Resume seems too short — paste the full text</p>
         )}
-      </button>
+      </div>
 
       {parsedResume && (
         <div className="border border-emerald-200 bg-emerald-50/50 rounded-lg p-4 animate-fade-up">

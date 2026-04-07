@@ -12,263 +12,290 @@
     }
 
     .header {
-      background: #4F46E5;
+      background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
       color: white;
-      padding: 16px;
+      padding: 14px 16px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
 
-    .header-title {
-      flex: 1;
+    .header-logo {
+      width: 28px; height: 28px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 800; color: white;
+      margin-right: 10px; flex-shrink: 0;
     }
 
-    .header h1 {
-      font-size: 15px;
-      font-weight: 600;
-      margin: 0;
-    }
+    .header-title { flex: 1; }
+    .header h1 { font-size: 14px; font-weight: 700; margin: 0; }
+    .header p { font-size: 11px; opacity: 0.75; margin-top: 1px; }
 
-    .header p {
-      font-size: 11px;
-      opacity: 0.8;
-      margin-top: 2px;
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #34D399; flex-shrink: 0;
+      box-shadow: 0 0 6px rgba(52,211,153,0.6);
     }
 
     .tabs {
       display: flex;
       background: white;
-      border-bottom: 2px solid #E5E7EB;
-      gap: 0;
+      border-bottom: 1px solid #E5E7EB;
     }
 
     .tab-btn {
       flex: 1;
-      padding: 12px 16px;
+      padding: 10px 12px;
       border: none;
       background: transparent;
-      color: #666;
-      font-size: 13px;
+      color: #9CA3AF;
+      font-size: 12px;
       font-weight: 500;
       cursor: pointer;
-      border-bottom: 3px solid transparent;
-      transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
     }
 
-    .tab-btn:hover {
-      color: #4F46E5;
-      background: #F9FAFB;
+    .tab-btn:hover { color: #4F46E5; background: #F9FAFB; }
+    .tab-btn.active { color: #4F46E5; border-bottom-color: #4F46E5; }
+
+    .tab-content { display: none; max-height: 580px; overflow-y: auto; }
+    .tab-content.active { display: block; }
+
+    /* ── Dashboard Tab ── */
+    .dashboard { padding: 14px 16px; }
+
+    .stat-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 8px; margin-bottom: 14px;
     }
 
-    .tab-btn.active {
-      color: #4F46E5;
-      border-bottom-color: #4F46E5;
-      background: #F9FAFB;
+    .stat-card {
+      background: white; border: 1px solid #E5E7EB;
+      border-radius: 10px; padding: 10px 12px;
     }
 
-    .tab-content {
-      display: none;
-      max-height: 600px;
-      overflow-y: auto;
+    .stat-card-value {
+      font-size: 22px; font-weight: 700; color: #111;
+      line-height: 1;
     }
 
-    .tab-content.active {
-      display: block;
+    .stat-card-label {
+      font-size: 10px; color: #9CA3AF; font-weight: 500;
+      margin-top: 3px; text-transform: uppercase; letter-spacing: 0.3px;
     }
 
-    /* Dashboard Tab */
-    .dashboard {
-      padding: 16px;
-    }
+    .stat-card.accent { background: #EEF2FF; border-color: #C7D2FE; }
+    .stat-card.accent .stat-card-value { color: #4F46E5; }
 
-    .stat-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 0;
-      border-bottom: 1px solid #EEE;
-    }
-
-    .stat-row:last-of-type {
-      border-bottom: none;
-      margin-bottom: 16px;
-    }
-
-    .stat-label {
-      font-size: 12px;
-      color: #666;
-    }
-
-    .stat-value {
-      font-size: 14px;
-      font-weight: 600;
-      color: #111;
-    }
-
-    .settings-section {
-      margin-top: 16px;
-      padding-top: 16px;
-      border-top: 1px solid #EEE;
-    }
-
-    .settings-section label {
-      display: block;
-      font-size: 11px;
-      color: #999;
-      margin-bottom: 6px;
-      font-weight: 500;
-    }
-
-    .settings-section input {
-      width: 100%;
-      padding: 8px 10px;
-      font-size: 12px;
-      border: 1px solid #DDD;
-      border-radius: 6px;
-      color: #333;
-      margin-bottom: 12px;
-    }
-
-    .settings-section input:focus {
-      outline: none;
-      border-color: #4F46E5;
-      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+    .section-title {
+      font-size: 10px; font-weight: 600; color: #9CA3AF;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 8px;
     }
 
     .btn {
-      display: block;
-      width: 100%;
-      padding: 10px;
-      margin-top: 8px;
-      background: #4F46E5;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
+      display: block; width: 100%;
+      padding: 10px; margin-top: 8px;
+      background: #4F46E5; color: white;
+      border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+      text-align: center;
     }
 
-    .btn:hover {
-      background: #4338CA;
-    }
+    .btn:hover { background: #4338CA; }
+    .btn:active { background: #3730A3; }
 
     .btn-secondary {
-      background: #F5F5F5;
-      color: #333;
-      border: 1px solid #E5E5E5;
-      margin-top: 8px;
+      background: white; color: #374151;
+      border: 1px solid #E5E7EB; margin-top: 6px;
     }
 
-    .btn-secondary:hover {
-      background: #EEEEEE;
+    .btn-secondary:hover { background: #F9FAFB; }
+
+    .btn-danger {
+      background: white; color: #DC2626;
+      border: 1px solid #FCA5A5; margin-top: 6px;
     }
 
-    /* Profile Tab */
-    .profile {
-      padding: 16px;
+    .btn-danger:hover { background: #FEF2F2; }
+
+    .help-text {
+      font-size: 11px; color: #9CA3AF; line-height: 1.5;
+      background: #F9FAFB; border-radius: 8px;
+      padding: 10px 12px; margin-top: 10px;
+      border: 1px solid #E5E7EB;
     }
 
-    .form-group {
-      margin-bottom: 12px;
+    .help-text strong { color: #6B7280; }
+
+    /* ── Profile Tab ── */
+    .profile { padding: 14px 16px; }
+
+    .form-section-title {
+      font-size: 10px; font-weight: 600; color: #9CA3AF;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin: 14px 0 8px; padding-top: 12px;
+      border-top: 1px solid #E5E7EB;
     }
+
+    .form-section-title:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+
+    .form-group { margin-bottom: 10px; }
 
     .form-row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 12px;
+      display: flex; gap: 8px; margin-bottom: 10px;
     }
 
-    .form-row .form-group {
-      flex: 1;
-      margin-bottom: 0;
-    }
+    .form-row .form-group { flex: 1; margin-bottom: 0; }
 
     .form-group label {
-      display: block;
-      font-size: 11px;
-      color: #666;
-      margin-bottom: 4px;
-      font-weight: 500;
+      display: block; font-size: 11px; color: #374151;
+      margin-bottom: 4px; font-weight: 500;
     }
 
     .form-group input,
     .form-group select {
-      width: 100%;
-      padding: 8px 10px;
-      font-size: 12px;
-      border: 1px solid #DDD;
-      border-radius: 6px;
-      color: #333;
-      font-family: inherit;
+      width: 100%; padding: 8px 10px;
+      font-size: 12px; border: 1px solid #D1D5DB;
+      border-radius: 6px; color: #111; font-family: inherit;
+      background: white; transition: border-color 0.15s;
     }
 
     .form-group input:focus,
     .form-group select:focus {
-      outline: none;
-      border-color: #4F46E5;
-      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+      outline: none; border-color: #4F46E5;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.08);
+    }
+
+    .save-btn-row {
+      position: sticky; bottom: 0;
+      background: white; padding: 10px 0 2px;
+      border-top: 1px solid #E5E7EB; margin-top: 8px;
     }
 
     .save-feedback {
+      display: none; font-size: 12px; color: #059669;
+      margin-top: 6px; font-weight: 500; text-align: center;
+    }
+
+    .save-feedback.show { display: block; }
+
+    /* ── Logs Tab ── */
+    .logs { padding: 14px 16px; }
+
+    .log-summary {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px; margin-bottom: 12px;
+    }
+
+    .log-stat {
+      background: white; border: 1px solid #E5E7EB;
+      border-radius: 8px; padding: 8px 10px; text-align: center;
+    }
+
+    .log-stat-val { font-size: 18px; font-weight: 700; color: #111; }
+    .log-stat-val.error { color: #DC2626; }
+    .log-stat-val.success { color: #059669; }
+    .log-stat-lbl { font-size: 10px; color: #9CA3AF; margin-top: 2px; }
+
+    .log-toggle {
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .log-toggle label {
+      font-size: 11px; color: #6B7280; font-weight: 500;
+      display: flex; align-items: center; gap: 5px; cursor: pointer;
+    }
+
+    .log-feed {
+      max-height: 200px; overflow-y: auto;
+      border: 1px solid #E5E7EB; border-radius: 8px;
+      background: white;
+    }
+
+    .log-entry {
+      padding: 7px 10px; border-bottom: 1px solid #F3F4F6;
+      font-size: 11px; line-height: 1.4;
+      display: flex; align-items: flex-start; gap: 7px;
+    }
+
+    .log-entry:last-child { border-bottom: none; }
+    .log-entry-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 3px; flex-shrink: 0; }
+    .log-entry-dot.info { background: #93C5FD; }
+    .log-entry-dot.success { background: #34D399; }
+    .log-entry-dot.error { background: #F87171; }
+    .log-entry-dot.warn { background: #FCD34D; }
+    .log-entry-time { color: #9CA3AF; font-size: 10px; white-space: nowrap; }
+    .log-entry-msg { color: #374151; flex: 1; }
+
+    .log-raw-panel {
       display: none;
-      font-size: 12px;
-      color: #059669;
       margin-top: 8px;
-      font-weight: 500;
+      max-height: 160px; overflow-y: auto;
+      background: #0F172A; color: #E2E8F0;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 10px; padding: 8px; border-radius: 6px;
+      white-space: pre-wrap; word-break: break-all;
     }
 
-    .save-feedback.show {
-      display: block;
-    }
+    .log-actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
 
-    /* Instructions */
-    .instructions {
-      padding: 16px;
-      border-top: 1px solid #EEE;
-      font-size: 11px;
-      color: #999;
-      line-height: 1.6;
+    .log-actions .btn,
+    .log-actions .btn-secondary {
+      flex: 1; min-width: 0;
+      padding: 7px 10px; font-size: 11px; margin-top: 0;
     }
   </style>
 </head>
 <body>
   <div class="header">
+    <div class="header-logo">A</div>
     <div class="header-title">
       <h1>AutoApply AI</h1>
-      <p>LinkedIn Job Scraper</p>
+      <p>Batch job application assistant</p>
     </div>
+    <div class="status-dot" title="Extension active"></div>
   </div>
 
   <div class="tabs">
-    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn active" data-tab="dashboard">Overview</button>
     <button class="tab-btn" data-tab="profile">Profile</button>
-    <button class="tab-btn" data-tab="logs">Logs</button>
+    <button class="tab-btn" data-tab="logs">Activity</button>
   </div>
 
-  <!-- Dashboard Tab -->
+  <!-- Overview Tab -->
   <div id="dashboard" class="tab-content active dashboard">
-    <div class="stat-row">
-      <span class="stat-label">Jobs scraped this session</span>
-      <span class="stat-value" id="scraped-count">0</span>
-    </div>
-    <div class="stat-row">
-      <span class="stat-label">Jobs sent to pipeline</span>
-      <span class="stat-value" id="sent-count">0</span>
+    <div class="stat-grid">
+      <div class="stat-card accent">
+        <div class="stat-card-value" id="scraped-count">0</div>
+        <div class="stat-card-label">Found this session</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-value" id="sent-count">0</div>
+        <div class="stat-card-label">Sent to pipeline</div>
+      </div>
     </div>
 
-    <div class="settings-section">
-      <label for="url-input">AutoApply URL</label>
-      <input id="url-input" type="text" placeholder="https://autoapply-ai-delta.vercel.app" />
-      <button class="btn" id="open-pipeline">Open Pipeline</button>
-      <button class="btn btn-secondary" id="clear-data">Clear Data</button>
+    <p class="section-title">Quick actions</p>
+    <button class="btn" id="open-pipeline">Open AutoApply Dashboard →</button>
+    <button class="btn btn-secondary" id="clear-data">Clear session data</button>
+
+    <div class="help-text">
+      <strong>How to use:</strong><br>
+      1. Go to any LinkedIn jobs search page<br>
+      2. Click the <strong>AutoApply</strong> button (bottom-right)<br>
+      3. Hit <strong>Scan Page</strong>, select jobs, and start applying
     </div>
   </div>
 
   <!-- Profile Tab -->
   <div id="profile" class="tab-content profile">
+    <p class="form-section-title">Personal</p>
     <div class="form-row">
       <div class="form-group">
         <label for="firstName">First Name</label>
@@ -290,8 +317,9 @@
       <input id="phone" type="tel" placeholder="+1 (555) 000-0000" />
     </div>
 
+    <p class="form-section-title">Address</p>
     <div class="form-group">
-      <label for="address">Address Line 1</label>
+      <label for="address">Street Address</label>
       <input id="address" type="text" placeholder="123 Main St" />
     </div>
 
@@ -301,115 +329,124 @@
         <input id="city" type="text" placeholder="Toronto" />
       </div>
       <div class="form-group">
-        <label for="province">Province/State</label>
+        <label for="province">Province / State</label>
         <input id="province" type="text" placeholder="ON" />
-      </div>
-      <div class="form-group">
-        <label for="postalCode">Postal Code</label>
-        <input id="postalCode" type="text" placeholder="M1A 1A1" />
       </div>
     </div>
 
     <div class="form-group">
+      <label for="postalCode">Postal / ZIP Code</label>
+      <input id="postalCode" type="text" placeholder="M1A 1A1" />
+    </div>
+
+    <p class="form-section-title">Links</p>
+    <div class="form-group">
       <label for="linkedin">LinkedIn URL</label>
-      <input id="linkedin" type="url" placeholder="https://linkedin.com/in/johndoe" />
+      <input id="linkedin" type="url" placeholder="https://linkedin.com/in/yourname" />
     </div>
 
     <div class="form-group">
       <label for="github">GitHub URL</label>
-      <input id="github" type="url" placeholder="https://github.com/johndoe" />
+      <input id="github" type="url" placeholder="https://github.com/yourname" />
     </div>
 
     <div class="form-group">
-      <label for="portfolio">Portfolio URL</label>
-      <input id="portfolio" type="url" placeholder="https://johndoe.com" />
+      <label for="portfolio">Portfolio / Website</label>
+      <input id="portfolio" type="url" placeholder="https://yourname.com" />
     </div>
 
+    <p class="form-section-title">Employment</p>
     <div class="form-group">
-      <label for="currentCompany">Current Company</label>
+      <label for="currentCompany">Current / Most Recent Company</label>
       <input id="currentCompany" type="text" placeholder="Acme Corp" />
-    </div>
-
-    <div class="form-group">
-      <label for="pronouns">Pronouns</label>
-      <select id="pronouns">
-        <option value="">Select pronouns</option>
-        <option value="He/Him">He/Him</option>
-        <option value="She/Her">She/Her</option>
-        <option value="They/Them">They/Them</option>
-        <option value="Other">Other</option>
-      </select>
     </div>
 
     <div class="form-group">
       <label for="workAuth">Work Authorization</label>
       <select id="workAuth">
-        <option value="">Select work authorization</option>
+        <option value="">Select…</option>
         <option value="Citizen">Citizen</option>
         <option value="Permanent Resident">Permanent Resident</option>
-        <option value="Work Permit">Work Permit</option>
+        <option value="Work Permit">Work Permit / Open Permit</option>
         <option value="Require Sponsorship">Require Sponsorship</option>
       </select>
     </div>
 
+    <p class="form-section-title">Other</p>
     <div class="form-group">
-      <label for="howDidYouHear">How Did You Hear About Us?</label>
+      <label for="pronouns">Pronouns <span style="color:#9CA3AF;font-weight:400">(optional)</span></label>
+      <select id="pronouns">
+        <option value="">Select…</option>
+        <option value="He/Him">He/Him</option>
+        <option value="She/Her">She/Her</option>
+        <option value="They/Them">They/Them</option>
+        <option value="Other">Other / Prefer not to say</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="howDidYouHear">Default "How did you hear about us?"</label>
       <select id="howDidYouHear">
-        <option value="">Select source</option>
+        <option value="">Select…</option>
         <option value="LinkedIn">LinkedIn</option>
         <option value="Indeed">Indeed</option>
         <option value="Glassdoor">Glassdoor</option>
-        <option value="Referral">Referral</option>
+        <option value="Referral">Employee Referral</option>
         <option value="Company Website">Company Website</option>
         <option value="Other">Other</option>
       </select>
     </div>
 
-    <button class="btn" id="save-profile">Save Profile</button>
-    <div class="save-feedback" id="save-feedback">Saved!</div>
+    <div class="save-btn-row">
+      <button class="btn" id="save-profile">Save Profile</button>
+      <div class="save-feedback" id="save-feedback">✓ Profile saved</div>
+    </div>
   </div>
 
-  <!-- Logs Tab -->
-  <div id="logs" class="tab-content dashboard" style="padding:16px;">
-    <div class="stat-row">
-      <span class="stat-label">Total log entries</span>
-      <span class="stat-value" id="log-count">0</span>
-    </div>
-    <div class="stat-row">
-      <span class="stat-label">Errors</span>
-      <span class="stat-value" id="log-error-count" style="color:#DC2626;">0</span>
-    </div>
-    <div class="stat-row">
-      <span class="stat-label">API calls</span>
-      <span class="stat-value" id="log-api-count">0</span>
-    </div>
-    <div class="stat-row">
-      <span class="stat-label">Form events</span>
-      <span class="stat-value" id="log-form-count">0</span>
+  <!-- Activity Tab -->
+  <div id="logs" class="tab-content logs">
+    <div class="log-summary">
+      <div class="log-stat">
+        <div class="log-stat-val" id="log-count">0</div>
+        <div class="log-stat-lbl">Events</div>
+      </div>
+      <div class="log-stat">
+        <div class="log-stat-val success" id="log-form-count">0</div>
+        <div class="log-stat-lbl">Forms filled</div>
+      </div>
+      <div class="log-stat">
+        <div class="log-stat-val error" id="log-error-count">0</div>
+        <div class="log-stat-lbl">Errors</div>
+      </div>
     </div>
 
-    <div id="log-preview" style="
-      margin-top: 12px;
-      max-height: 180px;
-      overflow-y: auto;
-      background: #0F172A;
-      color: #E2E8F0;
-      font-family: ui-monospace, Menlo, monospace;
-      font-size: 10px;
-      padding: 8px;
-      border-radius: 6px;
-      white-space: pre-wrap;
-      word-break: break-all;
-    ">No logs yet. Start an apply run to capture events.</div>
+    <div class="log-toggle">
+      <label>
+        <input type="checkbox" id="log-show-raw" />
+        Show raw debug logs
+      </label>
+    </div>
 
-    <div class="settings-section">
-      <button class="btn" id="log-copy">Copy JSON to clipboard</button>
-      <button class="btn btn-secondary" id="log-download">Download logs (.json)</button>
-      <button class="btn btn-secondary" id="log-download-md">Download report (.md)</button>
+    <div class="log-feed" id="log-feed">
+      <div class="log-entry">
+        <div class="log-entry-dot info"></div>
+        <div>
+          <div class="log-entry-msg">No activity yet — start an apply run to see events here.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="log-raw-panel" id="log-preview">No logs yet. Start an apply run to capture events.</div>
+
+    <div class="log-actions">
+      <button class="btn" id="log-copy">Copy for support</button>
       <button class="btn btn-secondary" id="log-refresh">Refresh</button>
-      <button class="btn btn-secondary" id="log-clear" style="color:#DC2626;">Clear logs</button>
-      <div class="save-feedback" id="log-feedback">Copied!</div>
     </div>
+    <div class="log-actions" style="margin-top:4px;">
+      <button class="btn btn-secondary" id="log-download-md">Download report</button>
+      <button class="btn btn-danger" id="log-clear">Clear</button>
+    </div>
+    <div class="save-feedback" id="log-feedback" style="text-align:center;margin-top:6px;">Copied to clipboard</div>
   </div>
 </body>
 

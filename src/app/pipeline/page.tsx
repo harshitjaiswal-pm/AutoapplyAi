@@ -475,7 +475,7 @@ function AddJobsTab({
         <div>
           <h3 className="text-sm font-semibold text-neutral-900">Step 2: Add Jobs</h3>
           <p className="text-[12px] text-neutral-400 mt-0.5">
-            Paste job descriptions manually, or use the Chrome Extension to scrape from LinkedIn.
+            Paste job descriptions manually, or use the Chrome Extension to import jobs from LinkedIn.
           </p>
         </div>
 

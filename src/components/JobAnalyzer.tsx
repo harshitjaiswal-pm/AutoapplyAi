@@ -69,7 +69,7 @@ export default function JobAnalyzer() {
       <button
         onClick={handleAnalyze}
         disabled={isAnalyzingJob || jobText.trim().length < 50}
-        className="text-sm font-medium bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors"
+        className="text-sm font-medium bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
       >
         {isAnalyzingJob ? (
           <span className="flex items-center gap-2">
@@ -77,7 +77,7 @@ export default function JobAnalyzer() {
             Analyzing...
           </span>
         ) : (
-          "Analyze job"
+          "Analyze job →"
         )}
       </button>
 
@@ -97,7 +97,7 @@ export default function JobAnalyzer() {
           {parsedJob.preferredSkills.length > 0 && (
             <TagGroup label="Preferred" tags={parsedJob.preferredSkills} color="amber" />
           )}
-          <TagGroup label="ATS keywords" tags={parsedJob.keywords} color="neutral" />
+          <TagGroup label="Keywords" tags={parsedJob.keywords} color="neutral" />
         </div>
       )}
     </div>

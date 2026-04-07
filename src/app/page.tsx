@@ -14,8 +14,8 @@ export default function HomePage() {
           <span className="text-indigo-400">Get the interview.</span>
         </h1>
         <p className="mt-5 text-base text-neutral-500 leading-relaxed max-w-md mx-auto">
-          Paste a job description. Get a tailored, ATS-optimized resume
-          in seconds. Download and apply.
+          Paste a job description. Get a resume tailored to that specific role
+          in seconds — then download and apply.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
           <Link
@@ -70,7 +70,7 @@ export default function HomePage() {
         </p>
         <div className="bg-neutral-50 rounded-xl border border-neutral-100 divide-y divide-neutral-100">
           <Row icon="01" title="Not a chatbot" desc="Purpose-built prompts tuned by career coaches for PM and BA roles. Not a generic AI conversation." />
-          <Row icon="02" title="ATS-first" desc="Every resume is optimized for applicant tracking systems — right keywords, right format, right structure." />
+          <Row icon="02" title="Keyword-matched" desc="Every resume is tuned to the job's exact requirements — right keywords, right structure, nothing generic." />
           <Row icon="03" title="One-click export" desc="Download a formatted PDF or Word doc instantly. No copy-pasting into templates." />
           <Row icon="04" title="Track everything" desc="Dashboard shows every job you tailored for, match scores, and application status." />
         </div>

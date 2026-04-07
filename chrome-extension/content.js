@@ -1236,102 +1236,109 @@
         z-index: 10000;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       ">
+        <!-- Collapsed toggle button -->
         <button id="autoapply-toggle" style="
-          background: #4F46E5;
-          color: white;
-          border: none;
-          border-radius: 12px;
-          padding: 12px 20px;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
-          box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          transition: all 0.2s;
+          background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+          color: white; border: none; border-radius: 14px;
+          padding: 11px 18px; font-size: 13px; font-weight: 600;
+          cursor: pointer; box-shadow: 0 4px 20px rgba(79,70,229,0.4);
+          display: flex; align-items: center; gap: 8px; transition: all 0.2s;
+          letter-spacing: -0.1px;
         ">
-          <span style="font-size: 16px;">A</span>
+          <span style="
+            background: rgba(255,255,255,0.22); border-radius: 7px;
+            width: 22px; height: 22px; display: flex; align-items: center;
+            justify-content: center; font-size: 12px; font-weight: 800;
+          ">A</span>
           AutoApply
           <span id="autoapply-count" style="
-            background: #fff;
-            color: #4F46E5;
-            padding: 2px 9px;
-            border-radius: 10px;
-            font-size: 12px;
-            font-weight: 700;
-            min-width: 20px;
-            text-align: center;
+            background: rgba(255,255,255,0.95); color: #4F46E5;
+            padding: 1px 8px; border-radius: 10px;
+            font-size: 11px; font-weight: 800; min-width: 18px; text-align: center;
           ">0</span>
         </button>
 
+        <!-- Expanded panel -->
         <div id="autoapply-expanded" style="
-          display: none;
-          background: white;
-          border-radius: 16px;
-          box-shadow: 0 8px 40px rgba(0,0,0,0.15);
-          width: 400px;
-          max-height: 550px;
-          overflow: hidden;
+          display: none; background: white; border-radius: 16px;
+          box-shadow: 0 12px 50px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
+          width: 400px; max-height: 560px; overflow: hidden;
+          border: 1px solid rgba(0,0,0,0.06);
         ">
+          <!-- Header -->
           <div style="
-            padding: 16px;
-            border-bottom: 1px solid #E5E5E5;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+            padding: 14px 16px 12px;
+            background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+            display: flex; align-items: center; justify-content: space-between;
           ">
-            <div>
-              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: #111;">AutoApply AI</h3>
-              <p style="margin: 2px 0 0; font-size: 11px; color: #999;" id="autoapply-status">Scan jobs to get started</p>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="
+                background: rgba(255,255,255,0.2); border-radius: 8px;
+                width: 28px; height: 28px; display:flex; align-items:center;
+                justify-content:center; font-size:13px; font-weight:800; color:white;
+              ">A</div>
+              <div>
+                <h3 style="margin:0;font-size:13px;font-weight:700;color:white;letter-spacing:-0.1px;">AutoApply AI</h3>
+                <p style="margin:1px 0 0;font-size:10px;color:rgba(255,255,255,0.7);" id="autoapply-status">Find jobs on this page to get started</p>
+              </div>
             </div>
             <button id="autoapply-close" style="
-              background: none; border: none; font-size: 18px; cursor: pointer; color: #999; padding: 4px;
+              background:rgba(255,255,255,0.15); border:none; border-radius:6px;
+              color:white; font-size:16px; cursor:pointer; padding:3px 7px; line-height:1;
+              transition:background 0.15s;
             ">&times;</button>
           </div>
 
-          <div style="padding: 12px 16px; border-bottom: 1px solid #E5E5E5; display: flex; gap: 8px;">
+          <!-- Scan / Select all bar -->
+          <div style="padding:10px 12px;border-bottom:1px solid #F0F0F0;display:flex;gap:6px;background:#FAFAFA;">
             <button id="autoapply-scan" style="
-              flex: 1; background: #F5F5F5; border: 1px solid #E5E5E5; border-radius: 8px;
-              padding: 8px; font-size: 12px; font-weight: 500; cursor: pointer; color: #333;
-            ">Scan Page</button>
+              flex:1; background:#4F46E5; color:white; border:none; border-radius:8px;
+              padding:9px 12px; font-size:12px; font-weight:600; cursor:pointer;
+              display:flex; align-items:center; justify-content:center; gap:5px;
+              box-shadow:0 2px 8px rgba(79,70,229,0.25); transition:background 0.15s;
+            ">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              Scan Page
+            </button>
             <button id="autoapply-select-all" style="
-              background: #F5F5F5; border: 1px solid #E5E5E5; border-radius: 8px;
-              padding: 8px 12px; font-size: 12px; font-weight: 500; cursor: pointer; color: #333;
+              background:white; border:1px solid #E5E7EB; border-radius:8px;
+              padding:9px 12px; font-size:12px; font-weight:500; cursor:pointer;
+              color:#374151; transition:background 0.15s;
             ">Select All</button>
           </div>
 
-          <div id="autoapply-jobs-list" style="
-            max-height: 300px; overflow-y: auto; padding: 8px;
-          ">
-            <p style="text-align: center; color: #CCC; font-size: 12px; padding: 20px;">
-              Click "Scan Page" to find jobs
-            </p>
+          <!-- Job list -->
+          <div id="autoapply-jobs-list" style="max-height:290px;overflow-y:auto;padding:8px;">
+            <div style="
+              text-align:center; padding:28px 20px; color:#9CA3AF;
+            ">
+              <div style="font-size:28px;margin-bottom:8px;opacity:0.4;">🔍</div>
+              <p style="font-size:12px;font-weight:500;margin:0 0 4px;color:#6B7280;">No jobs loaded yet</p>
+              <p style="font-size:11px;margin:0;color:#9CA3AF;">On a LinkedIn jobs page? Hit <strong style="color:#4F46E5">Scan Page</strong> above.</p>
+            </div>
           </div>
 
-          <!-- Action bar: shown during apply runs with context-sensitive quick actions -->
+          <!-- Action bar (skip / rescan during apply run) -->
           <div id="autoapply-action-bar" style="
-            display: none; padding: 8px 12px; border-top: 1px solid #E5E5E5;
-            background: #FAFAFA; gap: 6px; flex-wrap: wrap;
+            display:none; padding:8px 12px; border-top:1px solid #F0F0F0;
+            background:#FAFAFA; gap:6px; flex-wrap:wrap;
           "></div>
 
-          <div style="padding: 12px 16px; border-top: 1px solid #E5E5E5;">
+          <!-- Footer: start / stop + hidden URL -->
+          <div style="padding:12px;border-top:1px solid #F0F0F0;background:white;">
             <button id="autoapply-start" style="
-              width: 100%; background: #4F46E5; color: white; border: none; border-radius: 8px;
-              padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; opacity: 0.5;
-            " disabled>Start Applying (0)</button>
+              width:100%; background:#4F46E5; color:white; border:none; border-radius:10px;
+              padding:11px; font-size:13px; font-weight:600; cursor:pointer;
+              opacity:0.38; pointer-events:none; transition:all 0.2s; letter-spacing:-0.1px;
+            " disabled>Select jobs above to begin</button>
 
             <button id="autoapply-stop" style="
-              display: none; width: 100%; background: #EF4444; color: white; border: none;
-              border-radius: 8px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer;
-            ">⏹ Stop All</button>
+              display:none; width:100%; background:#EF4444; color:white; border:none;
+              border-radius:10px; padding:11px; font-size:13px; font-weight:600; cursor:pointer;
+            ">⏹ Stop applying</button>
 
-            <div style="margin-top: 8px; display: flex; gap: 8px;">
-              <input id="autoapply-url" type="text" placeholder="AutoApply URL" style="
-                flex: 1; padding: 6px 10px; font-size: 11px; border: 1px solid #E5E5E5;
-                border-radius: 6px; color: #666;
-              " />
-            </div>
+            <!-- Hidden URL field — auto-populated from storage, not shown unless empty -->
+            <input id="autoapply-url" type="hidden" value="https://autoapply-ai-delta.vercel.app" />
           </div>
         </div>
       </div>
@@ -1386,11 +1393,8 @@
     });
 
     start.addEventListener("click", async () => {
-      const url = urlInput.value.trim();
-      if (!url) {
-        alert("Please enter your AutoApply AI URL (e.g., https://your-app.vercel.app)");
-        return;
-      }
+      // URL is hardcoded in the hidden field — no validation needed
+      const url = urlInput ? urlInput.value.trim() : "https://autoapply-ai-delta.vercel.app";
       chrome.storage.local.set({ autoapplyUrl: url });
 
       // Show stop button, hide start
@@ -1410,18 +1414,10 @@
       start.style.display = "block";
       stop.style.display = "none";
     });
-
-    urlInput.addEventListener("change", () => {
-      chrome.storage.local.set({ autoapplyUrl: urlInput.value.trim() });
-    });
   }
 
   function loadSettings() {
-    chrome.storage.local.get(["autoapplyUrl"], (result) => {
-      if (result.autoapplyUrl) {
-        document.getElementById("autoapply-url").value = result.autoapplyUrl;
-      }
-    });
+    // URL is hardcoded — nothing to load from storage
   }
 
   function getStatusIcon(status) {
@@ -1439,9 +1435,11 @@
     const list = document.getElementById("autoapply-jobs-list");
     if (scrapedJobs.length === 0) {
       list.innerHTML = `
-        <p style="text-align: center; color: #CCC; font-size: 12px; padding: 20px;">
-          No jobs found. Make sure you're on a LinkedIn job search page.
-        </p>
+        <div style="text-align:center;padding:28px 16px;">
+          <div style="font-size:28px;margin-bottom:8px;">🔍</div>
+          <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#374151;">No jobs scanned yet</p>
+          <p style="margin:0;font-size:12px;color:#9CA3AF;">Hit <b>Scan Page</b> above to find jobs on this page.</p>
+        </div>
       `;
       return;
     }
@@ -1535,9 +1533,10 @@
     const start = document.getElementById("autoapply-start");
     const count = document.getElementById("autoapply-count");
     if (start) {
-      start.textContent = `Start Applying (${selectedJobIds.size})`;
-      start.disabled = selectedJobIds.size === 0;
-      start.style.opacity = selectedJobIds.size === 0 ? "0.5" : "1";
+      const n = selectedJobIds.size;
+      start.textContent = n === 0 ? "Select jobs above to begin" : `Apply to ${n} job${n === 1 ? "" : "s"} →`;
+      start.disabled = n === 0;
+      start.style.opacity = n === 0 ? "0.5" : "1";
     }
     if (count) count.textContent = `${scrapedJobs.length}`;
   }

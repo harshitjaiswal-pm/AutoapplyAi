@@ -137,7 +137,7 @@
   }
 
   // Show banner immediately so the user knows AutoApply is active on this page
-  showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
+  showBanner("Getting ready...", "ai", { subtext: "Waiting for the page to finish loading..." });
   setTimeout(() => init(), 3000);
 
   /* ─────────────── SHADOW DOM + IFRAME HELPERS ─────────────── */
@@ -618,7 +618,7 @@
     if (!stored.pendingApplication) {
       console.log("AutoApply: No pending application found");
       // If we can't determine the job context, show a gentle notice rather than nothing
-      showBanner("AutoApply: no active application detected for this page.", "user", {
+      showBanner("No active application found for this page.", "user", {
         subtext: "If you started an application from LinkedIn, it may have already been processed.",
       });
       return;
@@ -696,11 +696,11 @@
             showBanner(`Form filled (${iframeFilled} fields) — review and submit when ready.`, "user",
               { subtext: "AutoApply stops here — you stay in control of the final submit." });
           } else if (iframeFilled === 0) {
-            showBanner("Could not fill form — check console logs. Click Try Again to retry.", "user",
+            showBanner("Couldn't fill this form automatically — try refreshing and running again.", "user",
               { subtext: "Open DevTools (F12 → Console) and share the logs to diagnose." });
           } else {
             // Timeout — still filling in background
-            showBanner("Still filling in background — check the form in a moment.", "user",
+            showBanner("Still working — check the form fields in a moment.", "user",
               { subtext: "AutoApply may still be filling. Scroll down to see the form." });
           }
           return;
@@ -721,7 +721,7 @@
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
         const clicked = await clickApplyOnPosting();
         if (!clicked) {
-          showBanner("Click the Apply button to open the application form.", "user",
+          showBanner("Click the Apply button on this page to open the application form.", "user",
             { subtext: "AutoApply will detect the form and continue automatically." });
         } else {
           showBanner("Waiting for application form to load...", "ai",
@@ -729,7 +729,7 @@
         }
         const formReady = await waitForApplicationForm(45000);
         if (!formReady) {
-          showBanner("Could not detect application form — please navigate to it manually.", "user");
+          showBanner("Couldn't find the application form — navigate to it manually and it will continue.", "user");
           return;
         }
         await sleep(500);
@@ -777,16 +777,16 @@
       }
 
       if (uploaded) {
-        showBanner("Form filled & resume uploaded — review and submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+        showBanner("All done — review your answers and hit Submit when you're happy.", "success", { subtext: "Your tailored resume has been uploaded. You're in control of the final submit." });
       } else {
-        showBanner("Fields filled — upload the downloaded resume PDF, then review and submit.", "user", { subtext: "Check your Downloads folder for the tailored PDF." });
+        showBanner("Fields filled — one more step: upload your tailored resume PDF, then submit.", "user", { subtext: "Check your Downloads folder for the tailored PDF." });
       }
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {
       console.error("AutoApply: Generic ATS error", err);
       try { AALog && AALog.error("ats.generic.exception", { message: err.message, stack: err.stack }); } catch(_){}
-      showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
+      showBanner("Hit a snag — filled what we could with your basic profile.", "error", { subtext: "Check the form and fill in any missing fields before submitting." });
       // Still try to fill basic profile info even if tailoring fails
       await fillBasicProfile();
     }
@@ -886,7 +886,7 @@
     const user = profile.userProfile || {};
 
     if (!user.firstName && !user.email) {
-      showBanner("No profile data found — sync your profile from the extension panel.", "error");
+      showBanner("No profile found — open the extension and fill in your Profile tab first.", "error");
       return 0;
     }
 
@@ -924,7 +924,7 @@
     }
 
     if (filled > 0) {
-      showBanner(`Filled ${filled} fields — complete the rest manually and submit when ready.`, "user");
+      showBanner(`Filled ${filled} fields — check any remaining fields and submit when ready.`, "user");
     }
     return filled;
   }
@@ -1697,11 +1697,11 @@
     `;
 
     const typeConfig = {
-      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
-      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
-      user:    { bg: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", icon: "👆", actor: "Your turn" },
-      success: { bg: "linear-gradient(135deg, #047857 0%, #059669 100%)", icon: "✅", actor: "Done" },
-      error:   { bg: "linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)", icon: "⚠️", actor: "Issue" },
+      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "⚡", actor: "Working" },
+      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "⚡", actor: "Working" },
+      user:    { bg: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", icon: "👆", actor: "Action needed" },
+      success: { bg: "linear-gradient(135deg, #047857 0%, #059669 100%)", icon: "✓", actor: "Done" },
+      error:   { bg: "linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)", icon: "!", actor: "Needs attention" },
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
@@ -1800,7 +1800,7 @@
       });
       document.getElementById("aa-btn-skip")?.addEventListener("click", () => {
         chrome.storage.local.remove(["pendingApplication"]);
-        showBanner("Job skipped. You can close this tab.", "success");
+        showBanner("Job skipped — you can close this tab.", "info");
       });
       document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
         chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress"], (r) => {
