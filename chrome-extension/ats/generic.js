@@ -253,21 +253,24 @@
     const signInKeywords = ["sign in", "log in", "login to apply", "create an account", "register to apply", "create account to apply"];
     const hasSignInText = signInKeywords.some(k => pageText.includes(k));
 
-    // Signal 3: Very few visible inputs + sign-in text
-    const visibleInputs = Array.from(document.querySelectorAll('input:not([type="hidden"])'))
-      .filter(el => el.offsetParent !== null);
-    if (visibleInputs.length <= 3 && hasSignInText) return true;
-
-    // Signal 4: Sign-in text + no resume upload + no application-style text inputs
-    // BUT: if there is a visible Apply button on the page this is a job listing, not a sign-in wall
-    const hasResumeUpload = !!document.querySelector('input[type="file"]');
-    const hasRichInputs = !!document.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
+    // Shared: apply button detection (job listing pages always have one — never flag them as login walls)
     const applyButtonTexts = new Set(["apply", "apply now", "apply today", "apply here", "apply for this job", "apply for this role", "apply externally", "start application"]);
     const hasApplyButton = Array.from(document.querySelectorAll('a[href], button, [role="button"]'))
       .some(el => {
         const text = (el.textContent?.trim() || "").toLowerCase().replace(/\s+/g, " ");
         return applyButtonTexts.has(text) || text.startsWith("apply for ");
       });
+
+    // Signal 3: Very few visible inputs + sign-in text
+    // Guard: if there's a visible Apply button, this is a job listing page — not a sign-in wall
+    const visibleInputs = Array.from(document.querySelectorAll('input:not([type="hidden"])'))
+      .filter(el => el.offsetParent !== null);
+    if (visibleInputs.length <= 3 && hasSignInText && !hasApplyButton) return true;
+
+    // Signal 4: Sign-in text + no resume upload + no application-style text inputs
+    // BUT: if there is a visible Apply button on the page this is a job listing, not a sign-in wall
+    const hasResumeUpload = !!document.querySelector('input[type="file"]');
+    const hasRichInputs = !!document.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
     if (hasSignInText && !hasResumeUpload && !hasRichInputs && visibleInputs.length <= 5 && !hasApplyButton) return true;
 
     return false;
