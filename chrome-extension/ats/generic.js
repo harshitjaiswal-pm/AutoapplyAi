@@ -1099,13 +1099,22 @@
    * and dispatch proper events.
    */
   function setNativeValue(element, value) {
-    // Use the native HTMLInputElement/HTMLTextAreaElement value setter
-    // This bypasses React's synthetic event system
+    // SELECT elements don't use the HTMLInputElement prototype setter — doing so
+    // throws "Illegal invocation". Just set .value directly and fire change.
+    if (element.tagName === "SELECT") {
+      element.value = value;
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+
+    // Use the element's own window to get the correct native value setter.
+    // Avoids cross-frame "Illegal invocation" when elements come from iframes.
+    const ownerWin = element.ownerDocument?.defaultView || window;
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, "value"
+      ownerWin.HTMLInputElement.prototype, "value"
     )?.set;
     const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype, "value"
+      ownerWin.HTMLTextAreaElement.prototype, "value"
     )?.set;
 
     const setter = element.tagName === "TEXTAREA" ? nativeTextareaValueSetter : nativeInputValueSetter;
