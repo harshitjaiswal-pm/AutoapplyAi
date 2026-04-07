@@ -504,35 +504,84 @@
         continue;
       }
 
-      // Yes/No questions — hybrid schedule, remote work, sponsorship, etc.
+      // Yes/No questions — hybrid schedule, remote work, sponsorship, authorization, relocating
       if (text.includes("hybrid") || text.includes("work in office") || text.includes("on-site")) {
-        // User's answer from profile, default to "No" for remote preference
         const answer = user.canWorkHybrid === true ? "yes" : "no";
         answerYesNo(label, answer);
         continue;
       }
 
-      if (text.includes("require.*sponsor") || text.includes("work authoriz") || text.includes("legally authorized")) {
-        const answer = (user.requireSponsorship === "No" || !user.requireSponsorship) ? "no" : "yes";
+      // Work authorization — "legally authorized to work"
+      if (text.includes("legally authorized") || text.includes("work authoriz") || text.includes("authorized to work")) {
+        answerYesNo(label, "yes");
+        continue;
+      }
+
+      // Visa sponsorship — "require visa sponsorship", "require sponsorship", "immigration"
+      if (text.includes("visa sponsor") || text.includes("require sponsor") || text.includes("sponsorship") || text.includes("immigration sponsor")) {
+        const answer = (user.requireSponsorship === "Yes") ? "yes" : "no";
         answerYesNo(label, answer);
+        continue;
+      }
+
+      // Relocation — "open to relocating", "willing to relocate"
+      if (text.includes("relocat")) {
+        answerYesNo(label, "yes");
+        continue;
+      }
+
+      // Live in / based in state lists — "do you live in X, Y, Z"
+      if (text.includes("do you live in") || text.includes("based in") || text.includes("reside in")) {
+        answerYesNo(label, "yes");
         continue;
       }
     }
   }
 
-  /** Click yes or no radio inside a question container found via its label element. */
+  /**
+   * Click the Yes or No answer for a question.
+   * Handles: native radio/checkbox inputs, pill-style <button> toggles,
+   * and ARIA role="radio" elements — all common in Greenhouse custom questions.
+   */
   function answerYesNo(labelEl, yesOrNo) {
-    const container = labelEl.closest("fieldset") || labelEl.closest("[class*='field']") || labelEl.closest("div");
+    const container = labelEl.closest("fieldset") || labelEl.closest("[class*='field']") ||
+                      labelEl.closest("[class*='question']") || labelEl.closest("div");
     if (!container) return;
+
+    // 1. Native radio / checkbox inputs
     const radios = container.querySelectorAll("input[type='radio'], input[type='checkbox']");
     for (const r of radios) {
       const optText = (r.closest("label")?.textContent || document.querySelector(`label[for="${r.id}"]`)?.textContent || r.value || "").toLowerCase();
       if (optText.includes(yesOrNo)) {
         if (!r.checked) r.click();
-        console.log("AutoApply: Answered yes/no question →", yesOrNo);
+        console.log("AutoApply: [radio] Answered →", yesOrNo);
         return;
       }
     }
+
+    // 2. Pill-style <button> toggles (common in Greenhouse & Ashby custom questions)
+    const buttons = container.querySelectorAll("button");
+    for (const btn of buttons) {
+      const btnText = (btn.textContent || "").toLowerCase().trim();
+      if (btnText === yesOrNo || btnText.startsWith(yesOrNo)) {
+        btn.click();
+        console.log("AutoApply: [button-pill] Answered →", yesOrNo);
+        return;
+      }
+    }
+
+    // 3. ARIA role="radio" elements (some custom UI frameworks)
+    const ariaRadios = container.querySelectorAll("[role='radio'], [role='option']");
+    for (const el of ariaRadios) {
+      const elText = (el.textContent || el.getAttribute("aria-label") || "").toLowerCase().trim();
+      if (elText.includes(yesOrNo)) {
+        el.click();
+        console.log("AutoApply: [aria-radio] Answered →", yesOrNo);
+        return;
+      }
+    }
+
+    console.log("AutoApply: answerYesNo — no clickable element found for", yesOrNo, "in", labelEl.textContent?.trim());
   }
 
   /* ─────────────── FIELD VALIDATION ─────────────── */
