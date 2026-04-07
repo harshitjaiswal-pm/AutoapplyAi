@@ -766,18 +766,25 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const isKnownATS = KNOWN_ATS_DOMAINS.some(domain => url.includes(domain));
 
   if (isKnownATS && !url.includes("linkedin.com")) {
-    console.log("AutoApply BG: Detected known ATS domain in new tab:", tab.url);
-    expectingNewTab = false;
-    clearTimeout(expectingTimeout);
+    // Only auto-inject if the user actually queued a job — never fire on manual browsing
+    chrome.storage.local.get(["pendingApplication"], (stored) => {
+      if (!stored.pendingApplication) {
+        console.log("AutoApply BG: Known ATS domain but no pendingApplication — skipping auto-inject");
+        return;
+      }
+      console.log("AutoApply BG: Detected known ATS domain in new tab:", tab.url);
+      expectingNewTab = false;
+      clearTimeout(expectingTimeout);
 
-    // Show an instant "AutoApply is starting..." banner with 0ms delay so
-    // there is no visible gap between leaving LinkedIn and the ATS script loading.
-    injectInstantBanner(tabId);
+      // Show an instant "AutoApply is starting..." banner with 0ms delay so
+      // there is no visible gap between leaving LinkedIn and the ATS script loading.
+      injectInstantBanner(tabId);
 
-    // Then inject the full ATS script after the page has rendered
-    setTimeout(() => {
-      injectATSScript(tabId, tab.url);
-    }, 2500);
+      // Then inject the full ATS script after the page has rendered
+      setTimeout(() => {
+        injectATSScript(tabId, tab.url);
+      }, 2500);
+    });
     return;
   }
 
