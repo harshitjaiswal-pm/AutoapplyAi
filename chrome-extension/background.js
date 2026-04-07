@@ -899,6 +899,11 @@ async function injectATSScript(tabId, url) {
  * Optimized: Step 1 (analyze-job) and storage fetch run in parallel.
  */
 async function handleTailorAndFill(job) {
+  // Clear any stale PDF from a previous job immediately — this prevents the
+  // download button from serving the wrong company's resume while the new
+  // tailoring call is in-flight.
+  await chrome.storage.local.remove(["tailoredResumePdf", "tailoredResumeFilename"]);
+
   // Run Step 1 and storage fetch in parallel (Step 1 doesn't depend on stored data)
   const [analyzeRes, stored] = await Promise.all([
     fetch_analyze_job(job),
