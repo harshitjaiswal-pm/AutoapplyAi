@@ -11,6 +11,8 @@
   if (window.__autoapply_ats_injected) return;
   window.__autoapply_ats_injected = true;
 
+  const AUTOAPPLY_URL = "https://autoapply-ai-delta.vercel.app";
+
   console.log("AutoApply: Generic ATS script loaded on", window.location.href);
   try { AALog && AALog.state("ats.generic.loaded", { url: window.location.href, isChildFrame: window !== window.top }); } catch(_){}
   try { AALog && AALog.state("ats.loaded", { url: window.location.href, isChildFrame: window !== window.top }); } catch(_){}
@@ -1772,18 +1774,29 @@
       const pdfBtn = hasPdf
         ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇ Resume PDF</button>` : "";
 
+      // Fallback resume link — always available on user-turn and success banners
+      // so the user can grab their tailored resume even if the PDF wasn't auto-uploaded
+      const resumeLinkStyle = `${btnStyle}background:rgba(255,255,255,0.9);color:#1E3A5F;text-decoration:none;`;
+      const resumeLink = (type === "user" || type === "success" || type === "error")
+        ? `<a id="aa-link-resume" href="${AUTOAPPLY_URL}/tailor" target="_blank" style="${resumeLinkStyle}">⬇ Get resume</a>`
+        : "";
+
       let actionRow = "";
       if (type === "error") {
         actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Retry</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
-          ${pdfBtn}
+          ${pdfBtn || resumeLink}
         </div>`;
       } else if (type === "user") {
         actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Try again</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
-          ${pdfBtn}
+          ${pdfBtn || resumeLink}
+        </div>`;
+      } else if (type === "success") {
+        actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+          ${pdfBtn || resumeLink}
         </div>`;
       } else if (isAi) {
         const pauseBtn = `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.18);color:#fff;">⏸ Pause</button>`;
