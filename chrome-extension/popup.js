@@ -1,6 +1,7 @@
-// popup.js — handles Overview, Profile, and Activity tabs
+// popup.js — handles Overview, Profile, Activity, and Chat tabs
 
 const AUTOAPPLY_URL = "https://autoapply-ai-delta.vercel.app";
+const CHAT_API_URL  = AUTOAPPLY_URL + "/api/chat";
 const LOG_STORAGE_KEY = "_aa_logs";
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -8,6 +9,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initDashboard();
   initProfile();
   initLogs();
+  initPopupChat();
 });
 
 /* ─────────────── TAB MANAGEMENT ─────────────── */
@@ -17,12 +19,23 @@ function initTabs() {
     btn.addEventListener("click", () => {
       const tabName = btn.getAttribute("data-tab");
       document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach((c) => {
+        c.classList.remove("active");
+        c.style.display = "none";
+      });
       btn.classList.add("active");
-      document.getElementById(tabName).classList.add("active");
+      const tab = document.getElementById(tabName);
+      if (tab) {
+        tab.classList.add("active");
+        tab.style.display = tabName === "chat" ? "flex" : "block";
+      }
       if (tabName === "logs") refreshLogs();
+      if (tabName === "chat") popupChatFocus();
     });
   });
+  // Show the initially active tab correctly
+  const activeTab = document.querySelector(".tab-content.active");
+  if (activeTab) activeTab.style.display = "block";
 }
 
 /* ─────────────── OVERVIEW TAB ─────────────── */
@@ -277,4 +290,204 @@ function downloadLogs(format) {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     });
   });
+}
+
+/* ─────────────── CHAT TAB ─────────────── */
+
+let popupChatMessages = [];
+let popupChatLoading  = false;
+
+const POPUP_CHAT_SUGGESTIONS = [
+  "What's this job about?",
+  "Am I a good fit?",
+  "What should I highlight?",
+  "What's the salary range?",
+];
+
+function initPopupChat() {
+  const input   = document.getElementById("popup-chat-input");
+  const sendBtn = document.getElementById("popup-send-btn");
+  const clearBtn = document.getElementById("popup-chat-clear");
+  const openPageBtn = document.getElementById("popup-btn-open-page");
+
+  if (!input) return;
+
+  input.addEventListener("input", () => {
+    const hasText = input.value.trim().length > 0;
+    sendBtn.disabled = !hasText || popupChatLoading;
+    sendBtn.style.opacity = (!hasText || popupChatLoading) ? "0.4" : "1";
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 72) + "px";
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!sendBtn.disabled) popupSendMessage();
+    }
+  });
+
+  sendBtn.addEventListener("click", popupSendMessage);
+
+  clearBtn.addEventListener("click", () => {
+    popupChatMessages = [];
+    renderPopupChat();
+  });
+
+  openPageBtn.addEventListener("click", () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: "AA_CHAT_OPEN" });
+        window.close();
+      }
+    });
+  });
+
+  renderPopupChat();
+}
+
+function popupChatFocus() {
+  setTimeout(() => document.getElementById("popup-chat-input")?.focus(), 50);
+}
+
+async function popupSendMessage() {
+  const input = document.getElementById("popup-chat-input");
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text || popupChatLoading) return;
+
+  popupChatMessages.push({ role: "user", content: text, ts: new Date().toISOString() });
+  input.value = "";
+  input.style.height = "auto";
+
+  const sendBtn = document.getElementById("popup-send-btn");
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.style.opacity = "0.4"; }
+
+  renderPopupChat(true);
+
+  popupChatLoading = true;
+
+  // Get page context from active tab
+  let pageContext = {};
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      pageContext.url   = tab.url;
+      pageContext.title = tab.title;
+      // Inject a quick script to grab visible text
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const els = document.querySelectorAll("h1,h2,h3,p,li,td,article,[role='main']");
+            return Array.from(els)
+              .filter(el => {
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              })
+              .map(el => el.innerText?.trim())
+              .filter(t => t && t.length > 20)
+              .slice(0, 100)
+              .join("\n")
+              .slice(0, 5000);
+          }
+        });
+        pageContext.text = results?.[0]?.result || "";
+      } catch (_) { /* scripting permission may be unavailable on some pages */ }
+    }
+  } catch (_) {}
+
+  try {
+    const apiMessages = popupChatMessages
+      .filter(m => m.role === "user" || m.role === "assistant")
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const res = await fetch(CHAT_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: apiMessages, pageContext }),
+    });
+
+    const data = await res.json();
+    const reply = res.ok ? (data.reply || "No response received.") : (data.error || "Something went wrong.");
+    popupChatMessages.push({ role: "assistant", content: reply, ts: new Date().toISOString() });
+  } catch {
+    popupChatMessages.push({ role: "assistant", content: "Connection error — check your internet and try again.", ts: new Date().toISOString() });
+  } finally {
+    popupChatLoading = false;
+  }
+
+  renderPopupChat();
+  if (sendBtn) { sendBtn.disabled = false; sendBtn.style.opacity = "1"; }
+}
+
+function renderPopupChat(showTyping = false) {
+  const container = document.getElementById("popup-chat-messages");
+  const empty     = document.getElementById("popup-chat-empty");
+  const chips     = document.getElementById("popup-chat-chips");
+  if (!container) return;
+
+  if (popupChatMessages.length === 0) {
+    if (empty) empty.style.display = "flex";
+    // Show suggestion chips
+    if (chips) {
+      chips.innerHTML = POPUP_CHAT_SUGGESTIONS.map(s =>
+        `<button class="popup-chat-chip" style="
+          font-size:11px; color:#4F46E5; background:#EEF2FF;
+          border:1px solid #C7D2FE; border-radius:20px;
+          padding:3px 9px; cursor:pointer; white-space:nowrap;
+        " data-msg="${s}">${s}</button>`
+      ).join("");
+
+      chips.querySelectorAll(".popup-chat-chip").forEach(chip => {
+        chip.addEventListener("click", () => {
+          const input = document.getElementById("popup-chat-input");
+          if (input) {
+            input.value = chip.getAttribute("data-msg");
+            input.dispatchEvent(new Event("input"));
+            popupSendMessage();
+          }
+        });
+      });
+    }
+    return;
+  }
+
+  if (empty) empty.style.display = "none";
+  if (chips) chips.innerHTML = "";
+
+  // Render messages (skip the empty placeholder div)
+  const msgHtml = popupChatMessages.map(m => {
+    const time = (m.ts || "").split("T")[1]?.slice(0, 5) || "";
+    const content = m.content.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+    const bubbleStyle = m.role === "user"
+      ? "align-self:flex-end;background:#4F46E5;color:#fff;border-radius:12px 12px 4px 12px;"
+      : "align-self:flex-start;background:#F3F4F6;color:#111827;border-radius:12px 12px 12px 4px;";
+    return `
+      <div style="max-width:90%;font-size:12px;line-height:1.5;padding:7px 11px;${bubbleStyle}word-break:break-word;">${content}</div>
+      ${time ? `<div style="font-size:10px;color:#9CA3AF;${m.role === "user" ? "align-self:flex-end;" : "align-self:flex-start;"}">${time}</div>` : ""}
+    `;
+  }).join("");
+
+  const typingHtml = showTyping ? `
+    <div style="align-self:flex-start;background:#F3F4F6;border-radius:12px 12px 12px 4px;padding:8px 12px;display:flex;gap:4px;align-items:center;">
+      <span style="width:5px;height:5px;border-radius:50%;background:#9CA3AF;animation:aa-popup-bounce 1.2s ease-in-out infinite;"></span>
+      <span style="width:5px;height:5px;border-radius:50%;background:#9CA3AF;animation:aa-popup-bounce 1.2s ease-in-out 0.2s infinite;"></span>
+      <span style="width:5px;height:5px;border-radius:50%;background:#9CA3AF;animation:aa-popup-bounce 1.2s ease-in-out 0.4s infinite;"></span>
+    </div>
+  ` : "";
+
+  container.innerHTML = `
+    <style>
+      @keyframes aa-popup-bounce {
+        0%,60%,100% { transform: translateY(0); }
+        30% { transform: translateY(-4px); }
+      }
+    </style>
+    <div style="display:flex;flex-direction:column;gap:5px;padding-top:4px;">
+      ${msgHtml}${typingHtml}
+    </div>
+  `;
+
+  container.scrollTop = container.scrollHeight;
 }

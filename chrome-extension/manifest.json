@@ -80,6 +80,17 @@
         "https://*.vercel.app/*",
         "http://localhost:3000/*"
       ]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["chatbot.js"],
+      "run_at": "document_idle",
+      "exclude_matches": [
+        "https://*.vercel.app/*",
+        "http://localhost:3000/*",
+        "chrome://*/*",
+        "chrome-extension://*/*"
+      ]
     }
   ],
   "web_accessible_resources": [
