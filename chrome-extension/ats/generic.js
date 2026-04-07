@@ -961,7 +961,13 @@
         }
       }
 
-      const maxPay = extractMaxPayFromJD(job?.jobDescription || "");
+      // Try JD text first, then fall back to scraping salary from the current page
+      // (ATS pages often show salary ranges in a sidebar even if the stored JD didn't include it)
+      let maxPay = extractMaxPayFromJD(job?.jobDescription || "");
+      if (!maxPay) {
+        const pageText = document.body?.innerText || "";
+        maxPay = extractMaxPayFromJD(pageText);
+      }
 
       const fieldMappings = [
         { labels: ["email", "e-mail", "email address"], value: user.email },
@@ -1428,27 +1434,29 @@
   function extractMaxPayFromJD(jdText) {
     if (!jdText) return "";
     const matches = [];
-    const regex = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    // Handles: $160K, CA$160K, CA$ 160,000, $160,000, $160k
+    const regex = /(?:CA|US|C|USD?)?\$\s*([\d,]+(?:\.\d+)?)\s*([kK])?/g;
     let m;
     while ((m = regex.exec(jdText)) !== null) {
-      let val = parseFloat(m[1]);
+      let val = parseFloat(m[1].replace(/,/g, ""));
       if (m[2]) val *= 1000;
       // Sanity-filter: only accept realistic salary values ($30K–$2M)
       if (val >= 30000 && val <= 2000000) matches.push(val);
     }
     if (matches.length === 0) return "";
-    return String(Math.round(Math.max(...matches)));
+    const maxVal = Math.max(...matches);
+    // Format nicely: if over 1000, show as e.g. "300000" for text input
+    return String(Math.round(maxVal));
   }
 
   /** Formatted pay range for banner display, e.g. "$120K–$190K". */
   function extractPayRangeFromJD(jdText) {
     if (!jdText) return null;
-    const text = jdText.replace(/,/g, "");
     const amounts = [];
-    const re = /\$\s*(\d+(?:\.\d+)?)\s*([kK])?/g;
+    const re = /(?:CA|US|C|USD?)?\$\s*([\d,]+(?:\.\d+)?)\s*([kK])?/g;
     let m;
-    while ((m = re.exec(text)) !== null) {
-      let val = parseFloat(m[1]);
+    while ((m = re.exec(jdText)) !== null) {
+      let val = parseFloat(m[1].replace(/,/g, ""));
       if (m[2]) val *= 1000;
       if (val >= 30000 && val <= 2000000) amounts.push(val);
     }
@@ -1544,8 +1552,11 @@
         label: "criminal record",
       },
       {
+        // "Are you legally allowed to work in Canada or the US?" — options: Canada / USA / Neither
+        // Click "Canada" first; if no "Canada" button found, fall back to "Yes"
         keywords: ["legally eligible to work", "eligible to work in canada", "authorized to work in canada", "right to work in canada", "legally allowed to work"],
-        answer: "yes",
+        answer: "canada",
+        answerFallback: "yes",
         label: "work eligibility",
       },
       {
@@ -1553,6 +1564,11 @@
         answer: "no",
         label: "visa sponsorship",
         useRegex: true,
+      },
+      {
+        keywords: ["are you based in", "located in", "open to relocating", "commute", "in the office", "onsite", "on-site", "in person"],
+        answer: "yes",
+        label: "office/location",
       },
     ];
 
@@ -1583,68 +1599,73 @@
       }
       if (!matchedAnswer) continue;
 
-      // Look for Yes/No buttons in the nearest enclosing container
+      // Look for answer buttons in the nearest enclosing container
       const container = el.closest("div, fieldset, section, li, form") || el.parentElement;
       if (!container) continue;
 
-      // Find button candidates: <button>, [role=radio], [role=option], styled radio inputs
-      const btnCandidates = Array.from(container.querySelectorAll(
-        'button, [role="radio"], [role="option"], [role="button"], label input[type="radio"]'
-      ));
+      // The target answer text(s) to look for — supports specific text (e.g. "canada") or yes/no
+      const targetAnswers = [matchedAnswer];
+      if (rule.answerFallback) targetAnswers.push(rule.answerFallback);
 
-      // Also search shadow DOM
-      const shadowBtns = queryAllDeep('button, [role="radio"], [role="option"]', container);
+      function answerMatches(rawText, targets) {
+        const t = rawText.trim().toLowerCase();
+        return targets.some(ans => {
+          if (ans === "yes") return t === "yes" || t.startsWith("yes");
+          if (ans === "no")  return t === "no"  || t.startsWith("no");
+          return t === ans || t.startsWith(ans); // specific text match e.g. "canada"
+        });
+      }
+
+      function isAlreadySelected(btn) {
+        return btn.classList.contains("selected") ||
+               btn.classList.contains("active") ||
+               btn.getAttribute("aria-selected") === "true" ||
+               btn.getAttribute("aria-pressed") === "true" ||
+               btn.getAttribute("aria-checked") === "true" ||
+               (btn.type === "radio"    && btn.checked) ||
+               (btn.type === "checkbox" && btn.checked);
+      }
+
+      // Find button/radio/checkbox candidates — includes input[type="checkbox"]
+      const btnSelector = 'button, [role="radio"], [role="option"], [role="button"], label input[type="radio"], label input[type="checkbox"], input[type="radio"], input[type="checkbox"]';
+      const btnCandidates = Array.from(container.querySelectorAll(btnSelector));
+      const shadowBtns    = queryAllDeep('button, [role="radio"], [role="option"]', container);
       const allBtns = [...new Set([...btnCandidates, ...shadowBtns])];
+
+      // For checkboxes/radio inside <label>, use the label text; otherwise button own text
+      function getBtnText(btn) {
+        if ((btn.type === "radio" || btn.type === "checkbox") && btn.closest("label")) {
+          return btn.closest("label").textContent || "";
+        }
+        return btn.textContent || btn.value || btn.getAttribute("aria-label") || "";
+      }
 
       let foundAndClicked = false;
       for (const btn of allBtns) {
-        const rawText = (btn.textContent || btn.value || btn.getAttribute("aria-label") || "").trim().toLowerCase();
-        const isYes = rawText === "yes" || rawText.startsWith("yes");
-        const isNo  = rawText === "no"  || rawText.startsWith("no");
-        if (!isYes && !isNo) continue;
+        const rawText = getBtnText(btn);
+        if (!answerMatches(rawText, targetAnswers)) continue;
 
-        const isCorrectAnswer = (matchedAnswer === "yes" && isYes) || (matchedAnswer === "no" && isNo);
-        if (!isCorrectAnswer) continue;
-
-        // Check if already selected — avoid redundant clicks
-        const alreadySelected =
-          btn.classList.contains("selected") ||
-          btn.classList.contains("active") ||
-          btn.getAttribute("aria-selected") === "true" ||
-          btn.getAttribute("aria-pressed") === "true" ||
-          btn.getAttribute("aria-checked") === "true" ||
-          (btn.type === "radio" && btn.checked);
-
-        if (!alreadySelected) {
-          console.log(`AutoApply: Clicking "${rawText}" for question: "${questionText.slice(0, 70)}"`);
+        if (!isAlreadySelected(btn)) {
+          console.log(`AutoApply: Clicking "${rawText.trim()}" for question: "${questionText.slice(0, 70)}"`);
           btn.click();
           await sleep(150);
           clicked++;
         } else {
-          console.log(`AutoApply: Already selected "${rawText}" for: "${questionText.slice(0, 70)}"`);
+          console.log(`AutoApply: Already selected "${rawText.trim()}" for: "${questionText.slice(0, 70)}"`);
         }
         foundAndClicked = true;
-        break; // found the right button for this question
+        break;
       }
 
-      // If we didn't find labelled buttons in direct container, search one level up
+      // One level up fallback
       if (!foundAndClicked && container.parentElement) {
         const parent = container.parentElement;
-        const parentBtns = Array.from(parent.querySelectorAll('button, [role="radio"], [role="option"]'));
+        const parentBtns = Array.from(parent.querySelectorAll(btnSelector));
         for (const btn of parentBtns) {
-          const rawText = (btn.textContent || btn.value || "").trim().toLowerCase();
-          const isYes = rawText === "yes" || rawText.startsWith("yes");
-          const isNo  = rawText === "no"  || rawText.startsWith("no");
-          if (!isYes && !isNo) continue;
-          const isCorrectAnswer = (matchedAnswer === "yes" && isYes) || (matchedAnswer === "no" && isNo);
-          if (!isCorrectAnswer) continue;
-
-          const alreadySelected =
-            btn.getAttribute("aria-selected") === "true" ||
-            btn.getAttribute("aria-pressed") === "true" ||
-            (btn.type === "radio" && btn.checked);
-          if (!alreadySelected) {
-            console.log(`AutoApply: (parent) Clicking "${rawText}" for: "${questionText.slice(0, 70)}"`);
+          const rawText = getBtnText(btn);
+          if (!answerMatches(rawText, targetAnswers)) continue;
+          if (!isAlreadySelected(btn)) {
+            console.log(`AutoApply: (parent) Clicking "${rawText.trim()}" for: "${questionText.slice(0, 70)}"`);
             btn.click();
             await sleep(150);
             clicked++;
