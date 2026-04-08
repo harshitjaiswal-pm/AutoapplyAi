@@ -71,9 +71,17 @@ let applyTabId = null;
 // addition to the window.__autoapply_ats_injected guard in the scripts.
 const injectedTabIds = new Map(); // tabId -> { url, timestamp }
 
+// Track which job each ATS tab was originally opened for.
+// Key: tabId  Value: { jobTitle, company, queuedAt }
+// Once a tab is "owned" by a job, we do NOT re-inject it for a different job.
+// This prevents the Pixieset tab (from Job 5) from being hijacked by Loopio (Job 6)
+// whenever onUpdated fires on the already-open breezy.hr tab.
+const ownedByJob = new Map();
+
 // Clear tab from injected tracking when it's closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   injectedTabIds.delete(tabId);
+  ownedByJob.delete(tabId);
   if (tabId === applyTabId) {
     console.log("AutoApply BG: apply tab closed — clearing applyTabId");
     applyTabId = null;
@@ -951,6 +959,27 @@ async function injectATSScript(tabId, url) {
     try { AALog && AALog.nav("bg.inject.skipDuplicate", { tabId, url }); } catch(_){}
     return;
   }
+
+  // Guard: if this tab was already owned by a DIFFERENT job, don't re-inject.
+  // This is the "Pixieset tab hijack" guard — prevents Job 6 (Loopio) from
+  // overwriting Job 5's already-open ATS tab when onUpdated fires again on it.
+  const ownership = ownedByJob.get(tabId);
+  if (ownership) {
+    // Check if pendingApplication represents a NEW job (different queuedAt)
+    // Wrap in a try-catch in case storage is unavailable
+    const storedNow = await new Promise(r => chrome.storage.local.get(["pendingApplication"], r));
+    const pending = storedNow.pendingApplication;
+    if (!pending || pending._queuedAt === ownership.queuedAt) {
+      // Same job OR no pending — this is just an in-form navigation, don't re-inject
+      console.log(`AutoApply BG: Tab ${tabId} already owned by job "${ownership.jobTitle}" (queuedAt ${ownership.queuedAt}) — skipping re-injection`);
+      try { AALog && AALog.nav("bg.inject.skipOwnedTab", { tabId, url, owner: ownership.jobTitle }); } catch(_){}
+      return;
+    }
+    // New job queued — allow re-injection and update ownership
+    console.log(`AutoApply BG: Tab ${tabId} ownership transferred from "${ownership.jobTitle}" to "${pending.jobTitle}"`);
+    ownedByJob.delete(tabId);
+  }
+
   injectedTabIds.set(tabId, { url, timestamp: Date.now() });
   applyTabId = tabId; // Track which tab owns the active application
   chrome.storage.local.set({ _aa_lastAtsTabId: tabId }); // Let content.js track per-job tab
@@ -975,6 +1004,18 @@ async function injectATSScript(tabId, url) {
   // For Ashby pages, also inject into child frames (the form may be in a cross-origin iframe)
   const injectIntoAllFrames = scriptFile === "ats/generic.js" &&
     (urlLower.includes("ashby_jid=") || urlLower.includes("ashbyhq.com"));
+
+  // Stamp tab ownership BEFORE executing the script so any onUpdated that fires
+  // during script execution sees the ownership and skips re-injection.
+  const pendingForOwnership = await new Promise(r => chrome.storage.local.get(["pendingApplication"], r));
+  const pendingJob = pendingForOwnership.pendingApplication;
+  if (pendingJob) {
+    ownedByJob.set(tabId, {
+      jobTitle: pendingJob.jobTitle || "",
+      company: pendingJob.company || "",
+      queuedAt: pendingJob._queuedAt || Date.now(),
+    });
+  }
 
   try {
     await chrome.scripting.executeScript({

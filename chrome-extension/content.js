@@ -214,7 +214,7 @@
    *
    * Returns: { description: string|null, applyUrl: string|null }
    */
-  async function fetchJobDescription(linkedinJobId) {
+  async function fetchJobDescription(linkedinJobId, companyHint) {
     if (!linkedinJobId) return { description: null, applyUrl: null };
     try {
       try { AALog && AALog.scrape("linkedin.jd.fetch.start", { jobId: linkedinJobId }); } catch(_){}
@@ -253,29 +253,59 @@
       }
 
       // --- Extract external apply URL ---
-      // Look for links that point directly to an external ATS or to LinkedIn's apply flow
-      let applyUrl = null;
+      // Collect ALL candidate ATS links from the page, then pick the best match.
+      // Important: LinkedIn job pages often embed "similar jobs" from other companies
+      // in the sidebar/footer — grabbing the first ATS link can return a completely
+      // wrong company's URL (e.g. Pixieset's breezy.hr for a Loopio listing).
       const atsPatterns = ["greenhouse.io", "lever.co", "workday", "ashbyhq.com", "icims.com",
         "smartrecruiters.com", "jobvite.com", "successfactors", "taleo.net", "breezy.hr",
         "bamboohr.com", "recruitee.com", "workable.com", "personio.com", "rippling.com",
         "gusto.com/careers", "jazz.co", "applytojob.com", "teamtailor.com", "pinpointhq.com"];
+      const candidateUrls = [];
       for (const a of doc.querySelectorAll("a[href]")) {
         const href = a.href || "";
-        if (atsPatterns.some((p) => href.includes(p))) { applyUrl = href; break; }
+        if (atsPatterns.some((p) => href.includes(p)) && !href.includes("linkedin.com")) {
+          candidateUrls.push(href);
+        }
       }
-      // Fallback: look for "Apply" link text pointing outside LinkedIn entirely
-      // Must exclude ALL linkedin.com URLs — not just /login — to avoid opening
-      // LinkedIn's own apply-redirect page which just bounces back to the jobs list.
-      if (!applyUrl) {
+      // Fallback: look for "Apply" link text pointing outside LinkedIn
+      if (candidateUrls.length === 0) {
         for (const a of doc.querySelectorAll("a[href]")) {
           const text = (a.textContent || "").trim().toLowerCase();
           const href = a.href || "";
           if ((text === "apply" || text === "apply now") &&
               href && href.startsWith("http") && !href.includes("linkedin.com")) {
-            applyUrl = href;
-            break;
+            candidateUrls.push(href);
           }
         }
+      }
+
+      // Pick the best candidate URL. If there are multiple (e.g. sidebar "similar jobs"),
+      // prefer the one whose domain/subdomain contains the company name slug.
+      let applyUrl = null;
+      if (candidateUrls.length === 1) {
+        applyUrl = candidateUrls[0];
+      } else if (candidateUrls.length > 1) {
+        // Build a slug from the company name: "Loopio Inc." → "loopio"
+        const companySlug = (companyHint || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "")
+          .substring(0, 12); // first 12 alphanum chars
+        // Score each candidate: +2 if subdomain/path matches company slug, +1 if domain portion matches
+        let bestScore = -1;
+        for (const url of candidateUrls) {
+          let score = 0;
+          if (companySlug.length >= 3) {
+            const urlLower = url.toLowerCase();
+            const hostMatch = urlLower.replace(/https?:\/\//, "").split("/")[0]; // hostname
+            if (hostMatch.replace(/[^a-z0-9]/g, "").includes(companySlug)) score += 2;
+            else if (urlLower.replace(/[^a-z0-9]/g, "").includes(companySlug)) score += 1;
+          }
+          if (score > bestScore) { bestScore = score; applyUrl = url; }
+        }
+        // If no company match, fall back to first candidate (original behavior)
+        if (!applyUrl) applyUrl = candidateUrls[0];
+        try { AALog && AALog.scrape("linkedin.jd.applyUrlPicked", { companyHint, companySlug, candidates: candidateUrls.length, chosen: applyUrl?.slice(0, 120) }); } catch(_){}
       }
 
       try {
@@ -1007,7 +1037,7 @@
       // Primary: fetch JD directly from LinkedIn's server-rendered job page.
       // This bypasses the UI navigation issue (LinkedIn ignores untrusted programmatic clicks).
       // Fallback: scrape from the detail panel if fetch fails.
-      const fetched = await fetchJobDescription(job.linkedinJobId);
+      const fetched = await fetchJobDescription(job.linkedinJobId, job.company);
       let jobDescription = fetched.description;
       let fetchedApplyUrl = fetched.applyUrl; // May be null; used later to open the ATS tab
       if (!jobDescription || jobDescription.length < 50) {
