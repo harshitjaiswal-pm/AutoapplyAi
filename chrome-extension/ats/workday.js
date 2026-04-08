@@ -59,6 +59,8 @@
       chrome.storage.local.set({ pendingApplication: job }, () => {
         window.dispatchEvent(new CustomEvent("__aa_pending_set", { detail: job }));
         LOG("pendingApplication set via bridge:", job.jobTitle);
+        // Re-trigger state machine so it picks up the newly-set pendingApplication
+        startStateMachine();
       });
     }
   });
