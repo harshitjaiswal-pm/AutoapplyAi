@@ -29,6 +29,40 @@
   const LOG = (msg, ...args) => console.log(`AutoApply Workday: ${msg}`, ...args);
   LOG("Script loaded on", window.location.href);
 
+  // ── Profile bridge: expose profile to page context so dev/debug tools can read it ──
+  // Also handles RELOAD_EXTENSION and GET_PROFILE requests from page.
+  chrome.storage.local.get(["userProfile"], (r) => {
+    if (r.userProfile) window.__aa_profile = r.userProfile;
+  });
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || !e.data?.__aa_cmd) return;
+    if (e.data.__aa_cmd === "GET_PROFILE") {
+      chrome.storage.local.get(["userProfile"], (r) => {
+        window.__aa_profile = r.userProfile || {};
+        window.dispatchEvent(new CustomEvent("__aa_profile_ready", { detail: r.userProfile || {} }));
+      });
+    }
+    if (e.data.__aa_cmd === "RELOAD_EXTENSION") {
+      chrome.runtime.sendMessage({ type: "RELOAD_EXTENSION" });
+    }
+    if (e.data.__aa_cmd === "GET_RESUME") {
+      chrome.storage.local.get(["parsedResume"], (r) => {
+        window.__aa_resume = r.parsedResume || {};
+        window.dispatchEvent(new CustomEvent("__aa_resume_ready", { detail: r.parsedResume || {} }));
+      });
+    }
+    if (e.data.__aa_cmd === "SET_PENDING_APPLICATION") {
+      // Allows QA / dev tooling to inject a pendingApplication without going
+      // through the normal AutoApply button flow. The payload should contain
+      // at minimum: { jobTitle, company, jobUrl }.
+      const job = e.data.payload || {};
+      chrome.storage.local.set({ pendingApplication: job }, () => {
+        window.dispatchEvent(new CustomEvent("__aa_pending_set", { detail: job }));
+        LOG("pendingApplication set via bridge:", job.jobTitle);
+      });
+    }
+  });
+
   // Show banner immediately — user sees feedback before the init delay fires
   showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
   // Start after a delay to let Workday render
@@ -244,11 +278,40 @@
       await handleStep2ResumeUpload(tailoredData, pendingJob);
 
     } else if (step === 3) {
-      // Application questions — needs tailored answers
+      // Application questions — may span multiple pages + Voluntary Disclosures
       showBanner("Filling application questions...", "ai", { subtext: "Tailoring in progress..." });
       const tailoredData = await tailoringPromise;
+      // Use the same loop as continueFromStep2 to handle multi-page App Q + disclosures
       await fillStep3(tailoredData?.tailoredResult, pendingJob);
+      let loopGuard = 0;
+      while (loopGuard++ < 6) {
+        const s = getCurrentStep();
+        if (s === 4) break;
+        if (s === 3) {
+          await sleep(800);
+          await fillStep3(tailoredData?.tailoredResult, pendingJob);
+          await advanceToStep(s + 1);
+          await sleep(1500);
+        } else if (s === 3.5) {
+          showBanner("Handling voluntary disclosures...", "ai");
+          await fillVoluntaryDisclosures();
+          await advanceToStep(4);
+          await sleep(1500);
+        } else {
+          await advanceToStep(s + 1);
+          await sleep(1500);
+        }
+      }
+      await waitForStep(4, 15000);
+      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+      watchForSubmit(pendingJob);
+
+    } else if (step === 3.5) {
+      // Resumed directly on Voluntary Disclosures page
+      showBanner("Handling voluntary disclosures...", "ai");
+      await fillVoluntaryDisclosures();
       await advanceToStep(4);
+      await waitForStep(4, 15000);
       showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
       watchForSubmit(pendingJob);
 
@@ -338,22 +401,56 @@
       await waitForStep(3, 300000);
     }
 
-    // ── Step 3 (Application Questions) ───────────────────────────────────────
-    const onStep3 = await waitForStep(3, 15000);
-    if (!onStep3) {
-      LOG("Never landed on Step 3 — skipping question fill");
-    } else {
-      showBanner("Filling application questions...", "ai");
-      await sleep(800);
-      await fillStep3(tailoredData?.tailoredResult, pendingJob);
-    }
+    // ── Step 3+ loop: Application Questions (1 of 2, 2 of 2…) + Voluntary Disclosures ──
+    // Workday jobs may have multiple Application Questions pages followed by a
+    // Voluntary Disclosures page before the final Review step. We loop until we
+    // reach Review (step 4), handling each intermediate page type.
+    let loopGuard = 0;
+    while (loopGuard++ < 8) {
+      const step = getCurrentStep();
+      LOG(`Loop iteration ${loopGuard}: step = ${step}`);
 
-    // ── Step 3 → Step 4 ───────────────────────────────────────────────────────
-    showBanner("Advancing to review page...", "ai");
-    const to4 = await advanceToStep(4);
-    if (!to4) {
-      showBanner("Please review and fix any highlighted fields, then click Next.", "user");
-      await waitForStep(4, 300000);
+      if (step === 4) break; // Reached Review — done
+
+      if (step === 3) {
+        // Application Questions page — fill it, then advance
+        const onStep3 = await waitForStep(3, 15000);
+        if (!onStep3) { LOG("waitForStep(3) timed out — breaking loop"); break; }
+
+        showBanner("Filling application questions...", "ai");
+        await sleep(800);
+        await fillStep3(tailoredData?.tailoredResult, pendingJob);
+
+        // Advance (may land on another App Q page or Voluntary Disclosures)
+        showBanner("Advancing...", "ai");
+        const advanced = await advanceToStep(step + 1);
+        if (!advanced) {
+          showBanner("Please review and fix any highlighted fields, then click Next.", "user");
+          await waitForStep(4, 300000);
+          break;
+        }
+        await sleep(1500); // Let the next page render
+
+      } else if (step === 3.5) {
+        // Voluntary Disclosures — check required checkboxes, then advance
+        showBanner("Handling voluntary disclosures...", "ai");
+        await sleep(500);
+        await fillVoluntaryDisclosures();
+
+        const advanced = await advanceToStep(4);
+        if (!advanced) {
+          showBanner("Please complete the Voluntary Disclosures and click Next.", "user");
+          await waitForStep(4, 300000);
+          break;
+        }
+        await sleep(1500);
+
+      } else {
+        // Unknown intermediate page — just try to advance
+        LOG(`Unknown step ${step} — attempting to advance`);
+        await advanceToStep(step + 1);
+        await sleep(1500);
+      }
     }
 
     // ── Step 4 (Review) ───────────────────────────────────────────────────────
@@ -537,7 +634,10 @@
                     Array.from(document.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Next');
 
     if (nextBtn) {
-      nextBtn.click();
+      // Use dispatchEvent(MouseEvent) instead of .click() — Workday's React synthetic
+      // event system only fires when the event has a proper `view` property. Plain .click()
+      // does NOT set view=window and is silently swallowed by React.
+      nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
       LOG(`Clicked Next button`);
     } else {
       LOG(`No Next button found to advance to Step ${nextStep}`);
@@ -604,11 +704,74 @@
     if (pageText.includes("Application Questions")) {
       return 3;
     }
+    if (pageText.includes("Voluntary Disclosures") || pageText.includes("Terms and Conditions") && pageText.includes("acknowledge")) {
+      return 3.5;
+    }
     if (pageText.includes("Review") && pageText.includes("Submit")) {
       return 4;
     }
 
     return 1; // Default to step 1
+  }
+
+  /* ═══════════════════ VOLUNTARY DISCLOSURES ═══════════════════ */
+
+  /**
+   * Handle the Voluntary Disclosures page.
+   * This page typically contains a Terms and Conditions section with one or more
+   * checkboxes that the user must acknowledge (privacy statement, ViBE philosophy, etc.).
+   * We check all required checkboxes and any acknowledgment checkboxes.
+   */
+  async function fillVoluntaryDisclosures() {
+    LOG("Filling Voluntary Disclosures page");
+    await sleep(500);
+
+    // Check all unchecked checkboxes on this page
+    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of checkboxes) {
+      if (cb.checked) continue;
+
+      // Get label text from surrounding context
+      const labelEl = cb.closest('[data-automation-id^="formField"]')?.previousElementSibling ||
+                      cb.closest('label') ||
+                      cb.parentElement;
+      const labelText = (labelEl?.textContent || "").toLowerCase();
+
+      // Always check: acknowledgment, privacy, terms, agree, ViBE/VIBE, recruitment
+      const shouldCheck =
+        labelText.includes("acknowledge") ||
+        labelText.includes("privacy") ||
+        labelText.includes("agree") ||
+        labelText.includes("vibe") ||
+        labelText.includes("vibs") ||
+        labelText.includes("terms") ||
+        labelText.includes("recruit") ||
+        labelText.length === 0; // No label — check it anyway (most likely required)
+
+      if (shouldCheck) {
+        try {
+          // Use React props if available, otherwise plain click
+          const propsKey = Object.keys(cb).find(k =>
+            k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers')
+          );
+          if (propsKey) {
+            cb[propsKey]?.onChange?.({ target: { checked: true }, currentTarget: cb, type: 'change', preventDefault: () => {}, stopPropagation: () => {} });
+          } else {
+            cb.click();
+          }
+          await sleep(200);
+          LOG(`Checked checkbox: "${labelText.substring(0, 60) || "(no label)"}"`);
+        } catch (e) {
+          cb.click(); // Fallback to plain click
+          await sleep(200);
+        }
+      }
+    }
+
+    // Verify at least one checkbox was checked
+    const checkedCount = Array.from(document.querySelectorAll('input[type="checkbox"]:checked')).length;
+    LOG(`Voluntary Disclosures: ${checkedCount} checkbox(es) checked`);
+    await sleep(300);
   }
 
   /* ═══════════════════ STEP 1: MY INFORMATION ═══════════════════ */
@@ -737,6 +900,10 @@
     // Answer "No" for any "previously/already worked for" questions on the info page.
     answerStep1RadioQuestions();
 
+    // Give React/Workday time to process all field updates before we click Next.
+    // Without this pause the Save and Continue click fires before Workday's form
+    // validation has settled, causing the click to be silently ignored.
+    await sleep(800);
     LOG("Step 1 filled");
   }
 
@@ -810,7 +977,10 @@
     const fields = document.querySelectorAll('[data-automation-id^="formField-"]');
     for (const field of fields) {
       const labelEl = field.querySelector("label");
-      const labelText = (labelEl?.textContent?.trim() || "").toLowerCase();
+      // Workday App Questions: question text lives in a sibling div, not inside formField
+      const siblingLabel = field.previousElementSibling?.textContent?.trim() ||
+                           field.parentElement?.previousElementSibling?.textContent?.trim() || "";
+      const labelText = (labelEl?.textContent?.trim() || siblingLabel || "").toLowerCase();
       if (!labelKeywords.some(kw => labelText.includes(kw.toLowerCase()))) continue;
       const fieldId = field.getAttribute("data-automation-id");
       if (fieldId) {
@@ -1029,6 +1199,32 @@
 
       // ── Canadian military ─────────────────────────────────────────────────────
       { keywords: ["canadian military", "military service", "armed forces", "veteran status"], answer: "No" },
+
+      // ── US Government employee ────────────────────────────────────────────────
+      { keywords: ["united states government", "us government employee", "current or former employee of the united states"], answer: "No" },
+
+      // ── Export control countries ──────────────────────────────────────────────
+      { keywords: ["export control", "iran, cuba", "north korea", "donetsk", "luhansk", "export control laws"], answer: "No" },
+
+      // ── Related to Workday employee / customer employee / gov official ────────
+      { keywords: ["related to a current workday employee", "are you related to a current workday"], answer: "No" },
+      { keywords: ["related to an employee of a customer", "government official, who has direct business"], answer: "No" },
+
+      // ── E&Y / audit firm affiliation ─────────────────────────────────────────
+      // Note: "ernst & young" already matched above (line ~1003) but adding explicit full match
+      { keywords: ["workday's independent auditors", "principal of ernst & young", "principal of ernst and young"], answer: "No" },
+
+      // ── NDA / Non-Disclosure Agreement ───────────────────────────────────────
+      // NOTE: answer must NOT contain "do not" — selectDropdown does .includes() match
+      { keywords: ["non disclosure agreement", "read and agree to the non disclosure", "nda agreement"], answer: "I have read and agree to the Non Disclosure" },
+
+      // ── Mutual Arbitration Agreement ─────────────────────────────────────────
+      { keywords: ["mutual arbitration agreement", "agree to the mutual arbitration"], answer: "I have read and agree to the Mutual Arbitration" },
+
+      // ── Acknowledgment / certification questions ──────────────────────────────
+      // These are "I acknowledge that I have read and answered truthfully" dropdowns.
+      // Selecting "No" disqualifies the application — must be "Yes".
+      { keywords: ["i acknowledge that i have read", "i have answered them truthfully", "acknowledge that i have read, understood"], answer: "Yes" },
     ];
 
     const formFields = document.querySelectorAll('[data-automation-id^="formField-"]');
@@ -1036,7 +1232,11 @@
 
     for (const field of formFields) {
       const labelEl = field.querySelector("label");
-      const label = (labelEl?.textContent?.trim() || "").toLowerCase();
+      // Workday Application Questions: question text lives in a sibling div outside the
+      // formField container — not in a <label> inside it. Check both locations.
+      const siblingLabel = field.previousElementSibling?.textContent?.trim() ||
+                           field.parentElement?.previousElementSibling?.textContent?.trim() || "";
+      const label = (labelEl?.textContent?.trim() || siblingLabel || "").toLowerCase();
       if (!label) continue;
 
       // Only target button-based dropdowns (Workday custom selects)
@@ -1098,7 +1298,89 @@
       fillByLabelText(compLabels, maxPay);
     }
 
+    // ── Name signature field (Application Questions 2 of 2 pattern) ───────────
+    // "Please enter your name" — required for NDA / Arbitration agreement signing.
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+    if (fullName) {
+      // Try standard label-based fill first
+      const filled = fillByLabelText(
+        ["please enter your name", "your name", "full name", "print name", "signature name", "enter your name"],
+        fullName
+      );
+      if (!filled) {
+        // Fallback: scan formFields whose container text contains "name"
+        for (const field of document.querySelectorAll('[data-automation-id^="formField-"]')) {
+          const containerText = (
+            field.previousElementSibling?.textContent ||
+            field.parentElement?.previousElementSibling?.textContent || ""
+          ).toLowerCase();
+          if (!containerText.includes("your name") && !containerText.includes("enter your name") &&
+              !containerText.includes("full name") && !containerText.includes("print name")) continue;
+          const ta = field.querySelector('textarea, input:not([type="hidden"]):not([type="radio"]):not([type="checkbox"])');
+          if (ta && !ta.value?.trim()) {
+            setWorkdayValue(ta, fullName);
+            LOG(`Filled name field via container text scan: "${fullName}"`);
+            break;
+          }
+        }
+      } else {
+        LOG(`Filled name field via fillByLabelText: "${fullName}"`);
+      }
+    } else {
+      LOG("No fullName in userProfile — skipping name signature field");
+    }
+
+    // ── Today's date field (Application Questions 2 of 2 pattern) ────────────
+    // "Please enter today's date" — date picker with Month/Day/Year spinbuttons.
+    await fillTodayDateFields();
+
     LOG("Step 3 filled");
+  }
+
+  /** Fill unfilled date-picker spinbutton groups with today's date (MM/DD/YYYY). */
+  async function fillTodayDateFields() {
+    const today = new Date();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day   = String(today.getDate()).padStart(2, "0");
+    const year  = String(today.getFullYear());
+
+    const fields = document.querySelectorAll('[data-automation-id^="formField-"]');
+    for (const field of fields) {
+      const spinners = field.querySelectorAll('[role="spinbutton"]');
+      if (spinners.length < 2) continue;
+
+      const monthS = Array.from(spinners).find(s => s.getAttribute("aria-label") === "Month");
+      const dayS   = Array.from(spinners).find(s => s.getAttribute("aria-label") === "Day");
+      const yearS  = Array.from(spinners).find(s => s.getAttribute("aria-label") === "Year");
+      if (!monthS || !dayS) continue;
+
+      // Skip if Day is already set
+      if (dayS.getAttribute("aria-valuenow")) continue;
+
+      LOG("Filling date field with today's date");
+
+      // Focus and type into each spinbutton — Workday date pickers respond to keydown
+      const typeIntoSpinner = async (spinner, text) => {
+        spinner.focus();
+        await sleep(80);
+        for (const ch of text) {
+          ["keydown", "keypress", "keyup"].forEach(evType => {
+            spinner.dispatchEvent(new KeyboardEvent(evType, {
+              key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0),
+              which: ch.charCodeAt(0), bubbles: true, cancelable: true
+            }));
+          });
+          await sleep(30);
+        }
+      };
+
+      await typeIntoSpinner(monthS, month);
+      await typeIntoSpinner(dayS, day);
+      if (yearS) await typeIntoSpinner(yearS, year);
+      await sleep(100);
+      return true;
+    }
+    return false;
   }
 
   /** Extract max base pay from a JD string. Returns integer string or null. */
@@ -1158,11 +1440,111 @@
     const resume = stored.parsedResume || {};
     const workExp = resume.workExperience || [];
     const education = resume.education || [];
+    const certifications = resume.certifications || [];
+    // skills can be a flat array OR an object { technical, soft, tools }
+    const rawSkills = resume.skills || [];
+    const skills = Array.isArray(rawSkills)
+      ? rawSkills
+      : [
+          ...(rawSkills.technical || []),
+          ...(rawSkills.tools || []),
+          ...(rawSkills.soft || [])
+        ];
 
-    LOG(`fillMyExperiencePage: ${workExp.length} work entries, ${education.length} education entries`);
+    LOG(`fillMyExperiencePage: ${workExp.length} work, ${education.length} edu, ${certifications.length} certs, ${skills.length} skills`);
 
     if (workExp.length > 0) await fillWorkExperienceEntries(workExp);
     if (education.length > 0) await fillEducationEntries(education);
+
+    // ── Certifications ────────────────────────────────────────────────────────
+    if (certifications.length > 0) {
+      await fillCertificationEntries(certifications);
+    }
+
+    // ── Skills ────────────────────────────────────────────────────────────────
+    if (skills.length > 0) {
+      await fillSkillsField(skills);
+    }
+  }
+
+  /**
+   * Fill the Certifications section by clicking "Add" for each certification.
+   */
+  async function fillCertificationEntries(certifications) {
+    LOG(`Filling ${certifications.length} certification(s)`);
+    for (let i = 0; i < certifications.length; i++) {
+      const cert = typeof certifications[i] === "string"
+        ? { name: certifications[i] }
+        : certifications[i];
+
+      // Click "Add" (first cert) or "Add Another" (subsequent)
+      const addBtn = findSectionAddButton("certifications", i > 0) ||
+                     findSectionAddButton("certification", i > 0);
+      if (!addBtn) { LOG(`No Add button for cert ${i + 1} — stopping`); break; }
+      addBtn.click();
+      await sleep(1200);
+
+      // Find the most recently added container
+      const containers = findExperienceContainers("certif");
+      const container = containers[containers.length - 1];
+      if (!container) continue;
+
+      await fillLabeledFieldInBlock(container, ["certification", "name", "title", "license"], cert.name || cert);
+      if (cert.issuer) {
+        await fillLabeledFieldInBlock(container, ["issuer", "issued by", "organization", "authority"], cert.issuer);
+      }
+      if (cert.date || cert.year) {
+        await fillLabeledFieldInBlock(container, ["date", "issued", "completion date", "year"], cert.date || String(cert.year));
+      }
+    }
+  }
+
+  /**
+   * Fill the Skills tag-input field on the My Experience page.
+   * Workday uses a multi-select combobox where you type a skill and pick from dropdown.
+   */
+  async function fillSkillsField(skills) {
+    LOG(`Filling ${skills.length} skill(s) in Skills field`);
+
+    // Find the skills input — it's typically a combobox or text input near "Skills" heading
+    const skillsInput = document.querySelector('[data-automation-id*="skill"] input') ||
+      document.querySelector('[aria-label*="skill" i]') ||
+      document.querySelector('[placeholder*="skill" i]') ||
+      (() => {
+        // Walk through all formField containers to find one labelled "skills"
+        for (const ff of document.querySelectorAll('[data-automation-id^="formField-"]')) {
+          const lbl = (ff.querySelector("label")?.textContent || ff.previousElementSibling?.textContent || "").toLowerCase();
+          if (lbl.includes("skill")) {
+            return ff.querySelector('input, [role="combobox"]');
+          }
+        }
+        return null;
+      })();
+
+    if (!skillsInput) {
+      LOG("Skills input not found — skipping");
+      return;
+    }
+
+    // Type each skill and either press Enter or pick from dropdown
+    for (const skill of skills.slice(0, 20)) { // cap at 20 to avoid spamming
+      skillsInput.focus();
+      setWorkdayValue(skillsInput, skill);
+      await sleep(800);
+
+      // Try to pick the first dropdown option
+      const option = document.querySelector('[role="option"], [data-automation-id*="promptOption"]');
+      if (option) {
+        option.click();
+        await sleep(300);
+      } else {
+        // No dropdown — press Enter/comma to add as free-text tag
+        skillsInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
+        skillsInput.dispatchEvent(new KeyboardEvent("keydown", { key: ",", keyCode: 188, bubbles: true }));
+        await sleep(300);
+      }
+    }
+    LOG("Skills fill complete");
   }
 
   /**
@@ -1251,10 +1633,13 @@
       const container = containers[i];
       if (!container) break;
       const exp = workExp[i];
-      LOG(`Filling WE ${i + 1}: "${exp.title}" at "${exp.company}"`);
+      // parsedResume stores job title as `role` (from prompts.ts schema).
+      // Older snapshots may use `title`. Support both for backward compat.
+      const jobTitle = exp.role || exp.title || "";
+      LOG(`Filling WE ${i + 1}: "${jobTitle}" at "${exp.company}"`);
 
       // Job Title — this was previously missing, causing "Job Title required" errors
-      await fillLabeledFieldInBlock(container, ["job title", "title", "position", "role"], exp.title);
+      await fillLabeledFieldInBlock(container, ["job title", "title", "position", "role"], jobTitle);
 
       // Company
       await fillLabeledFieldInBlock(container, ["company", "employer", "organization"], exp.company);
@@ -1729,6 +2114,34 @@
       }
     } catch (e) {
       LOG(`React props strategy failed (${e.message}), trying native events`);
+    }
+
+    // ── Strategy 1.5: React fiber memoizedProps (uncontrolled components) ──────
+    // Uncontrolled Workday textareas use `defaultValue` (no onChange/onInput in
+    // __reactProps$). Their __reactFiber$ memoizedProps still carry onBlur which
+    // is the validation gate. Calling it directly is the ONLY way to make Workday
+    // mark the field as valid without real browser keyboard events.
+    try {
+      const fiberKey = Object.keys(input).find(k => k.startsWith('__reactFiber'));
+      if (fiberKey) {
+        const fiber = input[fiberKey];
+        const onBlur = fiber?.memoizedProps?.onBlur;
+        if (onBlur) {
+          onBlur({
+            target: input,
+            currentTarget: input,
+            type: 'blur',
+            nativeEvent: new FocusEvent('blur'),
+            preventDefault: () => {},
+            stopPropagation: () => {},
+            persist: () => {}
+          });
+          LOG(`React fiber onBlur fired for: "${value.substring(0, 25)}"`);
+          return true;
+        }
+      }
+    } catch (e) {
+      LOG(`React fiber strategy failed (${e.message})`);
     }
 
     // ── Strategy 2: _valueTracker + native events (non-React / older React) ─
