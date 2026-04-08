@@ -2258,4 +2258,55 @@
     if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
     if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
   }
+
+  /**
+   * Inject the "⬇️ Resume" download button into the live banner immediately
+   * when tailoredResumePdf becomes available — without waiting for the next
+   * showBanner call. Idempotent: does nothing if button is already present.
+   * Subsequent showBanner calls will include it naturally via the hasPdf check.
+   */
+  function injectOrRefreshDownloadButton() {
+    if (document.getElementById("aa-btn-download-resume")) return;
+    const banner = document.getElementById("autoapply-banner");
+    if (!banner) return;
+    chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress", "pendingApplication", "tailoredResumeFilename"], (result) => {
+      if (!result.tailoredResumePdf) return;
+      if (document.getElementById("aa-btn-download-resume")) return;
+      const wrapper = banner.querySelector("div");
+      if (!wrapper) return;
+      const btn = document.createElement("button");
+      btn.id = "aa-btn-download-resume";
+      btn.style.cssText = "border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;margin-top:6px;";
+      btn.textContent = "⬇️ Resume";
+      btn.addEventListener("click", () => {
+        chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress", "pendingApplication", "tailoredResumeFilename"], (r) => {
+          if (!r.tailoredResumePdf) return;
+          const bp  = r._aa_batchProgress;
+          const job = r.pendingApplication;
+          const company  = (bp?.company  || job?.company  || "Company").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+          const jobTitle = (bp?.title    || job?.jobTitle || "Resume").replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+          const filename = r.tailoredResumeFilename || `${company}_${jobTitle}_Resume.pdf`;
+          const dataUrl = `data:application/pdf;base64,${r.tailoredResumePdf}`;
+          const a = document.createElement("a");
+          a.href = dataUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        });
+        btn.textContent = "⬇️ Download again";
+        btn.disabled = false;
+      });
+      wrapper.appendChild(btn);
+      console.log("AutoApply: Persistent download button injected into banner");
+    });
+  }
+
+  // Proactively show the download button the moment tailoredResumePdf is ready —
+  // survives across showBanner calls since showBanner re-checks storage each time.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.tailoredResumePdf?.newValue) return;
+    console.log("AutoApply: tailoredResumePdf ready — injecting persistent download button");
+    injectOrRefreshDownloadButton();
+  });
 })();
