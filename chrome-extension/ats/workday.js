@@ -344,7 +344,11 @@
       document.querySelector('input[type="file"]');
 
     if (!hasUploadArea) {
-      LOG("No file upload found on page — not on Step 2 yet, skipping resume upload");
+      // No file upload widget — this Workday instance uses structured form fields instead.
+      // Skip the PDF upload entirely and go straight to filling work experience / education.
+      LOG("No file upload found on Step 2 — filling structured form fields directly");
+      showBanner("Filling your experience details...", "ai", { subtext: "No resume upload required — filling form fields directly." });
+      await continueFromStep2(tailoredData, pendingJob);
       return;
     }
 
