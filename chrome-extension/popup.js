@@ -47,10 +47,11 @@ function initDashboard() {
   const clearBtn     = document.getElementById("clear-data");
 
   // Load session stats
-  chrome.storage.local.get(["_aa_scrapedJobs", "sentJobsCount"], (result) => {
+  chrome.storage.local.get(["_aa_scrapedJobs", "completedApplications"], (result) => {
     const scraped = Array.isArray(result._aa_scrapedJobs) ? result._aa_scrapedJobs.length : 0;
+    const sent    = Array.isArray(result.completedApplications) ? result.completedApplications.length : 0;
     scrapedCount.textContent = scraped;
-    sentCount.textContent    = result.sentJobsCount ?? 0;
+    sentCount.textContent    = sent;
   });
 
   // Open the pipeline page in a new tab
@@ -62,7 +63,7 @@ function initDashboard() {
   // Clear session data
   clearBtn.addEventListener("click", () => {
     if (!confirm("Clear all jobs found this session?")) return;
-    chrome.storage.local.remove(["_aa_scrapedJobs", "_aa_selectedIds", "sentJobsCount"], () => {
+    chrome.storage.local.remove(["_aa_scrapedJobs", "_aa_selectedIds", "completedApplications"], () => {
       scrapedCount.textContent = "0";
       sentCount.textContent    = "0";
     });

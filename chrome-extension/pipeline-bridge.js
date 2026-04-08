@@ -13,6 +13,27 @@
 
   if (!isPipeline && !isDashboard) return;
 
+  /* ── QA Test Helper: Allow page to override autoapplyUrl for API failure testing ── */
+  // If localStorage has 'autoapply-test-api-url', write it into chrome.storage so
+  // background.js picks up the (possibly broken) URL on the next API call.
+  // Set to empty string to restore the default URL.
+  try {
+    const testUrl = localStorage.getItem("autoapply-test-api-url");
+    if (testUrl !== null) {
+      if (testUrl === "") {
+        chrome.storage.local.remove(["autoapplyUrl"], () => {
+          console.log("AutoApply Bridge: Removed test API URL override — using default");
+        });
+      } else {
+        chrome.storage.local.set({ autoapplyUrl: testUrl }, () => {
+          console.log("AutoApply Bridge: Set test API URL:", testUrl);
+        });
+      }
+    }
+  } catch(e) {
+    console.warn("AutoApply Bridge: Error setting test URL", e);
+  }
+
   /* ── Job Import: Extension → React App ── */
   chrome.storage.local.get(["pendingJobs"], (result) => {
     const jobs = result.pendingJobs;
