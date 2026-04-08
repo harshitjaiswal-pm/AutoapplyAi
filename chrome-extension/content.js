@@ -689,6 +689,24 @@
   }
 
   /**
+   * Verify that the LinkedIn detail panel currently shows the expected job.
+   * Returns true if the panel text contains the job title or company name.
+   */
+  function isPanelShowingJob(job) {
+    const detailSelector =
+      '.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"], [class*="jobs-details"]';
+    const panel = document.querySelector(detailSelector);
+    if (!panel) return false;
+    const panelText = (panel.innerText || "").slice(0, 600).toLowerCase();
+    if (!panelText) return false;
+    const titleFirst25 = (job.title || "").toLowerCase().substring(0, 25);
+    const companyFirst20 = (job.company || "").toLowerCase().substring(0, 20);
+    const titleMatch = titleFirst25.length >= 4 && panelText.includes(titleFirst25);
+    const companyMatch = companyFirst20.length >= 3 && panelText.includes(companyFirst20);
+    return titleMatch || companyMatch;
+  }
+
+  /**
    * Process a single job: click card → scroll → scrape JD → click Apply → notify background
    */
   async function processJob(job) {
@@ -702,6 +720,28 @@
         console.warn("AutoApply: Could not click job card for", job.title, "at index", job.index);
         updateJobStatus(job.id, "failed");
         return { success: false, reason: "Could not click job card" };
+      }
+
+      // Step 1b: Verify the detail panel actually switched to the correct job.
+      // clickJobCard() can return true even when the panel didn't change (e.g. the
+      // previous job's content was still visible). If we proceed with the wrong job
+      // in the panel, we'll click the wrong Apply button and open the wrong tab.
+      if (!isPanelShowingJob(job)) {
+        // Panel may still be rendering — wait an extra 2s and try once more
+        await new Promise((r) => setTimeout(r, 2000));
+        if (!isPanelShowingJob(job)) {
+          // One final attempt: re-click the card
+          console.warn(`AutoApply: Panel mismatch after click for "${job.title}" — retrying card click`);
+          try { AALog && AALog.error("linkedin.processJob.panelMismatch", { title: job.title, company: job.company }); } catch(_){}
+          await clickJobCard(job);
+          await new Promise((r) => setTimeout(r, 2000));
+          if (!isPanelShowingJob(job)) {
+            console.error(`AutoApply: Panel still not showing "${job.title}" after retry — aborting to avoid wrong-tab apply`);
+            try { AALog && AALog.error("linkedin.processJob.panelMismatchAbort", { title: job.title, company: job.company }); } catch(_){}
+            updateJobStatus(job.id, "failed");
+            return { success: false, reason: "Detail panel did not load the correct job" };
+          }
+        }
       }
 
       // Step 2: Scroll the detail panel to load the full JD
@@ -719,6 +759,17 @@
           updateJobStatus(job.id, "failed");
           return { success: false, reason: "Could not scrape job description" };
         }
+      }
+
+      // Step 3: Final safety check — confirm panel still shows the right job before
+      // sending PREPARE_APPLICATION. This guards against the panel swapping to a
+      // different job between the card-click and the JD scrape (e.g. a race where
+      // LinkedIn auto-selects a promoted listing).
+      if (!isPanelShowingJob(job)) {
+        console.error(`AutoApply: Panel no longer shows "${job.title}" before PREPARE_APPLICATION — aborting`);
+        try { AALog && AALog.error("linkedin.processJob.panelChangedBeforePrepare", { title: job.title, company: job.company }); } catch(_){}
+        updateJobStatus(job.id, "failed");
+        return { success: false, reason: "Detail panel changed before application could be prepared" };
       }
 
       // Step 3: Store job + JD in background so ATS scripts can pick it up

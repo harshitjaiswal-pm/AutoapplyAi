@@ -95,6 +95,10 @@ const KNOWN_ATS_DOMAINS = [
   // missing here, causing Taleo tabs to miss the fast-injection path and rely solely
   // on the time-limited expectingNewTab flag instead.
   "taleo.net",
+  // [Fix 2026-04-08] breezy.hr was using the loose expectingNewTab path, which could
+  // cause a stale flag to inject into the wrong company's breezy.hr tab. Moving to
+  // the KNOWN_ATS_DOMAINS path enforces the pendingApplication guard instead.
+  "breezy.hr",
 ];
 
 /* ── Keep-alive mechanism for MV3 service worker ──
