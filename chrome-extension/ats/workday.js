@@ -682,34 +682,37 @@
       return "login"; // special sentinel — handled in processCurrentStep
     }
 
-    // Try step indicator first
+    // Try progress bar active step — match by step NAME (Workday uses names, not "step N")
     const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
     if (activeStep) {
-      const text = activeStep.textContent || "";
+      const text = (activeStep.textContent || "").toLowerCase();
+      if (text.includes("my information")) return 1;
+      if (text.includes("my experience")) return 2;
+      if (text.includes("application questions")) return 3;
+      if (text.includes("voluntary disclosures")) return 3.5;
+      if (text.includes("review")) return 4;
+      // Legacy: try numeric match as fallback
       const match = text.match(/step\s*(\d+)/i);
       if (match) return parseInt(match[1]);
     }
 
-    // Fallback: detect by page content
+    // Fallback: detect by page content.
+    // IMPORTANT: Check higher steps FIRST — the URL "applymanually" is the same
+    // across ALL steps on many Workday instances, so URL-based step-1 detection
+    // must be a last resort only.
     const pageText = document.body.innerText || "";
-    const url = window.location.href.toLowerCase();
 
-    if (url.includes("myinformation") || url.includes("applymanually") ||
-        pageText.includes("My Information") && pageText.includes("Legal Name")) {
-      return 1;
-    }
-    if (pageText.includes("My Experience") && (pageText.includes("Resume") || pageText.includes("Work Experience"))) {
-      return 2;
-    }
-    if (pageText.includes("Application Questions")) {
-      return 3;
-    }
-    if (pageText.includes("Voluntary Disclosures") || pageText.includes("Terms and Conditions") && pageText.includes("acknowledge")) {
-      return 3.5;
-    }
-    if (pageText.includes("Review") && pageText.includes("Submit")) {
-      return 4;
-    }
+    if (pageText.includes("Review") && pageText.includes("Submit")) return 4;
+    if (pageText.includes("Voluntary Disclosures") ||
+        (pageText.includes("Terms and Conditions") && pageText.includes("acknowledge"))) return 3.5;
+    if (pageText.includes("Application Questions")) return 3;
+    if (pageText.includes("My Experience") &&
+        (pageText.includes("Resume") || pageText.includes("Work Experience"))) return 2;
+    if (pageText.includes("My Information") && pageText.includes("Legal Name")) return 1;
+
+    // URL-based fallback — LAST RESORT (same URL for all steps on some Workday instances)
+    const url = window.location.href.toLowerCase();
+    if (url.includes("myinformation") || url.includes("applymanually")) return 1;
 
     return 1; // Default to step 1
   }
