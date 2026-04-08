@@ -77,6 +77,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === applyTabId) {
     console.log("AutoApply BG: apply tab closed — clearing applyTabId");
     applyTabId = null;
+    // [AutoQA fix 2026-04-08] _aa_lastAtsTabId was set to the same tabId as applyTabId
+    // but was never cleared on tab close, leaving a stale ID in storage that could
+    // cause confusing FOCUS_TAB failures on the next application cycle.
+    chrome.storage.local.remove(["_aa_lastAtsTabId"]);
   }
 });
 
@@ -87,6 +91,10 @@ const KNOWN_ATS_DOMAINS = [
   "myworkdayjobs.com",
   "ashbyhq.com",
   "icims.com",
+  // [AutoQA fix 2026-04-08] taleo.net was handled by generic.js detectTaleo() but was
+  // missing here, causing Taleo tabs to miss the fast-injection path and rely solely
+  // on the time-limited expectingNewTab flag instead.
+  "taleo.net",
 ];
 
 /* ── Keep-alive mechanism for MV3 service worker ──

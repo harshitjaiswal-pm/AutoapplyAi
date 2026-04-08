@@ -1127,6 +1127,10 @@
         { labels: ["salary", "compensation", "salary expectation", "minimum salary", "base salary", "minimum base salary", "salary expectations", "minimum base", "expected salary", "desired salary", "pay expectation"], value: maxPay || user.salaryExpectation || user.compensation },
         // Notice period
         { labels: ["notice period", "required notice", "notice period required", "required notice period"], value: user.noticePeriod || "2 weeks" },
+        // [AutoQA fix 2026-04-08] "Years of experience" text/number inputs were not handled
+        // in fillGenericForm's fieldMappings, causing them to be left blank on many ATS forms.
+        // These are plain input fields (not radio buttons) that expect a numeric answer.
+        { labels: ["years of experience", "years of relevant experience", "years of work experience", "total years of experience", "years of professional experience"], value: user.yearsOfExperience || "" },
       ];
 
       for (const mapping of fieldMappings) {
