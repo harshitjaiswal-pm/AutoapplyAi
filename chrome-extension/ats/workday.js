@@ -35,7 +35,11 @@
     if (r.userProfile) window.__aa_profile = r.userProfile;
   });
   window.addEventListener("message", (e) => {
-    if (e.source !== window || !e.data?.__aa_cmd) return;
+    // Allow messages from same origin (page main world or isolated world).
+    // e.source !== window can fail in isolated-world content scripts, so we only
+    // guard on same-origin to prevent cross-frame injection.
+    if (!e.data?.__aa_cmd) return;
+    if (e.origin && e.origin !== location.origin) return;
     if (e.data.__aa_cmd === "GET_PROFILE") {
       chrome.storage.local.get(["userProfile"], (r) => {
         window.__aa_profile = r.userProfile || {};
