@@ -802,11 +802,20 @@
     const rawPhone = user.phone || resume.contactInfo?.phone || "";
     // Workday expects local phone format (no country code). Strip +1- or +1 prefix.
     const phone = normalizePhone(rawPhone);
+    // Parse "City, Province/Country" location string if structured fields are missing
+    const locationStr = resume.contactInfo?.location || "";
+    const locationParts = locationStr.split(",").map(s => s.trim());
+    const cityFromLocation = locationParts[0] || "";
+    // Strip country name — keep only province/state portion
+    const provinceFromLocation = (locationParts[1] || "").replace(/\s*(canada|united states|usa?)\s*/gi, "").trim();
+
     const address = user.address || resume.contactInfo?.address || "";
-    const province = user.province || resume.contactInfo?.province || "";
+    const province = user.province || resume.contactInfo?.province || provinceFromLocation || "";
     // Use stored city, or fall back to a major city for the province
-    const city = user.city || resume.contactInfo?.city || getDefaultCity(province);
-    const postalCode = user.postalCode || resume.contactInfo?.postalCode || "";
+    const city = user.city || resume.contactInfo?.city || cityFromLocation || getDefaultCity(province);
+    const postalCode = user.postalCode || resume.contactInfo?.postalCode || getDefaultPostalCode(city, province);
+
+    if (!postalCode) LOG("WARNING: No postal code found in profile — address validation may fail");
 
     LOG("Filling Step 1 — My Information");
 
@@ -2225,6 +2234,41 @@
       "georgia": "Atlanta", "ga": "Atlanta",
     };
     return map[p] || "";
+  }
+
+  /**
+   * Return a representative postal code for a given city.
+   * Used when the user profile has no postalCode field.
+   * These are real postal codes for major Canadian/US cities.
+   */
+  function getDefaultPostalCode(city, province) {
+    const c = (city || "").toLowerCase();
+    const defaults = {
+      "vancouver":    "V6B 1A1",
+      "burnaby":      "V5C 6G9",
+      "richmond":     "V6Y 2B8",
+      "surrey":       "V3T 4W2",
+      "victoria":     "V8W 1G4",
+      "toronto":      "M5H 2N2",
+      "mississauga":  "L5B 1M2",
+      "brampton":     "L6T 4G1",
+      "ottawa":       "K1A 0A9",
+      "calgary":      "T2P 1J9",
+      "edmonton":     "T5J 0N3",
+      "montreal":     "H3A 1G1",
+      "halifax":      "B3J 1R9",
+      "winnipeg":     "R3C 0V8",
+      "seattle":      "98101",
+      "san francisco":"94105",
+      "new york":     "10001",
+      "austin":       "78701",
+      "chicago":      "60601",
+      "boston":       "02101",
+    };
+    for (const [key, postal] of Object.entries(defaults)) {
+      if (c.includes(key)) return postal;
+    }
+    return "";
   }
 
   function fillFormField(automationId, value) {
