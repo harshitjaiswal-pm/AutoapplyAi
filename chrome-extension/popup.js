@@ -89,6 +89,10 @@ function initProfile() {
     pronouns:      document.getElementById("pronouns"),
     workAuth:      document.getElementById("workAuth"),
     howDidYouHear: document.getElementById("howDidYouHear"),
+    ethnicity:     document.getElementById("ethnicity"),
+    gender:        document.getElementById("gender"),
+    disabilityStatus: document.getElementById("disabilityStatus"),
+    veteranStatus: document.getElementById("veteranStatus"),
   };
 
   const saveBtn  = document.getElementById("save-profile");
@@ -113,6 +117,10 @@ function initProfile() {
       pronouns:           fields.pronouns.value,
       requireSponsorship: fields.workAuth.value,
       howDidYouHear:      fields.howDidYouHear.value,
+      ethnicity:          fields.ethnicity.value,
+      gender:             fields.gender.value,
+      disabilityStatus:   fields.disabilityStatus.value,
+      veteranStatus:      fields.veteranStatus.value,
     };
 
     if (!profile.firstName || !profile.email) {
@@ -137,6 +145,8 @@ function loadProfile(fields) {
       linkedin: "linkedin", github: "github", portfolio: "portfolio",
       currentCompany: "currentCompany", pronouns: "pronouns",
       requireSponsorship: "workAuth", howDidYouHear: "howDidYouHear",
+      ethnicity: "ethnicity", gender: "gender",
+      disabilityStatus: "disabilityStatus", veteranStatus: "veteranStatus",
     };
     for (const [key, fieldId] of Object.entries(map)) {
       if (fields[fieldId] && p[key]) fields[fieldId].value = p[key];

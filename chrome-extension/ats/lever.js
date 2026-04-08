@@ -749,7 +749,41 @@
   /** Remove the banner and restore body padding. */
   function removeBanner() {
     const b = document.getElementById("autoapply-banner");
-    if (b) b.remove();
+    if (!b) return;
+
+    // Check if tailored PDF exists — if so, preserve the download button as a standalone element
+    chrome.storage.local.get(["tailoredResumePdf"], (result) => {
+      if (result.tailoredResumePdf) {
+        const existingBtn = document.getElementById("aa-btn-download-resume");
+        if (existingBtn && existingBtn.parentNode) {
+          // Detach button before banner removal so it persists
+          const clonedBtn = existingBtn.cloneNode(true);
+          document.body.appendChild(clonedBtn);
+          clonedBtn.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            border: none; border-radius: 5px; padding: 8px 16px; font-size: 12px; font-weight: 700;
+            cursor: pointer; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: transform 0.2s;
+          `;
+          clonedBtn.addEventListener("mouseenter", (e) => e.target.style.transform = "scale(1.05)");
+          clonedBtn.addEventListener("mouseleave", (e) => e.target.style.transform = "scale(1)");
+          clonedBtn.addEventListener("click", () => {
+            chrome.storage.local.get(["_aa_batchProgress"], (r) => {
+              const bpData = r._aa_batchProgress;
+              chrome.runtime.sendMessage({
+                type: "DOWNLOAD_RESUME",
+                job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
+              });
+              clonedBtn.textContent = "⬇️ Download again";
+              clonedBtn.disabled = false;
+            });
+          });
+        }
+      }
+    });
+
+    // Remove banner and restore padding
+    b.remove();
     document.body.style.paddingTop = "";
   }
 

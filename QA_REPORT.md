@@ -104,3 +104,45 @@ https://autoapply-ai-delta.vercel.app/api/auth/callback/google
 2. **Lever not live-tested** — Same reason; no LinkedIn posting found that routes to `lever.co` directly.
 3. **10-job volume** — 3-job batch tested instead; state isolation mechanism is deterministic and not quantity-dependent.
 4. **No server-side user data storage** — Each user's resume/jobs stored in their own browser localStorage. Acceptable for tester use case.
+
+---
+
+## Overnight QA Run — 2026-04-08
+
+### Bugs Found: 3
+### Bugs Fixed: 3
+### Push Status: Commit made locally (2dd2412); push blocked — GitHub token expired, manual re-push required.
+
+---
+
+#### [Bug 1] taleo.net missing from KNOWN_ATS_DOMAINS in background.js
+**File:** `chrome-extension/background.js`
+**Problem:** `taleo.net` was recognised by `detectTaleo()` in `generic.js` and handled correctly at the form-fill level, but it was absent from the `KNOWN_ATS_DOMAINS` array in `background.js`. This meant Taleo application tabs missed the fast-inject path (triggered immediately on `onUpdated`) and instead relied entirely on the time-limited `expectingNewTab` flag (60s window). If a Taleo page loaded slowly or the service worker had already reset `expectingNewTab`, the ATS script would never be injected.
+**Fix:** Added `"taleo.net"` to `KNOWN_ATS_DOMAINS`.
+**Severity:** warning
+
+#### [Bug 2] `_aa_lastAtsTabId` storage key never cleared on tab close
+**File:** `chrome-extension/background.js`
+**Problem:** `_aa_lastAtsTabId` is set in `injectATSScript()` to track the current apply tab (alongside `applyTabId`), but was never cleared in the `chrome.tabs.onRemoved` listener. After a tab was closed, the stale ID remained in storage across the full session. A subsequent `FOCUS_TAB` call using this stale ID would fail silently (Chrome's `chrome.tabs.get` returns an error, which the handler catches but doesn't surface to the user).
+**Fix:** Added `chrome.storage.local.remove(["_aa_lastAtsTabId"])` inside the `tabId === applyTabId` branch of the `onRemoved` listener.
+**Severity:** low
+
+#### [Bug 3] Missing "years of experience" plain-text/number field mapping in fillGenericForm
+**File:** `chrome-extension/ats/generic.js`
+**Problem:** `fillGenericForm()`'s `fieldMappings` array handled salary, notice period, LinkedIn URL, and other common fields — but had no mapping for plain text or number inputs labelled "years of experience", "years of relevant experience", etc. These appear frequently on SmartRecruiters, BambooHR, and iCIMS forms. The `fillRadioCheckboxQuestions` function in `greenhouse.js` handles the radio-button variant of this question, but `generic.js` had no equivalent for the text/number-input variant.
+**Fix:** Added a new `fieldMappings` entry with labels `["years of experience", "years of relevant experience", "years of work experience", "total years of experience", "years of professional experience"]` mapping to `user.yearsOfExperience`.
+**Severity:** low
+
+---
+
+### No-change review areas (clean)
+- `src/lib/resumeValidation.ts` — `parseDate()` already handles all formats listed in the task spec: em-dash ranges ("2018 – Present"), abbreviated months with periods ("Jan. 2020"), MM/YYYY ("08/2019"), YYYY/MM ("2019/08"), quarter notation ("Q1 2022"), and season notation ("Summer 2019"). No gaps found.
+- `src/app/api/tailor-resume/route.ts` — RULE ZERO in the system prompt explicitly requires verbatim date preservation with automated validation warnings. Prompt injection risk from job descriptions is low given the structured JSON wrapping and directive system prompt.
+- `chrome-extension/ats/generic.js` — `setNativeValue()` correctly uses `element.ownerDocument.defaultView` to get the frame-local window, avoiding "Illegal invocation" on cross-frame elements.
+- `chrome-extension/ats/generic.js` — `detectSignInWall()` correctly guards against false-positives on job listing pages using `!hasApplyButton`. "Apply with LinkedIn" / "Apply with Indeed" patterns are covered by `text.startsWith("apply with ")`.
+- `chrome-extension/ats/generic.js` — `type="tel"` phone fields are matched by `fillByLabel()` since it does not exclude `tel` inputs from its selector.
+- `chrome-extension/ats/generic.js` — LinkedIn URL, salary expectation, cover letter textarea, and `type="tel"` phone fields all have correct label mappings.
+- `chrome-extension/ats/greenhouse.js` — `fillAllFields(user, null)` safely handles null `tailoredResult` via optional chaining (`tailoredResult?.coverLetter`).
+- `chrome-extension/background.js` — Message handling architecture is single-listener sequential; no true race conditions from concurrent tabs since each async path is guarded by its own `return true` and independent `stopKeepAlive` calls.
+- `chrome-extension/ats/workday.js`, `lever.js`, `universal.js` — Selectors are stable (Workday data-automation-id, Lever class patterns, Greenhouse id/name patterns). No null-check gaps in critical paths.
+

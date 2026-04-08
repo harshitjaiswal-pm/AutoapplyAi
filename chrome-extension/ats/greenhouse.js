@@ -56,7 +56,7 @@
       }
 
       const user = stored.userProfile || {};
-      fillAllFields(user, null);
+      await fillAllFields(user, null, null, null);
       await attemptResumeUpload();
       console.log("AutoApply: GH child frame filled form");
     })();
@@ -173,6 +173,16 @@
         },
       });
 
+      // Start watching for application submission
+      watchSubmit({
+        jobTitle: pendingJob.jobTitle,
+        company: pendingJob.company,
+        location: pendingJob.location || "",
+        jobUrl: pendingJob.jobUrl || window.location.href,
+        jobDescription: pendingJob.jobDescription || "",
+        resumeFilename: pendingJob.resumeFilename || "resume.pdf",
+      });
+
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {
@@ -180,6 +190,16 @@
       showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
       await fillBasicFieldsOnly();
       showBanner("Basic info filled — review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
+
+      // Still watch for submission even in fallback path
+      watchSubmit({
+        jobTitle: pendingJob.jobTitle,
+        company: pendingJob.company,
+        location: pendingJob.location || "",
+        jobUrl: pendingJob.jobUrl || window.location.href,
+        jobDescription: pendingJob.jobDescription || "",
+        resumeFilename: pendingJob.resumeFilename || "resume.pdf",
+      });
     }
   }
 
@@ -376,25 +396,27 @@
       showBanner("No profile data found — sync your profile from the extension panel.", "error");
       return;
     }
-    fillAllFields(user, null);
+    await fillAllFields(user, null, null, null);
   }
 
   async function fillGreenhouseForm(tailoredResult, job, jobDescription) {
     const profile = await chrome.storage.local.get(["userProfile"]);
     const user = profile.userProfile || {};
     console.log("AutoApply: User profile keys:", Object.keys(user));
-    fillAllFields(user, tailoredResult, jobDescription);
+    await fillAllFields(user, tailoredResult, jobDescription, job);
   }
 
-  function fillAllFields(user, tailoredResult, jobDescription) {
+  async function fillAllFields(user, tailoredResult, jobDescription, jobData) {
     let filled = 0;
 
     // ── Basic fields (selector-based, most reliable for Greenhouse) ──
+    // Issue #16 fix: Expanded phone selector to catch all variations
     const selectorFields = [
       { sel: 'input[name*="first_name"], input[id*="first_name"]', val: user.firstName },
       { sel: 'input[name*="last_name"], input[id*="last_name"]', val: user.lastName },
       { sel: 'input[name*="email"], input[id*="email"], input[type="email"]', val: user.email },
-      { sel: 'input[name*="phone"], input[id*="phone"], input[type="tel"]', val: user.phone },
+      // Expanded phone selectors: handles input[name="phone"], input[type="tel"], input[placeholder*="phone"], etc.
+      { sel: 'input[name="phone"], input[name*="phone"], input[id*="phone"], input[type="tel"], input[placeholder*="phone" i]', val: user.phone },
     ];
 
     // Fill selector fields synchronously
@@ -432,6 +454,13 @@
       }
     }
 
+    // Issue #28/#32: Fill work experience entries if present in tailoredResult
+    if (tailoredResult?.workExperience && Array.isArray(tailoredResult.workExperience) && tailoredResult.workExperience.length > 0) {
+      const weCount = fillWorkExperienceFields(tailoredResult.workExperience);
+      filled += weCount;
+      console.log("AutoApply: Filled", weCount, "work experience field(s)");
+    }
+
     // ── Select / dropdown fields ──
     // Greenhouse uses React Select v5. Dropdowns are filled via main world,
     // then text fields are re-filled after React re-renders (faster timing).
@@ -441,10 +470,11 @@
       { labels: ["sponsorship", "immigration", "require immigration"],         value: user.requireSponsorship === "No" ? "No" : (user.requireSponsorship || "No") },
       { labels: ["state", "province", "reside in"],                           value: user.province || "Ontario" },
       { labels: ["how did you", "hear about", "learn about", "first learn"],  value: user.howDidYouHear || "LinkedIn" },
-      { labels: ["gender"],                                                    value: user.gender },
-      { labels: ["race", "ethnicity"],                                         value: user.ethnicity },
-      { labels: ["veteran"],                                                   value: user.veteranStatus },
-      { labels: ["disability"],                                                value: user.disabilityStatus },
+      // Issue #8: Diversity preferences — default to "Prefer not to disclose" if not set
+      { labels: ["gender"],                                                    value: user.gender || "Prefer not to disclose" },
+      { labels: ["race", "ethnicity"],                                         value: user.ethnicity || "Prefer not to disclose" },
+      { labels: ["veteran"],                                                   value: user.veteranStatus || "Prefer not to disclose" },
+      { labels: ["disability"],                                                value: user.disabilityStatus || "Prefer not to disclose" },
       { labels: ["previously been employed", "worked here", "employed at"],   value: "not previously" },
     ];
 
@@ -460,6 +490,9 @@
     for (const { labels, value } of customTextFields) {
       if (value) fillByLabel(labels, value);
     }
+
+    // Issue #6/#14: Generate AI answers for unfilled open-ended questions
+    await fillBehavioralAnswersGreenhouse(tailoredResult, jobData);
 
     // Filter out empty values
     const activeDropdowns = dropdownFields.filter((f) => f.value);
@@ -498,6 +531,120 @@
     });
 
     console.log(`AutoApply: Initial fill of ${filled} fields completed`);
+  }
+
+  /* ─────────────── WORK EXPERIENCE FILLING ─────────────── */
+
+  /**
+   * Issue #28/#32: Fill work experience fields in Greenhouse.
+   * Handles common field patterns like Job Title, Company, Location, Dates, Description.
+   * Returns count of fields filled.
+   */
+  function fillWorkExperienceFields(workExperiences) {
+    let filled = 0;
+    if (!Array.isArray(workExperiences) || workExperiences.length === 0) {
+      return 0;
+    }
+
+    // Look for work experience form sections
+    // Common patterns: class contains "work", "experience", or specific GH patterns
+    const allInputs = document.querySelectorAll("input[type='text'], textarea, input[type='date']");
+    const allLabels = document.querySelectorAll("label, [class*='label']");
+
+    // Map: label text → input element
+    const labelMap = new Map();
+    allLabels.forEach(label => {
+      const text = (label.textContent || "").trim().toLowerCase();
+      if (text.length > 2 && text.length < 100) {
+        // Find associated input (could be child or sibling)
+        let input = label.querySelector("input, textarea");
+        if (!input) {
+          // Try next sibling or parent's next element
+          let el = label.nextElementSibling;
+          if (el) input = el.querySelector ? el.querySelector("input, textarea") : (el.tagName.match(/input|textarea/i) ? el : null);
+          if (!input) {
+            const container = label.closest("div, fieldset");
+            if (container) input = container.querySelector("input:not([type='hidden']), textarea");
+          }
+        }
+        if (input) labelMap.set(text, input);
+      }
+    });
+
+    // For the first work experience entry, try to fill common fields
+    const we = workExperiences[0];
+    if (!we) return 0;
+
+    // Try common field label patterns
+    const jobTitlePatterns = ["job title", "position", "title", "role"];
+    const companyPatterns = ["company", "employer", "organization"];
+    const locationPatterns = ["location", "city", "based"];
+    const dateStartPatterns = ["start date", "from", "began"];
+    const dateEndPatterns = ["end date", "to", "ended"];
+    const descriptionPatterns = ["description", "description of role", "responsibilities", "about this role"];
+
+    // Fill Job Title
+    for (const pattern of jobTitlePatterns) {
+      for (const [labelText, input] of labelMap) {
+        if (labelText.includes(pattern) && !input.value) {
+          const title = we.role || we.title || "";
+          if (title) {
+            setNativeValue(input, title);
+            filled++;
+            break;
+          }
+        }
+      }
+      if (filled) break;
+    }
+
+    // Fill Company
+    for (const pattern of companyPatterns) {
+      for (const [labelText, input] of labelMap) {
+        if (labelText.includes(pattern) && !input.value) {
+          const company = we.company || "";
+          if (company) {
+            setNativeValue(input, company);
+            filled++;
+            break;
+          }
+        }
+      }
+      if (filled > 1) break;
+    }
+
+    // Fill Location
+    for (const pattern of locationPatterns) {
+      for (const [labelText, input] of labelMap) {
+        if (labelText.includes(pattern) && !input.value) {
+          const location = we.location || "";
+          if (location) {
+            setNativeValue(input, location);
+            filled++;
+            break;
+          }
+        }
+      }
+      if (filled > 2) break;
+    }
+
+    // Fill Description (textarea)
+    for (const pattern of descriptionPatterns) {
+      for (const [labelText, input] of labelMap) {
+        if (labelText.includes(pattern) && !input.value && input.tagName === "TEXTAREA") {
+          const desc = we.description || we.details || "";
+          if (desc) {
+            setNativeValue(input, desc);
+            filled++;
+            break;
+          }
+        }
+      }
+      if (filled > 3) break;
+    }
+
+    console.log("AutoApply: Filled", filled, "work experience field(s)");
+    return filled;
   }
 
   /* ─────────────── RADIO / CHECKBOX QUESTIONS ─────────────── */
@@ -622,18 +769,109 @@
     console.log("AutoApply: answerYesNo — no clickable element found for", yesOrNo, "in", labelEl.textContent?.trim());
   }
 
+  /* ─────────────── BEHAVIORAL ANSWER GENERATION (Issue #6/#14) ─────────────── */
+
+  /**
+   * Generate and fill behavioral answers for unfilled textareas and rich text editors
+   */
+  async function fillBehavioralAnswersGreenhouse(tailoredResult, jobData) {
+    try {
+      // Find all unfilled textareas
+      const textareas = document.querySelectorAll("textarea");
+      for (const ta of textareas) {
+        if (ta.value?.trim()) continue; // Already filled
+
+        const label = (getFieldLabel(ta) || "").toLowerCase();
+        if (!label || label.length < 5) continue;
+
+        // Skip known question types that shouldn't use AI answers
+        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) {
+          continue;
+        }
+
+        console.log(`AutoApply: Generating behavioral answer for textarea: "${label.substring(0, 50)}"`);
+        const resumeText = tailoredResult?.tailoredResume
+          ? `${jobData?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
+          : "";
+
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: "GENERATE_BEHAVIORAL_ANSWER",
+            question: label,
+            jobTitle: jobData?.jobTitle || "",
+            company: jobData?.company || "",
+            jobDescription: jobData?.jobDescription?.substring(0, 500) || "",
+            resumeText: resumeText,
+          });
+
+          if (result?.answer) {
+            setNativeValue(ta, result.answer);
+            ta.dispatchEvent(new Event("input", { bubbles: true }));
+            ta.dispatchEvent(new Event("change", { bubbles: true }));
+            console.log(`AutoApply: Filled behavioral answer (${result.answer.length} chars)`);
+          }
+        } catch (err) {
+          console.log(`AutoApply: Behavioral answer generation failed: ${err.message}`);
+        }
+      }
+
+      // Find unfilled contenteditable elements (rich text editors)
+      const editables = document.querySelectorAll("[contenteditable='true']");
+      for (const el of editables) {
+        if (el.textContent?.trim()) continue; // Already filled
+
+        const label = (getFieldLabel(el) || "").toLowerCase();
+        if (!label || label.length < 5) continue;
+
+        // Skip known question types
+        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) {
+          continue;
+        }
+
+        console.log(`AutoApply: Generating behavioral answer for rich text editor: "${label.substring(0, 50)}"`);
+        const resumeText = tailoredResult?.tailoredResume
+          ? `${jobData?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
+          : "";
+
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: "GENERATE_BEHAVIORAL_ANSWER",
+            question: label,
+            jobTitle: jobData?.jobTitle || "",
+            company: jobData?.company || "",
+            jobDescription: jobData?.jobDescription?.substring(0, 500) || "",
+            resumeText: resumeText,
+          });
+
+          if (result?.answer) {
+            el.focus();
+            document.execCommand("insertText", false, result.answer);
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            console.log(`AutoApply: Filled behavioral answer in rich editor (${result.answer.length} chars)`);
+          }
+        } catch (err) {
+          console.log(`AutoApply: Rich editor answer generation failed: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      console.log(`AutoApply: Error in fillBehavioralAnswersGreenhouse: ${err.message}`);
+      // Graceful degradation — continue even if behavioral answers fail
+    }
+  }
+
   /* ─────────────── FIELD VALIDATION ─────────────── */
 
   function validateFilledFields(user, tailoredResult) {
     console.log("AutoApply: Validating filled fields...");
     const emptyFields = [];
 
-    // Check key selector fields
+    // Check key selector fields (Issue #16: expanded phone selectors)
     const selectorFields = [
       { sel: 'input[name*="first_name"], input[id*="first_name"]', name: "First Name" },
       { sel: 'input[name*="last_name"], input[id*="last_name"]', name: "Last Name" },
       { sel: 'input[name*="email"], input[id*="email"], input[type="email"]', name: "Email" },
-      { sel: 'input[name*="phone"], input[id*="phone"], input[type="tel"]', name: "Phone" },
+      { sel: 'input[name="phone"], input[name*="phone"], input[id*="phone"], input[type="tel"], input[placeholder*="phone" i]', name: "Phone" },
     ];
 
     for (const { sel, name } of selectorFields) {
@@ -1034,7 +1272,41 @@
   /** Remove the banner and restore body padding. */
   function removeBanner() {
     const b = document.getElementById("autoapply-banner");
-    if (b) b.remove();
+    if (!b) return;
+
+    // Check if tailored PDF exists — if so, preserve the download button as a standalone element
+    chrome.storage.local.get(["tailoredResumePdf"], (result) => {
+      if (result.tailoredResumePdf) {
+        const existingBtn = document.getElementById("aa-btn-download-resume");
+        if (existingBtn && existingBtn.parentNode) {
+          // Detach button before banner removal so it persists
+          const clonedBtn = existingBtn.cloneNode(true);
+          document.body.appendChild(clonedBtn);
+          clonedBtn.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            border: none; border-radius: 5px; padding: 8px 16px; font-size: 12px; font-weight: 700;
+            cursor: pointer; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: transform 0.2s;
+          `;
+          clonedBtn.addEventListener("mouseenter", (e) => e.target.style.transform = "scale(1.05)");
+          clonedBtn.addEventListener("mouseleave", (e) => e.target.style.transform = "scale(1)");
+          clonedBtn.addEventListener("click", () => {
+            chrome.storage.local.get(["_aa_batchProgress"], (r) => {
+              const bpData = r._aa_batchProgress;
+              chrome.runtime.sendMessage({
+                type: "DOWNLOAD_RESUME",
+                job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
+              });
+              clonedBtn.textContent = "⬇️ Download again";
+              clonedBtn.disabled = false;
+            });
+          });
+        }
+      }
+    });
+
+    // Remove banner and restore padding
+    b.remove();
     document.body.style.paddingTop = "";
   }
 
@@ -1078,4 +1350,50 @@
     LOG("tailoredResumePdf ready — injecting persistent download button");
     injectOrRefreshDownloadButton();
   });
+
+  /**
+   * Watch for application submission confirmation on Greenhouse.
+   * Detects success page and records the application in the application history.
+   */
+  function watchForSubmit(jobData) {
+    const observer = new MutationObserver(() => {
+      const pageText = document.body.innerText || "";
+      const pageHtml = document.body.innerHTML || "";
+
+      // Detect common Greenhouse success messages
+      if (pageText.includes("Application Submitted") ||
+          pageText.includes("Thank you for applying") ||
+          pageText.includes("Your application has been received") ||
+          pageText.includes("submitted successfully") ||
+          pageHtml.includes("submit-success") ||
+          pageHtml.includes("application-success")) {
+        LOG("Detected Greenhouse application submitted confirmation!");
+        observer.disconnect();
+
+        // Record the application submission
+        chrome.runtime.sendMessage({
+          type: "RECORD_APPLICATION",
+          data: {
+            jobTitle: jobData.jobTitle || "",
+            company: jobData.company || "",
+            location: jobData.location || "",
+            ats: "greenhouse",
+            jobUrl: jobData.jobUrl || window.location.href,
+            jobDescription: jobData.jobDescription || "",
+            resumeFilename: jobData.resumeFilename || "resume.pdf",
+          },
+        }).catch(err => LOG("Failed to record application:", err.message));
+
+        showBanner("Application submitted successfully!", "success");
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => observer.disconnect(), 600000); // Stop after 10 min
+  }
+
+  // Start watching for submission after form is filled
+  // Call this once the form filling is complete
+  const watchSubmit = (jobData) => watchForSubmit(jobData);
+
 })();

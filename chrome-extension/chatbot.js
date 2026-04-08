@@ -535,7 +535,32 @@
     isLoading = true;
 
     try {
+      // Load application context from chrome.storage
+      const storageData = await new Promise((resolve) => {
+        chrome.storage.local.get(["parsedResume", "pendingApplication"], (result) => {
+          resolve(result);
+        });
+      });
+
       const pageContext = getPageContext();
+      const parsedResume = storageData.parsedResume || {};
+      const pendingApplication = storageData.pendingApplication || {};
+
+      // Build system context for the AI
+      let systemContext = "";
+      if (pendingApplication.jobTitle && pendingApplication.company) {
+        systemContext = `You are an AI assistant helping the user apply for ${pendingApplication.jobTitle} at ${pendingApplication.company}.`;
+        if (parsedResume.summary || parsedResume.name) {
+          const resumeSummary = parsedResume.summary || `Resume: ${parsedResume.name || "User"}`;
+          systemContext += ` The user's resume summary: ${resumeSummary.slice(0, 300)}.`;
+        }
+        if (pendingApplication.jobDescription) {
+          const jdExcerpt = pendingApplication.jobDescription.slice(0, 500);
+          systemContext += ` Job description excerpt: ${jdExcerpt}.`;
+        }
+        systemContext += " Answer questions helpfully based on this context.";
+      }
+
       const apiMessages = messages
         .filter(m => m.role === "user" || m.role === "assistant")
         .map(m => ({ role: m.role, content: m.content }));
@@ -543,7 +568,7 @@
       const res = await fetch(CHAT_API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages, pageContext }),
+        body: JSON.stringify({ messages: apiMessages, pageContext, systemContext }),
       });
 
       const data = await res.json();

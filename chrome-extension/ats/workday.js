@@ -84,12 +84,27 @@
     await new Promise(resolve => chrome.storage.local.set({ _aa_paused: false }, resolve));
 
     const stored = await chrome.storage.local.get(["pendingApplication"]);
-    if (!stored.pendingApplication) {
+    let pendingJob = stored.pendingApplication;
+
+    // Issue #1: If no pendingApplication and we're on a form page, try to extract job info from DOM
+    if (!pendingJob) {
+      const page = detectPage();
+      if (page === "form") {
+        LOG("No pendingApplication found but detected form page — attempting to extract job info from DOM");
+        pendingJob = extractJobInfoFromPage();
+        if (pendingJob) {
+          LOG("Extracted job info from page:", pendingJob);
+          // Store it so future reloads can use it
+          await new Promise(resolve => chrome.storage.local.set({ pendingApplication: pendingJob }, resolve));
+        }
+      }
+    }
+
+    if (!pendingJob) {
       LOG("No pending application found — watching for Apply button if user navigates");
       return;
     }
 
-    const pendingJob = stored.pendingApplication;
     LOG("Processing application for", pendingJob.jobTitle);
     showBanner("Preparing Workday application...", "ai");
 
@@ -136,6 +151,50 @@
     } catch (err) {
       LOG("Error:", err);
       showBanner(`Error — please apply manually.`, "error", { subtext: err.message });
+    }
+  }
+
+  /* ═══════════════════ JOB EXTRACTION (Issue #1) ═══════════════════ */
+
+  /**
+   * Extract minimal job info from the Workday page when user navigates directly
+   * without a pendingApplication. Extracts job title from H1/heading and company from URL.
+   */
+  function extractJobInfoFromPage() {
+    try {
+      // Try to extract job title from H1 or main heading
+      let jobTitle = "";
+      const h1 = document.querySelector("h1");
+      if (h1) {
+        jobTitle = h1.textContent?.trim() || "";
+      }
+      // Fallback: look for heading with common job title patterns
+      if (!jobTitle) {
+        const allHeadings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role='heading']"));
+        const headingText = allHeadings
+          .map(h => h.textContent?.trim())
+          .find(text => text && text.length > 0 && text.length < 200);
+        jobTitle = headingText || "";
+      }
+
+      // Extract company from URL (e.g., "autodesk" from "autodesk.wd1.myworkdayjobs.com")
+      const urlMatch = window.location.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com/i);
+      const company = urlMatch ? urlMatch[1] : "";
+
+      if (jobTitle && company) {
+        return {
+          jobTitle: jobTitle,
+          company: company,
+          jobUrl: window.location.href,
+          // User navigated directly — we don't have a full JD but the state machine will handle it gracefully
+        };
+      }
+
+      LOG("Could not extract sufficient job info from page (title or company missing)");
+      return null;
+    } catch (err) {
+      LOG("Error extracting job info:", err.message);
+      return null;
     }
   }
 
@@ -231,106 +290,113 @@
   /* ═══════════════════ STEP PROCESSING ═══════════════════ */
 
   async function processCurrentStep(pendingJob) {
-    const step = getCurrentStep();
-    LOG("Current step:", step);
+    try {
+      const step = getCurrentStep();
+      LOG("Current step:", step);
 
-    // Scrape JD if available (might still be in DOM from job posting)
-    const pageJD = scrapeWorkdayJD();
-    const jobDescription = pageJD || pendingJob.jobDescription;
+      // Scrape JD if available (might still be in DOM from job posting)
+      const pageJD = scrapeWorkdayJD();
+      const jobDescription = pageJD || pendingJob.jobDescription;
 
-    // Store pay range in batch progress so the banner can display it
-    storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
+      // Store pay range in batch progress so the banner can display it
+      storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
 
-    // ── Fire tailoring immediately as a background Promise — don't block on it ──
-    // Step 1 only needs base profile data; tailoring is needed for Step 2/3.
-    const tailoringPromise = sendMessageWithTimeout({
-      type: "TAILOR_AND_FILL",
-      job: { ...pendingJob, jobDescription },
-    }, 90000).then(result => {
-      if (result?.error) LOG("Tailoring error:", result.error);
-      return result;
-    }).catch(err => {
-      LOG("Tailoring failed:", err.message);
-      return null; // Graceful degradation — fill with base data
-    });
+      // ── Fire tailoring immediately as a background Promise — don't block on it ──
+      // Step 1 only needs base profile data; tailoring is needed for Step 2/3.
+      const tailoringPromise = sendMessageWithTimeout({
+        type: "TAILOR_AND_FILL",
+        job: { ...pendingJob, jobDescription },
+      }, 90000).then(result => {
+        if (result?.error) LOG("Tailoring error:", result.error);
+        return result;
+      }).catch(err => {
+        LOG("Tailoring failed:", err.message);
+        return null; // Graceful degradation — fill with base data
+      });
 
-    if (step === "login") {
-      // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
-      // Stop here and prompt the user to sign in, then click Retry.
-      showBanner(
-        "⚠️ Login required — create an account or sign in, then click Retry.",
-        "user",
-        { subtext: "Workday requires an account for this employer. AutoApply will resume after you sign in." }
-      );
-      return; // don't spin waiting for a step that will never arrive
+      if (step === "login") {
+        // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
+        // Stop here and prompt the user to sign in, then click Retry.
+        showBanner(
+          "⚠️ Login required — create an account or sign in, then click Retry.",
+          "user",
+          { subtext: "Workday requires an account for this employer. AutoApply will resume after you sign in." }
+        );
+        return; // don't spin waiting for a step that will never arrive
 
-    } else if (step === 1) {
-      // Fill Step 1 immediately with base profile — no tailoring needed here
-      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
-      await fillStep1(null, pendingJob);
+      } else if (step === 1) {
+        // Fill Step 1 immediately with base profile — no tailoring needed here
+        showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+        await fillStep1(null, pendingJob);
 
-      // Advance to Step 2 — fail fast if errors
-      const advanced = await advanceToStep(2);
-      if (!advanced) {
-        showBanner("Please fix the form errors and we'll continue.", "user");
-        return;
-      }
-
-      // Now we're on Step 2 — wait for tailoring (likely already done by now)
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — a download button will appear when it's ready." });
-      const tailoredData = await tailoringPromise;
-      showBanner("Resume tailored ✓ — uploading to application...", "ai", { subtext: "Filling your experience, questions and uploading your tailored PDF." });
-      await handleStep2ResumeUpload(tailoredData, pendingJob);
-
-    } else if (step === 2) {
-      // Landed directly on Step 2 — wait for tailoring then upload
-      showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — a download button will appear when it's ready." });
-      const tailoredData = await tailoringPromise;
-      showBanner("Resume tailored ✓ — uploading to application...", "ai", { subtext: "Filling your experience, questions and uploading your tailored PDF." });
-      await handleStep2ResumeUpload(tailoredData, pendingJob);
-
-    } else if (step === 3) {
-      // Application questions — may span multiple pages + Voluntary Disclosures
-      showBanner("Filling application questions...", "ai", { subtext: "Tailoring in progress..." });
-      const tailoredData = await tailoringPromise;
-      // Use the same loop as continueFromStep2 to handle multi-page App Q + disclosures
-      await fillStep3(tailoredData?.tailoredResult, pendingJob);
-      let loopGuard = 0;
-      while (loopGuard++ < 6) {
-        const s = getCurrentStep();
-        if (s === 4) break;
-        if (s === 3) {
-          await sleep(800);
-          await fillStep3(tailoredData?.tailoredResult, pendingJob);
-          await advanceToStep(s + 1);
-          await sleep(1500);
-        } else if (s === 3.5) {
-          showBanner("Handling voluntary disclosures...", "ai");
-          await fillVoluntaryDisclosures();
-          await advanceToStep(4);
-          await sleep(1500);
-        } else {
-          await advanceToStep(s + 1);
-          await sleep(1500);
+        // Advance to Step 2 — fail fast if errors
+        const advanced = await advanceToStep(2);
+        if (!advanced) {
+          showBanner("Please fix the form errors and we'll continue.", "user");
+          return;
         }
+
+        // Now we're on Step 2 — wait for tailoring (likely already done by now)
+        showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — a download button will appear when it's ready." });
+        const tailoredData = await tailoringPromise;
+        showBanner("Resume tailored ✓ — uploading to application...", "ai", { subtext: "Filling your experience, questions and uploading your tailored PDF." });
+        await handleStep2ResumeUpload(tailoredData, pendingJob);
+
+      } else if (step === 2) {
+        // Landed directly on Step 2 — wait for tailoring then upload
+        showBanner("Tailoring your resume for this role...", "ai", { subtext: "Your personalised PDF is being prepared — a download button will appear when it's ready." });
+        const tailoredData = await tailoringPromise;
+        showBanner("Resume tailored ✓ — uploading to application...", "ai", { subtext: "Filling your experience, questions and uploading your tailored PDF." });
+        await handleStep2ResumeUpload(tailoredData, pendingJob);
+
+      } else if (step === 3) {
+        // Application questions — may span multiple pages + Voluntary Disclosures
+        showBanner("Filling application questions...", "ai", { subtext: "Tailoring in progress..." });
+        const tailoredData = await tailoringPromise;
+        // Use the same loop as continueFromStep2 to handle multi-page App Q + disclosures
+        await fillStep3(tailoredData?.tailoredResult, pendingJob);
+        let loopGuard = 0;
+        while (loopGuard++ < 6) {
+          const s = getCurrentStep();
+          if (s === 4) break;
+          if (s === 3) {
+            await sleep(800);
+            await fillStep3(tailoredData?.tailoredResult, pendingJob);
+            await advanceToStep(s + 1);
+            await sleep(1500);
+          } else if (s === 3.5) {
+            showBanner("Handling voluntary disclosures...", "ai");
+            await fillVoluntaryDisclosures();
+            await advanceToStep(4);
+            await sleep(1500);
+          } else {
+            await advanceToStep(s + 1);
+            await sleep(1500);
+          }
+        }
+        await waitForStep(4, 15000);
+        showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+        watchForSubmit(pendingJob);
+
+      } else if (step === 3.5) {
+        // Resumed directly on Voluntary Disclosures page
+        showBanner("Handling voluntary disclosures...", "ai");
+        await fillVoluntaryDisclosures();
+        await advanceToStep(4);
+        await waitForStep(4, 15000);
+        showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+        watchForSubmit(pendingJob);
+
+      } else if (step === 4) {
+        LOG("On Review step — user should review and submit");
+        showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
+        watchForSubmit(pendingJob);
       }
-      await waitForStep(4, 15000);
-      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
-      watchForSubmit(pendingJob);
-
-    } else if (step === 3.5) {
-      // Resumed directly on Voluntary Disclosures page
-      showBanner("Handling voluntary disclosures...", "ai");
-      await fillVoluntaryDisclosures();
-      await advanceToStep(4);
-      await waitForStep(4, 15000);
-      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
-      watchForSubmit(pendingJob);
-
-    } else if (step === 4) {
-      LOG("On Review step — user should review and submit");
-      showBanner("Review your application and click Submit when ready.", "user", { subtext: "AutoApply stops here — you stay in control of the final submit." });
-      watchForSubmit(pendingJob);
+    } catch (err) {
+      // Issue #13: Wrap state machine in try/catch to prevent silent failures
+      LOG("Error in processCurrentStep:", err.message, err.stack);
+      showBanner("An error occurred — please try again or apply manually.", "error",
+        { subtext: err.message || "Unknown error" });
     }
   }
 
@@ -1172,6 +1238,9 @@
           setWorkdayValue(ta, tailoredResult.coverLetter || "");
         } else if (label.includes("additional") || label.includes("anything else")) {
           setWorkdayValue(ta, tailoredResult.additionalInfo || "");
+        } else {
+          // Issue #6/#14: Unfilled open-ended question — attempt AI generation
+          await generateAndFillBehavioralAnswer(ta, label, tailoredResult, job);
         }
       }
       await sleep(200);
@@ -1365,6 +1434,46 @@
     LOG("Step 3 filled");
   }
 
+  /**
+   * Issue #6/#14: Generate a behavioral answer for an unfilled textarea using AI
+   */
+  async function generateAndFillBehavioralAnswer(textarea, label, tailoredResult, job) {
+    try {
+      // Don't attempt generation for very short labels (likely errors)
+      if (!label || label.length < 5) return;
+
+      // Get resume summary from tailoredResult if available
+      const resumeText = tailoredResult?.tailoredResume
+        ? `${job?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
+        : "";
+
+      LOG(`Generating behavioral answer for: "${label.substring(0, 50)}..."`);
+
+      // Send to background script to call the AI API
+      const result = await sendMessageWithTimeout({
+        type: "GENERATE_BEHAVIORAL_ANSWER",
+        question: label,
+        jobTitle: job?.jobTitle || "",
+        company: job?.company || "",
+        jobDescription: job?.jobDescription?.substring(0, 500) || "",
+        resumeText: resumeText,
+      }, 60000); // 60 second timeout for AI generation
+
+      if (result?.error) {
+        LOG(`Failed to generate answer: ${result.error}`);
+        return;
+      }
+
+      if (result?.answer) {
+        LOG(`Generated answer (${result.answer.length} chars) for: "${label.substring(0, 30)}..."`);
+        setWorkdayValue(textarea, result.answer);
+      }
+    } catch (err) {
+      LOG(`Error generating behavioral answer: ${err.message}`);
+      // Graceful degradation — if AI generation fails, just skip this field
+    }
+  }
+
   /** Fill unfilled date-picker spinbutton groups with today's date (MM/DD/YYYY). */
   async function fillTodayDateFields() {
     const today = new Date();
@@ -1467,6 +1576,13 @@
     const stored = await chrome.storage.local.get(["parsedResume", "userProfile"]);
     const resume = stored.parsedResume || {};
 
+    // Debug logging for work experience sources
+    LOG(`fillMyExperiencePage: parsedResume.workExperience length = ${resume.workExperience?.length || 0}`);
+    LOG(`fillMyExperiencePage: tailoredResult.workExperience length = ${tailoredResult?.workExperience?.length || 0}`);
+    if (tailoredResult?.workExperience?.length > 0) {
+      LOG(`fillMyExperiencePage: tailoredResult work exp: ${JSON.stringify(tailoredResult.workExperience.map(w => w.role || w.title))}`);
+    }
+
     // If parsedResume has no work experience, fall back to tailoredResult (the AI-tailored copy
     // of the resume). This covers cases where the original parsing missed the work history.
     const workExp = resume.workExperience?.length > 0
@@ -1491,7 +1607,12 @@
     const weSrc = resume.workExperience?.length > 0 ? "parsedResume" : "tailoredResult";
     LOG(`fillMyExperiencePage: ${workExp.length} work (${weSrc}), ${education.length} edu, ${certifications.length} certs, ${skills.length} skills`);
 
-    if (workExp.length > 0) await fillWorkExperienceEntries(workExp);
+    if (workExp.length > 0) {
+      LOG(`Calling fillWorkExperienceEntries with ${workExp.length} entries`);
+      await fillWorkExperienceEntries(workExp);
+    } else {
+      LOG(`WARNING: No work experience to fill after fallback check!`);
+    }
     if (education.length > 0) await fillEducationEntries(education);
 
     // ── Certifications ────────────────────────────────────────────────────────
@@ -1540,6 +1661,10 @@
   /**
    * Fill the Skills tag-input field on the My Experience page.
    * Workday uses a multi-select combobox where you type a skill and pick from dropdown.
+   * Fixed to prevent infinite loops by:
+   * 1. Clearing the input after each skill
+   * 2. Waiting for dropdown with timeout
+   * 3. Tracking attempted skills to avoid retries
    */
   async function fillSkillsField(skills) {
     LOG(`Filling ${skills.length} skill(s) in Skills field`);
@@ -1564,25 +1689,58 @@
       return;
     }
 
+    const attemptedSkills = new Set();
+    const MAX_ATTEMPTS = skills.length;
+    let attemptCount = 0;
+
     // Type each skill and either press Enter or pick from dropdown
     for (const skill of skills.slice(0, 20)) { // cap at 20 to avoid spamming
+      // Skip if we've already attempted this skill
+      if (attemptedSkills.has(skill)) {
+        LOG(`Skipping skill "${skill}" — already attempted`);
+        continue;
+      }
+      attemptedSkills.add(skill);
+      attemptCount++;
+
+      if (attemptCount > MAX_ATTEMPTS) {
+        LOG(`Exceeded max skill attempts (${MAX_ATTEMPTS}) — stopping`);
+        break;
+      }
+
+      LOG(`Filling skill ${attemptCount}/${skills.length}: "${skill}"`);
       skillsInput.focus();
       setWorkdayValue(skillsInput, skill);
-      await sleep(800);
+      await sleep(600);
 
-      // Try to pick the first dropdown option
-      const option = document.querySelector('[role="option"], [data-automation-id*="promptOption"]');
-      if (option) {
-        option.click();
-        await sleep(300);
-      } else {
-        // No dropdown — press Enter/comma to add as free-text tag
-        skillsInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
-        skillsInput.dispatchEvent(new KeyboardEvent("keydown", { key: ",", keyCode: 188, bubbles: true }));
-        await sleep(300);
+      // Wait for dropdown to appear with 2-second timeout
+      let foundOption = false;
+      let waitTimeMs = 0;
+      while (waitTimeMs < 2000) {
+        const option = document.querySelector('[role="option"], [data-automation-id*="promptOption"]');
+        if (option) {
+          LOG(`Found dropdown option for skill "${skill}" — selecting`);
+          option.click();
+          foundOption = true;
+          await sleep(400);
+          break;
+        }
+        await sleep(100);
+        waitTimeMs += 100;
       }
+
+      if (!foundOption) {
+        // No dropdown appeared within timeout — try free-text entry with Enter
+        LOG(`No dropdown for skill "${skill}" — trying Enter key`);
+        skillsInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
+        await sleep(200);
+      }
+
+      // Clear the input for the next skill
+      setWorkdayValue(skillsInput, "");
+      await sleep(100);
     }
-    LOG("Skills fill complete");
+    LOG(`Skills fill complete — filled ${attemptCount} skill(s)`);
   }
 
   /**
@@ -1728,6 +1886,8 @@
    * Fill Education form blocks.
    * Handles both standard inputs and Airbus-style searchable autocomplete for School name.
    * If section starts empty, clicks "Add" to create entries first.
+   * Fixed Issue #31: Only click "Add Another" when there's actually a next entry to fill,
+   * and verify the new container exists before using it.
    */
   async function fillEducationEntries(education) {
     let containers = findExperienceContainers("education");
@@ -1745,8 +1905,11 @@
     }
 
     for (let i = 0; i < education.length; i++) {
-      // For entries beyond the first, click "Add Another"
-      if (i > 0) {
+      // Check if we already have a container for this entry
+      let container = containers[i];
+
+      // For entries beyond the first, click "Add Another" ONLY if we don't have a container yet
+      if (i > 0 && !container) {
         const addAnother = findSectionAddButton("education", true) ||
                            Array.from(document.querySelectorAll("button"))
                              .find(b => /add another/i.test(b.textContent));
@@ -1755,14 +1918,17 @@
           addAnother.click();
           await sleep(1500);
           containers = findExperienceContainers("education");
+          container = containers[i]; // Re-fetch after the click
         } else {
           LOG(`No 'Add Another' for education entry ${i + 1} — stopping`);
           break;
         }
       }
 
-      const container = containers[i];
-      if (!container) break;
+      if (!container) {
+        LOG(`Container for education entry ${i + 1} not found — stopping`);
+        break;
+      }
       const edu = education[i];
       LOG(`Filling Education ${i + 1}: "${edu.degree}" at "${edu.school}"`);
 
@@ -2713,6 +2879,20 @@
         LOG("Detected application submitted confirmation!");
         observer.disconnect();
         showBanner("Application submitted successfully! Moving to next job...", "success");
+
+        // Record the application submission
+        chrome.runtime.sendMessage({
+          type: "RECORD_APPLICATION",
+          data: {
+            jobTitle: job.jobTitle,
+            company: job.company,
+            location: job.location,
+            ats: "workday",
+            jobUrl: job.jobUrl || window.location.href,
+            jobDescription: job.jobDescription || "",
+            resumeFilename: job.resumeFilename || "resume.pdf",
+          },
+        }).catch(err => LOG("Failed to record application:", err.message));
       }
     });
 
@@ -2885,6 +3065,11 @@
         // AI state: show pause button + PDF download if available
         const innerBtns = [pdfBtn, pauseBtn].filter(Boolean).join("");
         actionRow = innerBtns ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">${innerBtns}</div>` : "";
+      } else {
+        // Fallback: ensure Retry button is always present for consistency (Issue #19/#21)
+        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
+        </div>`;
       }
 
       banner.style.background = cfg.bg;
@@ -2961,7 +3146,41 @@
   /** Remove the banner and restore body padding. */
   function removeBanner() {
     const b = document.getElementById("autoapply-banner");
-    if (b) b.remove();
+    if (!b) return;
+
+    // Check if tailored PDF exists — if so, preserve the download button as a standalone element
+    chrome.storage.local.get(["tailoredResumePdf"], (result) => {
+      if (result.tailoredResumePdf) {
+        const existingBtn = document.getElementById("aa-btn-download-resume");
+        if (existingBtn && existingBtn.parentNode) {
+          // Detach button before banner removal so it persists
+          const clonedBtn = existingBtn.cloneNode(true);
+          document.body.appendChild(clonedBtn);
+          clonedBtn.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            border: none; border-radius: 5px; padding: 8px 16px; font-size: 12px; font-weight: 700;
+            cursor: pointer; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: transform 0.2s;
+          `;
+          clonedBtn.addEventListener("mouseenter", (e) => e.target.style.transform = "scale(1.05)");
+          clonedBtn.addEventListener("mouseleave", (e) => e.target.style.transform = "scale(1)");
+          clonedBtn.addEventListener("click", () => {
+            chrome.storage.local.get(["_aa_batchProgress"], (r) => {
+              const bpData = r._aa_batchProgress;
+              chrome.runtime.sendMessage({
+                type: "DOWNLOAD_RESUME",
+                job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
+              });
+              clonedBtn.textContent = "⬇️ Download again";
+              clonedBtn.disabled = false;
+            });
+          });
+        }
+      }
+    });
+
+    // Remove banner and restore padding
+    b.remove();
     document.body.style.paddingTop = "";
   }
 

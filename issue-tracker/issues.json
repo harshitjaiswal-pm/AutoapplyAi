@@ -1,0 +1,346 @@
+{
+  "version": "1.0",
+  "created": "2026-04-08",
+  "issues": [
+    {
+      "id": 1,
+      "timestamp": "2026-04-08 12:27:16",
+      "ats": "Workday",
+      "step": "My Information",
+      "type": "State Machine Stuck",
+      "description": "Banner shows 'Waiting for page to finish loading...' indefinitely. Happens when navigating directly to a Workday apply URL instead of triggering via LinkedIn Easy Apply. pendingApplication is not set in chrome.storage so the state machine returns early and never advances.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Senior-Product-Manager--Tandem_26WD96166-1/apply",
+      "screenshot": ""
+    },
+    {
+      "id": 2,
+      "timestamp": "2026-04-08 12:37:56",
+      "ats": "Workday",
+      "step": "Any",
+      "type": "Feature Request",
+      "description": "When auto-fill fails on a field (e.g. textarea for work experience description, open-ended questions), user wants to point at the field via the AI Assistant sidebar and get a resume-tailored answer they can copy and paste manually. The 'Point at element' button exists but doesn't generate copy-ready content based on the user's resume. Need: point at field \u2192 AI generates tailored answer from resume \u2192 user copies and pastes.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 3,
+      "timestamp": "2026-04-08 12:38:53",
+      "ats": "Workday",
+      "step": "My Experience / Languages & Skills",
+      "type": "UI Bug",
+      "description": "Resume button in the 'YOUR TURN' banner becomes non-responsive (unclickable). Banner shows 'Review your application and click Submit when ready. AutoApply stops here \u2014 you stay in control of the final submit.' with Try Again, Skip Job, Resume buttons. Resume button appears highlighted but clicking it does nothing.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 4,
+      "timestamp": "2026-04-08 12:44:55",
+      "ats": "Workday",
+      "step": "Application Submitted",
+      "type": "Feature Request",
+      "description": "When a submission confirmation screen is detected (e.g. 'Application Submitted - Thank you for submitting your application!'), AutoApply should automatically record the application to a persistent applications dashboard/log. Schema should include: job_title, company, location, date_applied, job_url, job_description, resume_used (filename/version), ats_platform, status (Applied/In Review/etc). This becomes the user's personal application tracker \u2014 populated automatically without any manual entry.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 5,
+      "timestamp": "2026-04-08 12:45:38",
+      "ats": "Greenhouse",
+      "step": "Application Start",
+      "type": "Application Failed",
+      "description": "Job application for 'Senior Product Manager, AI Ecosystem Integrations' at Asana (Vancouver, BC Hybrid) marked as 'failed' in the AutoApply batch queue. No error detail shown to user \u2014 just a red 'failed' badge next to the job. Root cause unknown without console logs.",
+      "url": "https://boards.greenhouse.io/asana",
+      "screenshot": ""
+    },
+    {
+      "id": 6,
+      "timestamp": "2026-04-08 12:50:03",
+      "ats": "Workday",
+      "step": "Application Questions",
+      "type": "Unfilled Field",
+      "description": "Open-ended textarea 'In 3-4 sentences, describe how you use (or choose not to use) AI tools in your work.' left blank. AutoApply skipped this field \u2014 likely because it doesn't have logic to generate answers for free-text behavioral/open-ended questions. Field instructions say to include a concrete example. This is exactly the use case for Issue #2 (point at field \u2192 get resume-tailored answer to copy-paste).",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 7,
+      "timestamp": "2026-04-08 12:52:51",
+      "ats": "Greenhouse",
+      "step": "Application Questions",
+      "type": "Unfilled Field",
+      "description": "Multiple fields left blank: 'Current City & State' (dropdown, required), 'Current Company' (text, required), and the same open-ended AI tools textarea from Issue #6. LinkedIn URL was correctly filled (https://www.linkedin.com/in/harshitjaiswalschulic/). AutoApply is not filling required profile fields or the open-ended question on Greenhouse.",
+      "url": "https://boards.greenhouse.io",
+      "screenshot": ""
+    },
+    {
+      "id": 8,
+      "timestamp": "2026-04-08 12:55:11",
+      "ats": "Greenhouse",
+      "step": "Diversity Survey",
+      "type": "Unfilled Field",
+      "description": "Diversity survey fields not filled at Scribd (Greenhouse). Fields skipped: race/ethnicity checkboxes, gender identity radio, disability radio (Yes/No/Prefer not), Veteran status radio (Yes/No/Prefer not). These are optional fields but AutoApply should fill them based on user preferences stored in profile, or at minimum select 'I do not wish to disclose' for all to avoid leaving them blank.",
+      "url": "https://boards.greenhouse.io/scribd",
+      "screenshot": ""
+    },
+    {
+      "id": 9,
+      "timestamp": "2026-04-08 12:56:08",
+      "ats": "Workday",
+      "step": "My Information",
+      "type": "UI Bug",
+      "description": "Resume download button appears while banner still shows 'Tailoring resume in background...' (Job 6/24, Autodesk - Product Manager Generative AI APIs). The button should only appear after tailoring is complete. Currently it shows during tailoring, meaning clicking it would download the previous/untailored resume. Button should be hidden or disabled with a 'Tailoring...' state until the tailored PDF is ready.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 10,
+      "timestamp": "2026-04-08 12:56:49",
+      "ats": "Greenhouse",
+      "step": "Work Experience",
+      "type": "Unfilled Field",
+      "description": "Work Experience section entirely unfilled on Greenhouse. Job Title filled ('Senior Product Manager') and Company filled ('Amazon'), Location filled ('Seattle'), 'I currently work here' checkbox checked \u2014 but From date (MM/YYYY) is blank and Role Description textarea is empty. AutoApply is partially filling work experience but missing start date and role description.",
+      "url": "https://boards.greenhouse.io",
+      "screenshot": ""
+    },
+    {
+      "id": 11,
+      "timestamp": "2026-04-08 12:58:34",
+      "ats": "Workday",
+      "step": "My Experience / Resume Upload",
+      "type": "Resume Upload Timeout",
+      "description": "Red ISSUE banner: 'Resume upload timed out \u2014 please complete the application manually.' on Job 6/24 (Autodesk - Product Manager, Generative AI, APIs). The tailored resume was generated and downloaded (visible in download history: '1_Autodesk_Toronto_Senior_Product_Manager__Tandem_Resume.pdf') but AutoApply failed to upload it to the Workday Resume/CV file upload field before timing out. User left with empty resume upload and must attach manually.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Product-Manager--Generative-AI--APIs_26WD95497-1/apply/applyManually",
+      "screenshot": ""
+    },
+    {
+      "id": 12,
+      "timestamp": "2026-04-08 13:00:01",
+      "ats": "Workday",
+      "step": "My Experience / Resume Upload",
+      "type": "Resume Not Generated",
+      "description": "Correction to Issue #11: The tailored resume was NOT generated for Job 6/24 (Autodesk - Product Manager, Generative AI, APIs). No resume appears in download history for this job. The upload timeout banner appeared because the resume tailoring itself never completed or failed silently \u2014 AutoApply gave up before the PDF was ready. User had to proceed manually with no tailored resume.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Product-Manager--Generative-AI--APIs_26WD95497-1/apply/applyManually",
+      "screenshot": ""
+    },
+    {
+      "id": 13,
+      "timestamp": "2026-04-08 13:00:01",
+      "ats": "Workday",
+      "step": "Application Questions 1 of 2",
+      "type": "Banner Crash",
+      "description": "AutoApply banner completely disappeared (crashed) on 'Application Questions 1 of 2' step for Autodesk - Product Manager, Generative AI, APIs. Page shows 3 unfilled required dropdowns: 'Are you eligible to work in the country in which this position is located?', 'Will you now or in the future require sponsorship for employment visa status?', and 'I would like to be part of the Autodesk Talent Community'. No banner, no AutoApply controls visible \u2014 extension stopped responding mid-application.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Product-Manager--Generative-AI--APIs_26WD95497-1/apply/applyManually",
+      "screenshot": ""
+    },
+    {
+      "id": 14,
+      "timestamp": "2026-04-08 13:01:25",
+      "ats": "Greenhouse",
+      "step": "Application Questions",
+      "type": "Unfilled Field",
+      "description": "Entire application questions page left blank on Greenhouse. Unfilled fields: Country (dropdown, required), City/State/Province (text, required), Time zone (dropdown), Are you authorized to work in the country you reside? (set to 'Yes' \u2014 correct), Will you need sponsorship? (set to 'Yes' \u2014 may be wrong), Where did you first learn about this role? (dropdown, required, blank), Have you worked as a product manager in a software company? (dropdown, required, blank). All rich-text open-ended questions also blank: 'Briefly share why you will excel in this role', 'Please describe the main product(s) you work on and your role', 'Tell me about what you worked on last week', 'What tools do you use weekly to manage the product', 'How often do you launch major functionality and go-to-markets', 'What is driving you to look for a new role'. AutoApply has no logic to handle rich-text editors (contenteditable) or behavioral interview questions.",
+      "url": "https://boards.greenhouse.io",
+      "screenshot": ""
+    },
+    {
+      "id": 15,
+      "timestamp": "2026-04-08 13:02:20",
+      "ats": "Greenhouse",
+      "step": "Application Questions",
+      "type": "User Impact",
+      "description": "User had to skip the entire application due to multiple unfilled rich-text open-ended questions (Issue #14). Too time-consuming to answer 5+ behavioral paragraphs manually mid-batch. This is a critical drop-off point \u2014 AutoApply's inability to fill rich-text editors (contenteditable) and generate behavioral answers is causing users to abandon applications entirely.",
+      "url": "https://boards.greenhouse.io",
+      "screenshot": ""
+    },
+    {
+      "id": 16,
+      "timestamp": "2026-04-08 13:05:50",
+      "ats": "Greenhouse",
+      "step": "My Information",
+      "type": "Unfilled Field",
+      "description": "Phone field left blank (shows placeholder '1-415-555-1234...') on Greenhouse at Scribd. Email correctly filled (harshit.jaiswalamazon@gmail.com), Current City & State filled (Vancouver,BC,CA), Current Company filled (Amazon) \u2014 but Phone number not populated. AutoApply has phone in user profile but is not mapping it to Greenhouse phone fields.",
+      "url": "https://boards.greenhouse.io/scribd",
+      "screenshot": ""
+    },
+    {
+      "id": 17,
+      "timestamp": "2026-04-08 13:07:42",
+      "ats": "SmartRecruiters",
+      "step": "Personal Information",
+      "type": "Application Failed",
+      "description": "AutoApply crashed entirely on SmartRecruiters (Xplor - SR Product Manager, Toronto). Extension did not fill any fields \u2014 City left blank, despite First name (Harshit), Last name (Jaiswal), Email, and Phone (778 793 7522) being filled. No AutoApply banner visible at all \u2014 extension did not activate on SmartRecruiters ATS. This ATS is likely unsupported.",
+      "url": "https://jobs.smartrecruiters.com/oneclick-ui/company/Xplor/publication/9a4fdf61-88be-47d1-a28b-702795f5da28",
+      "screenshot": ""
+    },
+    {
+      "id": 18,
+      "timestamp": "2026-04-08 13:07:42",
+      "ats": "SmartRecruiters",
+      "step": "My Experience / Resume Upload",
+      "type": "UI Bug",
+      "description": "Resume download button was disabled and then disappeared entirely during the SmartRecruiters (Xplor) application. User could not download the tailored resume to manually upload it. The download button should remain available and enabled at all times once the tailored PDF is ready \u2014 even if AutoApply crashes or the ATS is unsupported. Related to Issue #3 (Resume button non-responsive) and Issue #9 (button visible during tailoring).",
+      "url": "https://jobs.smartrecruiters.com/oneclick-ui/company/Xplor/publication/9a4fdf61-88be-47d1-a28b-702795f5da28",
+      "screenshot": ""
+    },
+    {
+      "id": 19,
+      "timestamp": "2026-04-08 13:09:06",
+      "ats": "Workday",
+      "step": "Application Start",
+      "type": "UI Bug",
+      "description": "Banner shows 'Login required or page changed \u2014 sign in then click Retry' but there is no Retry button visible. User has no way to recover \u2014 cannot retry, skip, or resume. Banner appears on an Etsy Workday page. The Retry button is referenced in the message but missing from the DOM.",
+      "url": "https://etsy.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 20,
+      "timestamp": "2026-04-08 13:09:39",
+      "ats": "Workday",
+      "step": "My Experience / Resume Upload",
+      "type": "Resume Not Generated",
+      "description": "Tailored resume was not generated AND not available for download on an additional job (beyond Issue #12). User had no resume to provide \u2014 neither auto-uploaded by AutoApply nor available via the download button for manual upload. Two compounding failures: (1) tailoring failed silently, (2) download button unavailable. User submitted application with no resume attached.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 21,
+      "timestamp": "2026-04-08 13:10:50",
+      "ats": "Workday",
+      "step": "My Information",
+      "type": "UI Bug",
+      "description": "eBay (Sr. Product Manager, Selling Tools R0072810) \u2014 same two issues as Etsy (Issue #19, #20): (1) Banner shows 'Login required or page changed \u2014 sign in then click Retry' but the Retry button IS visible top-right yet fields are all blank (First Name, Last Name, Address, City not filled \u2014 only Country=Canada auto-selected). (2) No tailored resume generated or available for download. AutoApply stalled at login check without filling any fields or providing resume.",
+      "url": "https://jobs.ebayinc.com/us/en/apply?jobSeqNo=EBAEBAUSR0072810EXTERNALENUS&utm_source=linkedin&utm_medium=phenom-feeds&step=1&stepname=personalInformation",
+      "screenshot": ""
+    },
+    {
+      "id": 22,
+      "timestamp": "2026-04-08 13:11:09",
+      "ats": "All",
+      "step": "Job Review Modal",
+      "type": "Feature Request",
+      "description": "No 'Previous Job' button in the job review modal (Job 14/24, Microsoft - Sr. Product Manager). User can only go forward (Apply / Skip) but cannot go back to review or change decision on a previous job. Need a back/previous navigation button so user can undo a skip or revisit a job they passed on.",
+      "url": "https://www.linkedin.com",
+      "screenshot": ""
+    },
+    {
+      "id": 23,
+      "timestamp": "2026-04-08 13:12:06",
+      "ats": "Unknown",
+      "step": "Application Start",
+      "type": "Wrong Tab Opened",
+      "description": "While applying for Job 14/24 (Microsoft - Sr. Product Manager), AutoApply opened the Aha! careers page (aha.io/company/careers/current-openings/sr-product-manager-remote) instead of the Microsoft application. Banner shows 'Waiting for application form to load... Tailoring resume in background...' on the wrong company's page. AutoApply picked up the wrong URL \u2014 likely a job listing URL mismatch where the LinkedIn listing linked to Aha!'s own site instead of an ATS.",
+      "url": "https://aha.io/company/careers/current-openings/sr-product-manager-remote",
+      "screenshot": ""
+    },
+    {
+      "id": 24,
+      "timestamp": "2026-04-08 13:13:38",
+      "ats": "Phenom",
+      "step": "Application Start",
+      "type": "Wrong Resume Downloaded",
+      "description": "Job 15/24 eBay (Sr. Product Manager - Seller Experience, Toronto, Phenom ATS). Two separate resume issues: (1) Microsoft's tailored resume downloaded when user clicked the eBay job \u2014 resume from previous job (Job 14, Microsoft) triggered on the wrong job transition. (2) The Microsoft application tab never actually opened \u2014 AutoApply moved on to eBay without completing Microsoft. (3) eBay resume downloaded later separately. Root cause: resume generation and download events are not correctly scoped to their job \u2014 a previous job's resume can fire during the next job's loading.",
+      "url": "https://jobs.ebayinc.com/us/en/job/EBAEBAUSR0073090EXTERNALENUS/Sr-Product-Manager-Seller-Experience",
+      "screenshot": ""
+    },
+    {
+      "id": 25,
+      "timestamp": "2026-04-08 13:14:12",
+      "ats": "Phenom",
+      "step": "My Information / Resume Upload",
+      "type": "Resume Upload Failed",
+      "description": "eBay (Sr. Product Manager - Seller Experience, Phenom ATS) shows browser alert 'File name is too long' when AutoApply attempts to upload the tailored resume. The generated resume filename (e.g. '15_eBay_Toronto_Sr._Product_Manager_\u2013_Seller_Experience_Resume.pdf') exceeds the file name length limit accepted by the Phenom upload field. Resume filenames need to be shortened \u2014 likely a max of ~50 chars.",
+      "url": "https://jobs.ebayinc.com/us/en/apply?jobSeqNo=EBAEBAUSR0073090EXTERNALENUS",
+      "screenshot": ""
+    },
+    {
+      "id": 26,
+      "timestamp": "2026-04-08 13:15:57",
+      "ats": "Phenom",
+      "step": "My Information",
+      "type": "Wrong Data",
+      "description": "eBay (Sr. Product Manager - Seller Experience, Toronto, Phenom ATS) \u2014 tailored resume states 'Open to relocate to San Jose' instead of Toronto. The job is in Toronto (Onsite) so the resume should either reflect Toronto or remove the relocation line entirely. AutoApply is likely pulling a hardcoded or cached location from a previous application (possibly a US-based job) rather than using the target job's location.",
+      "url": "https://jobs.ebayinc.com/us/en/apply?jobSeqNo=EBAEBAUSR0073090EXTERNALENUS",
+      "screenshot": ""
+    },
+    {
+      "id": 27,
+      "timestamp": "2026-04-08 13:16:36",
+      "ats": "Phenom",
+      "step": "My Information",
+      "type": "Unfilled Field",
+      "description": "LinkedIn Profile field left blank on eBay (Phenom ATS). AutoApply fills LinkedIn URL correctly on Greenhouse (Issues #7, #16) but misses it on Phenom. The field label is 'LinkedIn Profile:' \u2014 likely a different selector than what AutoApply looks for.",
+      "url": "https://jobs.ebayinc.com/us/en/apply?jobSeqNo=EBAEBAUSR0073090EXTERNALENUS",
+      "screenshot": ""
+    },
+    {
+      "id": 28,
+      "timestamp": "2026-04-08 13:18:28",
+      "ats": "Workday",
+      "step": "My Experience / Work Experience",
+      "type": "Unfilled Field",
+      "description": "Job 16/24 (Autodesk - Product Manager) \u2014 entire Work Experience section blank on Workday. Job Title, Company, Location all empty, 'I currently work here' unchecked, From/To dates empty, Role Description empty. Banner correctly shows 'YOUR TURN \u2014 Tailored resume ready, download it then upload it above' suggesting resume was generated but AutoApply gave up on filling the form fields. This is a recurring Workday work experience fill failure (see also Issues #10, previous sessions).",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Product-Manager_26WD96183-1/apply/applyManually",
+      "screenshot": ""
+    },
+    {
+      "id": 29,
+      "timestamp": "2026-04-08 13:20:20",
+      "ats": "Workday",
+      "step": "My Experience / Resume Upload",
+      "type": "UI Bug",
+      "description": "Job 16/24 (Autodesk - Product Manager) \u2014 Banner says 'YOUR TURN: Tailored resume ready \u2014 download it, then upload it above' but user cannot find or download the resume. The timer is erratically jumping between 20s and 80s instead of counting in one direction, giving no clear signal of actual progress. User has no way to know: (1) is the resume actually ready? (2) where is it? (3) how long until it's ready? Banner message is misleading \u2014 it says 'ready' but resume is not accessible. Need clear status states: Tailoring... \u2192 Ready (with working download button) \u2192 Timed out.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Product-Manager_26WD96183-1/apply/applyManually",
+      "screenshot": ""
+    },
+    {
+      "id": 30,
+      "timestamp": "2026-04-08 13:21:09",
+      "ats": "Workday",
+      "step": "My Experience / Skills",
+      "type": "UI Bug",
+      "description": "Skills field loops repeatedly \u2014 AutoApply keeps typing skills one after another without stopping (e.g. 'Enterprise Adoption & Rollout' visible but keeps going in a loop). It should type a skill, select it from the dropdown, then move on \u2014 not continuously re-enter the same field. The skill entry loop never terminates, blocking progress to the next step.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 31,
+      "timestamp": "2026-04-08 13:21:59",
+      "ats": "Workday",
+      "step": "My Experience / Education",
+      "type": "Unfilled Field",
+      "description": "Job 16/24 (Autodesk - Product Manager) \u2014 Education section partially filled and broken. Education 2: School filled ('Shri Ram College of Commerce') but Degree dropdown stuck on 'Select One' with validation error, Field of Study blank, GPA blank, From/To years blank. Education 3: School blank with validation error, Degree stuck on 'Select One' with error. AutoApply created extra empty Education 3 entry but didn't fill it \u2014 leaving the form in an invalid state with validation errors blocking Next.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com/en-US/Ext/job/Toronto%2C-ON%2C-CAN/Product-Manager_26WD96183-1/apply/applyManually",
+      "screenshot": ""
+    },
+    {
+      "id": 32,
+      "timestamp": "2026-04-08 13:34:08",
+      "ats": "Greenhouse",
+      "step": "Work Experience",
+      "type": "Unfilled Field",
+      "description": "Work Experience completely blank on Greenhouse \u2014 Job Title, Company, Location, From/To dates, Role Description all empty. This is the same as Issue #10 and #28. AutoApply is consistently failing to populate work experience on both Workday and Greenhouse from the user's resume. This is the single most critical fill failure \u2014 work experience is the core of any application.",
+      "url": "https://boards.greenhouse.io",
+      "screenshot": ""
+    },
+    {
+      "id": 33,
+      "timestamp": "2026-04-08 13:35:03",
+      "ats": "Workday",
+      "step": "My Experience / Resume Upload",
+      "type": "UI Bug",
+      "description": "Job 19/24 (Autodesk - Product Manager, Infrastructure and Special Projects) \u2014 Banner says 'YOUR TURN: Waiting for your resume upload... AutoApply will continue automatically. 60s remaining \u2014 upload the tailored PDF from your Downloads folder.' but there is NO Resume download button in the banner. User is told to upload the tailored PDF but has no way to access it from the banner. The download button that should appear after tailoring is completely missing.",
+      "url": "https://autodesk.wd1.myworkdayjobs.com",
+      "screenshot": ""
+    },
+    {
+      "id": 34,
+      "timestamp": "2026-04-08 13:54:13",
+      "ats": "All",
+      "step": "AI Assistant Chatbot",
+      "type": "Feature Request",
+      "description": "The AI Assistant chatbot sidebar should have full context of: (1) the user's resume, (2) the current job description. This way when the user asks it questions like 'why am I a good fit?' or 'write me an answer for this question', it can give resume+job tailored responses. Currently the chatbot answers generically without knowing the resume or job context. This is in addition to auto-filling behavioral questions (Issue #6/#14) \u2014 for cases where the user wants to manually ask the chatbot to draft an answer.",
+      "url": "https://all",
+      "screenshot": ""
+    }
+  ]
+}

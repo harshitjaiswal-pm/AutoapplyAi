@@ -313,6 +313,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* ── From ATS content scripts: Generate behavioral answer using AI (Issue #6/#14) ── */
+  if (message.type === "GENERATE_BEHAVIORAL_ANSWER") {
+    const _t0 = Date.now();
+    const { question, jobTitle, company, jobDescription, resumeText } = message;
+    try { AALog && AALog.api("bg.generateBehavioralAnswer.start", { jobTitle, company, questionLength: question?.length || 0 }); } catch(_){}
+    startKeepAlive();
+    handleGenerateBehavioralAnswer(question, jobTitle, company, jobDescription, resumeText)
+      .then((result) => {
+        try { AALog && AALog.api("bg.generateBehavioralAnswer.done", { ms: Date.now() - _t0, answerLength: result?.answer?.length || 0 }); } catch(_){}
+        stopKeepAlive(); sendResponse(result);
+      })
+      .catch((err) => {
+        try { AALog && AALog.error("bg.generateBehavioralAnswer.exception", { message: err.message, ms: Date.now() - _t0 }); } catch(_){}
+        stopKeepAlive(); sendResponse({ error: err.message });
+      });
+    return true;
+  }
+
   /* ── Get stored user profile ── */
   if (message.type === "GET_PROFILE") {
     chrome.storage.local.get(["userProfile"], (stored) => {
@@ -390,22 +408,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           var controls = document.querySelectorAll('[class*="select__control"]');
           console.log("AutoApply: [main-world] Found " + controls.length + " React Select controls");
 
-          /* Helper: find the best matching option from an options array */
+          /* Helper: find the best matching option from an options array.
+             Issue #7 fix: Added fuzzy matching for city/state combos like "Vancouver, BC, CA" */
           function findMatch(options, value) {
-            var vl = value.toLowerCase();
+            var vl = value.toLowerCase().trim();
             var match = null;
             // Exact label match
             for (var i = 0; i < options.length; i++) {
-              var ol = (options[i].label || "").toLowerCase();
+              var ol = (options[i].label || "").toLowerCase().trim();
               if (ol === vl) { match = options[i]; break; }
             }
-            // Partial match
+            // Partial match (substring)
             if (!match) {
               for (var i = 0; i < options.length; i++) {
-                var ol = (options[i].label || "").toLowerCase();
+                var ol = (options[i].label || "").toLowerCase().trim();
                 if (ol.indexOf(vl) !== -1 || (vl.indexOf(ol) !== -1 && ol.length > 2)) {
                   match = options[i]; break;
                 }
+              }
+            }
+            // Fuzzy match for city/state combos: "Vancouver, BC, CA" → find option containing "vancouver"
+            if (!match && vl.length > 2) {
+              var parts = vl.split(/[,\s]+/).filter(function(p) { return p.length > 1; });
+              for (var i = 0; i < options.length; i++) {
+                var ol = (options[i].label || "").toLowerCase().trim();
+                // Check if option contains any of the significant parts
+                for (var p = 0; p < parts.length; p++) {
+                  if (ol.indexOf(parts[p]) !== -1) {
+                    match = options[i];
+                    break;
+                  }
+                }
+                if (match) break;
               }
             }
             // Yes/No pattern matching
@@ -663,6 +697,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(result => sendResponse(result))
       .catch(err => sendResponse({ error: err.message }));
     return true;
+  }
+
+  /* ── From ATS scripts: Record application submission ── */
+  if (message.type === "RECORD_APPLICATION") {
+    recordApplication(message.data || {});
+    sendResponse({ success: true });
+    return false;
   }
 });
 
@@ -1002,6 +1043,8 @@ async function handleTailorAndFill(job) {
   console.log("AutoApply BG: Has parsedResume:", !!stored.parsedResume);
   console.log("AutoApply BG: Has userProfile:", !!stored.userProfile);
   console.log("AutoApply BG: JD length:", job.jobDescription?.length || 0);
+  // Issue #26: Log job location for debugging
+  console.log("AutoApply BG: Job location:", job.jobLocation || job.location || "NOT PROVIDED");
 
   // Merge userProfile contact info into parsedResume so the AI uses
   // the user's manually-verified data (correct LinkedIn, GitHub, etc.)
@@ -1034,13 +1077,23 @@ async function handleTailorAndFill(job) {
   try { AALog && AALog.api("bg.api.analyzeJob.done", { title: parsedJob.title || parsedJob.jobTitle, keys: Object.keys(parsedJob || {}) }); } catch(_){}
 
   // Step 2: Tailor the resume (with retry)
+  // Issue #26: Ensure jobLocation is passed to the API so the tailor prompt uses the correct location
   console.log("AutoApply BG: Step 2/3 — Tailoring resume for", job.jobTitle);
   try { AALog && AALog.api("bg.api.tailorResume.start", { jobTitle: job.jobTitle, company: job.company }); } catch(_){}
+
+  // Include job location in the request so the backend can use it in the tailoring prompt
+  const tailorRequestBody = {
+    parsedResume: resumeForApi,
+    parsedJob,
+    jobLocation: job.jobLocation || job.location, // Pass location to backend
+    mode: "fast"
+  };
+
   const tailorData = await withRetry(async () => {
     const res = await fetch(`${apiUrl}/api/tailor-resume`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parsedResume: resumeForApi, parsedJob, mode: "fast" }),
+      body: JSON.stringify(tailorRequestBody),
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => "");
@@ -1072,11 +1125,14 @@ async function handleTailorAndFill(job) {
       // Use data URL — URL.createObjectURL is not available in MV3 service workers
       resumeBlobUrl = `data:application/pdf;base64,${base64}`;
       // Build numbered filename: e.g. "1_Affirm_Calgary_Senior Product Manager_Resume.pdf"
+      // Truncate to max 60 chars before .pdf to prevent upload rejection from ATS file name limits
       const jobNumData = await chrome.storage.local.get(["_aa_currentJobNumber"]);
       const jobNum = jobNumData._aa_currentJobNumber || "";
       const locationPart = job.location ? `_${job.location.split(",")[0].trim()}` : "";
       const prefix = jobNum ? `${jobNum}_` : "";
-      const filename = `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume.pdf`;
+      const rawFilename = `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume`;
+      const truncatedFilename = rawFilename.length > 60 ? rawFilename.substring(0, 60) : rawFilename;
+      const filename = `${truncatedFilename}.pdf`;
       await chrome.storage.local.set({
         tailoredResumePdf: base64,
         tailoredResumeFilename: filename,
@@ -1105,6 +1161,64 @@ async function handleTailorAndFill(job) {
     resumeBlobUrl,
     matchScore: tailoredResult.matchScore,
   };
+}
+
+/**
+ * Generate a behavioral answer to an application question using AI (Issue #6/#14)
+ * Mirrors the pattern of handleTailorAndFill but for individual behavioral questions
+ */
+async function handleGenerateBehavioralAnswer(question, jobTitle, company, jobDescription, resumeText) {
+  if (!question) {
+    throw new Error("Question text is required");
+  }
+
+  const stored = await chrome.storage.local.get(["autoapplyUrl"]);
+  const apiUrl = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+
+  console.log("AutoApply BG: Generating behavioral answer for:", question.substring(0, 60));
+
+  // Build the prompt for the AI
+  const prompt = `You are an applicant for a job application. You are applying for ${jobTitle} at ${company}.
+
+${resumeText ? `Your resume summary: ${resumeText}` : ""}
+
+${jobDescription ? `Job description excerpt: ${jobDescription.substring(0, 500)}` : ""}
+
+Please answer the following application question in 2-3 sentences, in first person, naturally and professionally:
+
+"${question}"
+
+Provide only the answer text, no additional formatting or preamble.`;
+
+  try {
+    const res = await fetch(`${apiUrl}/api/generate-text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        maxTokens: 150,
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      console.error("AutoApply BG: Behavioral answer generation failed:", res.status, errBody);
+      throw new Error(`Answer generation failed (${res.status})`);
+    }
+
+    const data = await res.json();
+    const answer = data.answer || data.text || "";
+
+    if (!answer) {
+      throw new Error("No answer generated from API");
+    }
+
+    console.log("AutoApply BG: Generated behavioral answer, length:", answer.length);
+    return { answer };
+  } catch (err) {
+    console.error("AutoApply BG: Error generating behavioral answer:", err.message);
+    throw err;
+  }
 }
 
 /**
@@ -1189,6 +1303,50 @@ function arrayBufferToBase64(buffer) {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+/**
+ * Record an application submission to local storage (and Supabase when configured).
+ * Called when "Application Submitted" confirmation is detected in Workday/Greenhouse.
+ */
+async function recordApplication(jobData) {
+  try {
+    const record = {
+      id: `app_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      timestamp: new Date().toISOString(),
+      jobTitle: jobData.jobTitle || "",
+      company: jobData.company || "",
+      location: jobData.location || "",
+      ats: jobData.ats || "unknown", // "workday", "greenhouse", etc.
+      jobUrl: jobData.jobUrl || "",
+      jobDescription: jobData.jobDescription || "",
+      resumeFilename: jobData.resumeFilename || "",
+      status: "Applied",
+    };
+
+    // Save to local applicationHistory
+    chrome.storage.local.get(["applicationHistory"], (result) => {
+      const history = Array.isArray(result.applicationHistory) ? result.applicationHistory : [];
+      history.push(record);
+      chrome.storage.local.set({ applicationHistory: history }, () => {
+        console.log("AutoApply BG: Recorded application:", record.jobTitle, "at", record.company);
+        try { AALog && AALog.state("bg.recordApplication", { jobTitle: record.jobTitle, company: record.company, ats: record.ats }); } catch(_){}
+      });
+    });
+
+    // TODO: Also POST to Supabase endpoint when configured
+    // const supabaseUrl = await chrome.storage.local.get(["supabaseUrl"]).then(r => r.supabaseUrl);
+    // if (supabaseUrl) {
+    //   await fetch(`${supabaseUrl}/rest/v1/applications`, {
+    //     method: "POST",
+    //     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseKey}` },
+    //     body: JSON.stringify(record),
+    //   });
+    // }
+  } catch (err) {
+    console.error("AutoApply BG: Error recording application:", err);
+    try { AALog && AALog.error("bg.recordApplication.error", { error: err.message }); } catch(_){}
+  }
 }
 
 /**
