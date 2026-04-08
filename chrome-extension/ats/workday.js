@@ -56,12 +56,15 @@
       // through the normal AutoApply button flow. The payload should contain
       // at minimum: { jobTitle, company, jobUrl }.
       const job = e.data.payload || {};
-      chrome.storage.local.set({ pendingApplication: job }, () => {
+      chrome.storage.local.set({ pendingApplication: job, _aa_paused: false }, () => {
         window.dispatchEvent(new CustomEvent("__aa_pending_set", { detail: job }));
         LOG("pendingApplication set via bridge:", job.jobTitle);
         // Re-trigger state machine so it picks up the newly-set pendingApplication
         startStateMachine();
       });
+    }
+    if (e.data.__aa_cmd === "RESUME") {
+      chrome.storage.local.set({ _aa_paused: false }, () => LOG("Resumed via bridge"));
     }
   });
 
@@ -73,6 +76,9 @@
   /* ═══════════════════ STATE MACHINE ═══════════════════ */
 
   async function startStateMachine() {
+    // Always clear stale pause state — a page reload means a fresh session
+    await new Promise(resolve => chrome.storage.local.set({ _aa_paused: false }, resolve));
+
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     if (!stored.pendingApplication) {
       LOG("No pending application found — watching for Apply button if user navigates");
