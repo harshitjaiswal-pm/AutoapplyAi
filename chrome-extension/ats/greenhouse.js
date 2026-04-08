@@ -901,29 +901,50 @@
     try {
       const stored = await chrome.storage.local.get(["tailoredResumePdf"]);
       if (!stored.tailoredResumePdf) {
-        console.log("AutoApply: No tailored resume PDF found in storage for programmatic upload");
+        console.log("AutoApply: No tailored resume PDF — skipping programmatic upload");
         return;
       }
 
-      const fileInput = document.querySelector('input[type="file"]');
+      // Find a VISIBLE file input. Greenhouse wraps the native <input type="file">
+      // inside a custom React widget that hides it (display:none / opacity:0 / width:0).
+      // Manipulating a hidden input via Object.defineProperty corrupts React's internal
+      // component state and causes the upload widget to re-render as a blank oval strip.
+      // We only attempt upload on inputs that are actually visible and interactable.
+      const allFileInputs = document.querySelectorAll('input[type="file"]');
+      let fileInput = null;
+      for (const inp of allFileInputs) {
+        const style = window.getComputedStyle(inp);
+        const rect = inp.getBoundingClientRect();
+        const isHidden = style.display === "none"
+          || style.visibility === "hidden"
+          || style.opacity === "0"
+          || parseFloat(style.opacity) < 0.1
+          || rect.width < 2
+          || inp.getAttribute("tabindex") === "-1"
+          || inp.hasAttribute("aria-hidden");
+        if (!isHidden) { fileInput = inp; break; }
+      }
+
       if (!fileInput) {
-        console.log("AutoApply: No file input found for resume upload");
+        // All file inputs are hidden (Greenhouse uses a custom React widget).
+        // Leave the widget untouched — the banner already instructs the user to
+        // upload the downloaded PDF manually.
+        console.log("AutoApply: All file inputs are hidden — skipping upload to avoid breaking Greenhouse widget");
         return;
       }
 
-      console.log("AutoApply: Attempting programmatic resume file upload...");
+      console.log("AutoApply: Attempting programmatic resume file upload on visible input...");
 
-      // Create File object from base64
+      // Build the File object from stored base64
       const base64Data = stored.tailoredResumePdf;
       const binaryString = atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-
       const file = new File([bytes], "tailored_resume.pdf", { type: "application/pdf" });
 
-      // Strategy 1: Call React's onChange handler directly
+      // Strategy 1: React's onChange handler (preferred — doesn't mutate the DOM node)
       const reactPropsKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
       if (reactPropsKey && fileInput[reactPropsKey]?.onChange) {
         const dt = new DataTransfer();
@@ -939,19 +960,23 @@
         };
         fileInput[reactPropsKey].onChange(fakeEvent);
         console.log("AutoApply: Resume uploaded via React onChange handler");
-      } else {
-        // Strategy 2: Fallback — Object.defineProperty + native events
-        const dataTransfer = new DataTransfer();
-        dataTransfer.items.add(file);
-        Object.defineProperty(fileInput, "files", {
-          value: dataTransfer.files,
-          writable: true,
-          configurable: true,
-        });
-        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-        fileInput.dispatchEvent(new Event("input", { bubbles: true }));
-        console.log("AutoApply: Resume uploaded via fallback (defineProperty)");
+        return;
       }
+
+      // Strategy 2: DataTransfer + native events (only if input is truly interactable).
+      // We deliberately avoid Object.defineProperty here because redefining the `files`
+      // property on a visible input can still corrupt React's reconciler.
+      // Instead, use DataTransfer and dispatch events — safer for non-React inputs.
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      // Attempt to assign via descriptor if the property is writable
+      const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+      if (desc && desc.set) {
+        desc.set.call(fileInput, dataTransfer.files);
+      }
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+      console.log("AutoApply: Resume upload attempted via native events");
     } catch (err) {
       console.error("AutoApply: Resume upload error:", err);
     }
