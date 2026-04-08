@@ -268,13 +268,18 @@
           candidateUrls.push(href);
         }
       }
-      // Fallback: look for "Apply" link text pointing outside LinkedIn
+      // Fallback: look for any link whose text or aria-label contains "apply"
+      // and points to an external site. This catches company-specific career pages
+      // (e.g. clear.co/careers) that aren't in the known ATS patterns list.
       if (candidateUrls.length === 0) {
         for (const a of doc.querySelectorAll("a[href]")) {
           const text = (a.textContent || "").trim().toLowerCase();
+          const ariaLabel = (a.getAttribute("aria-label") || "").toLowerCase();
           const href = a.href || "";
-          if ((text === "apply" || text === "apply now") &&
-              href && href.startsWith("http") && !href.includes("linkedin.com")) {
+          const isApplyLink = text === "apply" || text === "apply now" ||
+            ariaLabel.includes("apply on") || ariaLabel.includes("apply to") ||
+            ariaLabel.startsWith("apply");
+          if (isApplyLink && href && href.startsWith("http") && !href.includes("linkedin.com")) {
             candidateUrls.push(href);
           }
         }
@@ -720,19 +725,30 @@
 
   /**
    * Verify that the LinkedIn detail panel currently shows the expected job.
-   * Returns true if the panel text contains the job title or company name.
+   * Returns true only when the panel text confirms BOTH the job title AND company name.
+   *
+   * Using OR (title || company) causes false positives when two jobs share the same
+   * title (e.g. "Senior Product Manager" at Clearco AND at Fluxon) — the wrong
+   * company's panel would still pass the title-only check. Requiring AND prevents
+   * clicking the wrong Apply button.
    */
   function isPanelShowingJob(job) {
     const detailSelector =
       '.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"], [class*="jobs-details"]';
     const panel = document.querySelector(detailSelector);
     if (!panel) return false;
-    const panelText = (panel.innerText || "").slice(0, 600).toLowerCase();
+    const panelText = (panel.innerText || "").slice(0, 800).toLowerCase();
     if (!panelText) return false;
     const titleFirst25 = (job.title || "").toLowerCase().substring(0, 25);
     const companyFirst20 = (job.company || "").toLowerCase().substring(0, 20);
     const titleMatch = titleFirst25.length >= 4 && panelText.includes(titleFirst25);
     const companyMatch = companyFirst20.length >= 3 && panelText.includes(companyFirst20);
+
+    // Require BOTH title AND company when both strings are long enough to be reliable.
+    // Fall back to OR only when one of the identifiers is too short to be meaningful.
+    if (titleFirst25.length >= 8 && companyFirst20.length >= 3) {
+      return titleMatch && companyMatch;
+    }
     return titleMatch || companyMatch;
   }
 
@@ -1112,10 +1128,38 @@
       } else {
         // Re-click the job card to make sure the correct detail panel is loaded.
         // The confirmation modal may have taken time, during which LinkedIn could
-        // have changed the detail panel to a different job.
+        // have changed the detail panel to a different job (e.g. a promoted listing
+        // auto-selected by LinkedIn's SPA — this is what causes Fluxon to open for Clearco).
         updateJobStatus(job.id, "applying", "Opening application...");
         await clickJobCard(job);
-        await new Promise((r) => setTimeout(r, 1200));
+
+        // Verify the panel actually shows the right job before clicking Apply.
+        // Poll up to 5 seconds in 300ms ticks instead of a fixed sleep.
+        let panelReady = false;
+        const panelDeadline = Date.now() + 5000;
+        while (Date.now() < panelDeadline) {
+          await new Promise((r) => setTimeout(r, 300));
+          if (isPanelShowingJob(job)) { panelReady = true; break; }
+        }
+
+        if (!panelReady) {
+          // One retry: re-click and wait again
+          console.warn(`AutoApply: Panel not showing "${job.title}" — retrying card click`);
+          try { AALog && AALog.error("linkedin.startApplying.panelMismatch", { title: job.title, company: job.company }); } catch(_){}
+          await clickJobCard(job);
+          const retryDeadline = Date.now() + 4000;
+          while (Date.now() < retryDeadline) {
+            await new Promise((r) => setTimeout(r, 300));
+            if (isPanelShowingJob(job)) { panelReady = true; break; }
+          }
+        }
+
+        if (!panelReady) {
+          console.error(`AutoApply: Panel still not showing "${job.title}" — aborting to avoid wrong Apply click`);
+          try { AALog && AALog.error("linkedin.startApplying.panelMismatchAbort", { title: job.title, company: job.company }); } catch(_){}
+          updateJobStatus(job.id, "failed");
+          continue; // Skip this job rather than open the wrong company's ATS
+        }
 
         try { AALog && AALog.nav("linkedin.apply.click", { jobId: job.id }); } catch(_){}
         applyType = await clickApplyButton();
