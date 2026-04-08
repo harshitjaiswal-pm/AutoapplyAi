@@ -2192,6 +2192,11 @@
           ${actionRow}
         </div>`;
 
+      // Push page content down so the banner never hides anything
+      requestAnimationFrame(() => {
+        document.body.style.paddingTop = (banner.offsetHeight || 0) + "px";
+      });
+
       if (isAi && timerStart) {
         banner._timerInterval = setInterval(() => {
           const el = document.getElementById("aa-elapsed-timer");
@@ -2205,7 +2210,7 @@
 
       // Wire up action buttons
       document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
-        banner.remove();
+        removeBanner();
         window.__autoapply_ats_injected = false;
         setTimeout(() => init(), 500);
       });
@@ -2255,8 +2260,15 @@
       });
     });
 
-    if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
-    if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
+    if (type === "success") banner._dismissTimer = setTimeout(() => removeBanner(), 15000);
+    if (type === "error")   banner._dismissTimer = setTimeout(() => removeBanner(), 20000);
+  }
+
+  /** Remove the banner and restore body padding. */
+  function removeBanner() {
+    const b = document.getElementById("autoapply-banner");
+    if (b) b.remove();
+    document.body.style.paddingTop = "";
   }
 
   /**

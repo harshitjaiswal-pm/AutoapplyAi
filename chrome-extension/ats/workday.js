@@ -2864,10 +2864,15 @@
           ${actionRow}
         </div>`;
 
+      // Push page content down so the banner never hides anything
+      requestAnimationFrame(() => {
+        document.body.style.paddingTop = (banner.offsetHeight || 0) + "px";
+      });
+
       // Wire up action buttons
       document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
         LOG("Retry clicked — re-running state machine");
-        banner.remove();
+        removeBanner();
         window.__autoapply_ats_injected = false; // clear guard so init can re-run
         startStateMachine();
       });
@@ -2915,8 +2920,15 @@
       }
     });
 
-    if (type === "success") banner._dismissTimer = setTimeout(() => banner.remove(), 15000);
-    if (type === "error")   banner._dismissTimer = setTimeout(() => banner.remove(), 20000);
+    if (type === "success") banner._dismissTimer = setTimeout(() => removeBanner(), 15000);
+    if (type === "error")   banner._dismissTimer = setTimeout(() => removeBanner(), 20000);
+  }
+
+  /** Remove the banner and restore body padding. */
+  function removeBanner() {
+    const b = document.getElementById("autoapply-banner");
+    if (b) b.remove();
+    document.body.style.paddingTop = "";
   }
 
   /**
