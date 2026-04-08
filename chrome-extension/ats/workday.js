@@ -303,16 +303,23 @@
 
       // ── Fire tailoring immediately as a background Promise — don't block on it ──
       // Step 1 only needs base profile data; tailoring is needed for Step 2/3.
-      const tailoringPromise = sendMessageWithTimeout({
-        type: "TAILOR_AND_FILL",
-        job: { ...pendingJob, jobDescription },
-      }, 90000).then(result => {
-        if (result?.error) LOG("Tailoring error:", result.error);
-        return result;
-      }).catch(err => {
-        LOG("Tailoring failed:", err.message);
-        return null; // Graceful degradation — fill with base data
-      });
+      // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
+      const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+      const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
+        || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+
+      const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
+        ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
+        : sendMessageWithTimeout({
+          type: "TAILOR_AND_FILL",
+          job: { ...pendingJob, jobDescription },
+        }, 90000).then(result => {
+          if (result?.error) LOG("Tailoring error:", result.error);
+          return result;
+        }).catch(err => {
+          LOG("Tailoring failed:", err.message);
+          return null; // Graceful degradation — fill with base data
+        });
 
       if (step === "login") {
         // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
@@ -3051,6 +3058,7 @@
       if (type === "error") {
         actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
           ${pdfBtn}
         </div>`;
@@ -3058,6 +3066,7 @@
         actionRow = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
           ${resumeBtn}
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
           ${pdfBtn}
         </div>`;
@@ -3093,6 +3102,19 @@
         LOG("Retry clicked — re-running state machine");
         removeBanner();
         window.__autoapply_ats_injected = false; // clear guard so init can re-run
+        startStateMachine();
+      });
+      document.getElementById("aa-btn-reload-resume")?.addEventListener("click", async () => {
+        LOG("Reload Resume clicked — clearing cache and re-tailoring");
+        removeBanner();
+        // Clear all cached tailoring data so startStateMachine triggers a fresh TAILOR_AND_FILL
+        await new Promise(resolve => chrome.storage.local.remove([
+          "tailoredResumePdf",
+          "tailoredResumeFilename",
+          "lastTailoredResult",
+          "lastTailoredJob"
+        ], resolve));
+        window.__autoapply_ats_injected = false;
         startStateMachine();
       });
       document.getElementById("aa-btn-skip")?.addEventListener("click", () => {

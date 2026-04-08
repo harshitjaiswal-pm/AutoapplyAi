@@ -655,18 +655,25 @@
     storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
     try { AALog && AALog.api("ats.tailor.request", { company: pendingJob.company, jobTitle: pendingJob.jobTitle, jdLen: (jobDescription || "").length, jdSource: pageJD ? "ats-page" : "linkedin" }); } catch(_){}
     const _tailorStart = Date.now();
-    const tailoringPromise = sendMessageWithTimeout({
-      type: "TAILOR_AND_FILL",
-      job: { ...pendingJob, jobDescription },
-    }, 90000).then(r => {
-      if (r?.error) { console.error("AutoApply: Tailoring error:", r.error); try { AALog && AALog.error("ats.tailor.error", { error: r.error, ms: Date.now() - _tailorStart }); } catch(_){} }
-      else { try { AALog && AALog.api("ats.tailor.response", { ms: Date.now() - _tailorStart, keys: r?.tailoredResult ? Object.keys(r.tailoredResult) : [], hasResult: !!r?.tailoredResult }); } catch(_){} }
-      return r;
-    }).catch(err => {
-      console.error("AutoApply: Tailoring failed:", err.message);
-      try { AALog && AALog.error("ats.tailor.exception", { message: err.message, ms: Date.now() - _tailorStart }); } catch(_){}
-      return null;
-    });
+    // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
+    const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+    const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
+      || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+
+    const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
+      ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
+      : sendMessageWithTimeout({
+        type: "TAILOR_AND_FILL",
+        job: { ...pendingJob, jobDescription },
+      }, 90000).then(r => {
+        if (r?.error) { console.error("AutoApply: Tailoring error:", r.error); try { AALog && AALog.error("ats.tailor.error", { error: r.error, ms: Date.now() - _tailorStart }); } catch(_){} }
+        else { try { AALog && AALog.api("ats.tailor.response", { ms: Date.now() - _tailorStart, keys: r?.tailoredResult ? Object.keys(r.tailoredResult) : [], hasResult: !!r?.tailoredResult }); } catch(_){} }
+        return r;
+      }).catch(err => {
+        console.error("AutoApply: Tailoring failed:", err.message);
+        try { AALog && AALog.error("ats.tailor.exception", { message: err.message, ms: Date.now() - _tailorStart }); } catch(_){}
+        return null;
+      });
 
     // Detect if Ashby form is in a cross-origin iframe (the common embed pattern).
     // In that case, the child frame's generic.js handles the fill — this main-frame
@@ -2152,12 +2159,14 @@
       if (type === "error") {
         actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Retry</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">Reload resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
           ${pdfBtn || resumeLink}
         </div>`;
       } else if (type === "user") {
         actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Try again</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">Reload resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
           ${pdfBtn || resumeLink}
         </div>`;
@@ -2211,6 +2220,19 @@
       // Wire up action buttons
       document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
         removeBanner();
+        window.__autoapply_ats_injected = false;
+        setTimeout(() => init(), 500);
+      });
+      document.getElementById("aa-btn-reload-resume")?.addEventListener("click", async () => {
+        LOG("Reload Resume clicked — clearing cache and re-tailoring");
+        removeBanner();
+        // Clear all cached tailoring data so init triggers a fresh TAILOR_AND_FILL
+        await new Promise(resolve => chrome.storage.local.remove([
+          "tailoredResumePdf",
+          "tailoredResumeFilename",
+          "lastTailoredResult",
+          "lastTailoredJob"
+        ], resolve));
         window.__autoapply_ats_injected = false;
         setTimeout(() => init(), 500);
       });

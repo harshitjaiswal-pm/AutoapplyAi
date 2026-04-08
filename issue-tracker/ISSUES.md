@@ -382,3 +382,47 @@ Each issue includes context, steps to reproduce, and a screenshot.
 
 
 ---
+
+## Issue #35 — 2026-04-08 14:59:44
+
+- **ATS**: All
+- **Step**: Job Queue / Tab Opening
+- **Type**: Wrong Tab Opened
+- **URL**: `https://www.linkedin.com`
+- **Description**: Clicking 'Loopio' (Vancouver, BC Remote) in the AutoApply job queue opens the Pixieset application tab instead. The job list shows Pixieset as 'opened' and Loopio as 'opened' but the active tab is Pixieset. AutoApply is opening tabs out of order or mapping the wrong job to the wrong tab — the tab opened does not match the job that was clicked/selected in the queue.
+
+
+---
+
+## Issue #36 — 2026-04-08 15:02:19
+
+- **ATS**: iCIMS
+- **Step**: My Experience / Professional Experience
+- **Type**: Unfilled Field
+- **URL**: `https://careers.icims.com`
+- **Description**: iCIMS ATS (likely Loopio or Pixieset) — Professional Experience section shows only an 'Add' button with nothing filled. AutoApply is not clicking Add and populating work experience entries from the resume. Need: AutoApply to click Add, fill each experience entry (Job Title, Company, Location, Start/End dates, Description) mirroring the resume data, then repeat for each role.
+
+
+---
+
+## Issue #37 — 2026-04-08 15:04:53
+
+- **ATS**: All
+- **Step**: Any
+- **Type**: Performance Bug
+- **URL**: `https://all`
+- **Description**: Clicking 'Try Again' re-runs the full TAILOR_AND_FILL pipeline from scratch — clearing the existing tailoredResumePdf from storage and making a new API call. This wastes API credits and takes 15-30s each time. Fix: before firing TAILOR_AND_FILL, check if lastTailoredResult exists in storage for the same job URL. If it does, skip re-tailoring and go straight to re-filling the form with the cached result. Only re-tailor if the user explicitly requests it (e.g. a 'Re-tailor' button separate from Try Again).
+
+
+---
+
+## Issue #38 — 2026-04-08 15:09:10
+
+- **ATS**: All
+- **Step**: Any
+- **Type**: Feature Request
+- **URL**: `https://all`
+- **Description**: Split the current 'Try Again' button into two separate buttons: (1) 'Try Again' — re-runs form filling only using the already-cached tailoredResult in storage, no API call, fast. (2) 'Reload Resume' — clears the cached tailoredResumePdf and tailoredResult and re-runs the full TAILOR_AND_FILL pipeline from scratch, only when user explicitly wants a fresh tailored resume. This prevents wasted API credits and saves 15-30s on every retry. Related to Issue #37.
+
+
+---

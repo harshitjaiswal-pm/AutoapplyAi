@@ -341,6 +341,46 @@
       "description": "The AI Assistant chatbot sidebar should have full context of: (1) the user's resume, (2) the current job description. This way when the user asks it questions like 'why am I a good fit?' or 'write me an answer for this question', it can give resume+job tailored responses. Currently the chatbot answers generically without knowing the resume or job context. This is in addition to auto-filling behavioral questions (Issue #6/#14) \u2014 for cases where the user wants to manually ask the chatbot to draft an answer.",
       "url": "https://all",
       "screenshot": ""
+    },
+    {
+      "id": 35,
+      "timestamp": "2026-04-08 14:59:44",
+      "ats": "All",
+      "step": "Job Queue / Tab Opening",
+      "type": "Wrong Tab Opened",
+      "description": "Clicking 'Loopio' (Vancouver, BC Remote) in the AutoApply job queue opens the Pixieset application tab instead. The job list shows Pixieset as 'opened' and Loopio as 'opened' but the active tab is Pixieset. AutoApply is opening tabs out of order or mapping the wrong job to the wrong tab \u2014 the tab opened does not match the job that was clicked/selected in the queue.",
+      "url": "https://www.linkedin.com",
+      "screenshot": ""
+    },
+    {
+      "id": 36,
+      "timestamp": "2026-04-08 15:02:19",
+      "ats": "iCIMS",
+      "step": "My Experience / Professional Experience",
+      "type": "Unfilled Field",
+      "description": "iCIMS ATS (likely Loopio or Pixieset) \u2014 Professional Experience section shows only an 'Add' button with nothing filled. AutoApply is not clicking Add and populating work experience entries from the resume. Need: AutoApply to click Add, fill each experience entry (Job Title, Company, Location, Start/End dates, Description) mirroring the resume data, then repeat for each role.",
+      "url": "https://careers.icims.com",
+      "screenshot": ""
+    },
+    {
+      "id": 37,
+      "timestamp": "2026-04-08 15:04:53",
+      "ats": "All",
+      "step": "Any",
+      "type": "Performance Bug",
+      "description": "Clicking 'Try Again' re-runs the full TAILOR_AND_FILL pipeline from scratch \u2014 clearing the existing tailoredResumePdf from storage and making a new API call. This wastes API credits and takes 15-30s each time. Fix: before firing TAILOR_AND_FILL, check if lastTailoredResult exists in storage for the same job URL. If it does, skip re-tailoring and go straight to re-filling the form with the cached result. Only re-tailor if the user explicitly requests it (e.g. a 'Re-tailor' button separate from Try Again).",
+      "url": "https://all",
+      "screenshot": ""
+    },
+    {
+      "id": 38,
+      "timestamp": "2026-04-08 15:09:10",
+      "ats": "All",
+      "step": "Any",
+      "type": "Feature Request",
+      "description": "Split the current 'Try Again' button into two separate buttons: (1) 'Try Again' \u2014 re-runs form filling only using the already-cached tailoredResult in storage, no API call, fast. (2) 'Reload Resume' \u2014 clears the cached tailoredResumePdf and tailoredResult and re-runs the full TAILOR_AND_FILL pipeline from scratch, only when user explicitly wants a fresh tailored resume. This prevents wasted API credits and saves 15-30s on every retry. Related to Issue #37.",
+      "url": "https://all",
+      "screenshot": ""
     }
   ]
 }

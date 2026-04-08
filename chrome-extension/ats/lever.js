@@ -69,13 +69,20 @@
 
       // ── STEP 2: Fire tailoring as background Promise — don't block ──
       showBanner("Tailoring your resume for this role...", "ai", { subtext: "Basic info filled ✓ — personalising resume now..." });
-      const tailoringPromise = sendMessageWithTimeout({
-        type: "TAILOR_AND_FILL",
-        job: { ...pendingJob, jobDescription },
-      }, 90000).catch(err => {
-        LOG("Tailoring failed:", err.message);
-        return null;
-      });
+      // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
+      const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+      const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
+        || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+
+      const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
+        ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
+        : sendMessageWithTimeout({
+          type: "TAILOR_AND_FILL",
+          job: { ...pendingJob, jobDescription },
+        }, 90000).catch(err => {
+          LOG("Tailoring failed:", err.message);
+          return null;
+        });
 
       // ── STEP 3: Wait for tailoring, then fill remaining fields ──
       const tailoredData = await tailoringPromise;
@@ -666,6 +673,7 @@
       if (type === "error") {
         actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
           ${pdfBtn}
         </div>`;
@@ -673,6 +681,7 @@
         actionRow = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
           ${resumeBtn}
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
           ${pdfBtn}
         </div>`;
@@ -711,6 +720,19 @@
       // Wire up action buttons
       document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
         removeBanner();
+        window.__autoapply_ats_injected = false;
+        setTimeout(() => init(), 500);
+      });
+      document.getElementById("aa-btn-reload-resume")?.addEventListener("click", async () => {
+        LOG("Reload Resume clicked — clearing cache and re-tailoring");
+        removeBanner();
+        // Clear all cached tailoring data so init triggers a fresh TAILOR_AND_FILL
+        await new Promise(resolve => chrome.storage.local.remove([
+          "tailoredResumePdf",
+          "tailoredResumeFilename",
+          "lastTailoredResult",
+          "lastTailoredJob"
+        ], resolve));
         window.__autoapply_ats_injected = false;
         setTimeout(() => init(), 500);
       });
