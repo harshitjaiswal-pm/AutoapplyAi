@@ -1462,9 +1462,18 @@
   async function fillMyExperiencePage(tailoredResult, pendingJob) {
     const stored = await chrome.storage.local.get(["parsedResume", "userProfile"]);
     const resume = stored.parsedResume || {};
-    const workExp = resume.workExperience || [];
-    const education = resume.education || [];
-    const certifications = resume.certifications || [];
+
+    // If parsedResume has no work experience, fall back to tailoredResult (the AI-tailored copy
+    // of the resume). This covers cases where the original parsing missed the work history.
+    const workExp = resume.workExperience?.length > 0
+      ? resume.workExperience
+      : (tailoredResult?.workExperience || []);
+    const education = resume.education?.length > 0
+      ? resume.education
+      : (tailoredResult?.education || []);
+    const certifications = resume.certifications?.length > 0
+      ? resume.certifications
+      : (tailoredResult?.certifications || []);
     // skills can be a flat array OR an object { technical, soft, tools }
     const rawSkills = resume.skills || [];
     const skills = Array.isArray(rawSkills)
@@ -1475,7 +1484,8 @@
           ...(rawSkills.soft || [])
         ];
 
-    LOG(`fillMyExperiencePage: ${workExp.length} work, ${education.length} edu, ${certifications.length} certs, ${skills.length} skills`);
+    const weSrc = resume.workExperience?.length > 0 ? "parsedResume" : "tailoredResult";
+    LOG(`fillMyExperiencePage: ${workExp.length} work (${weSrc}), ${education.length} edu, ${certifications.length} certs, ${skills.length} skills`);
 
     if (workExp.length > 0) await fillWorkExperienceEntries(workExp);
     if (education.length > 0) await fillEducationEntries(education);
@@ -1759,18 +1769,19 @@
         await fillSearchableAutocomplete(container, ["school", "institution", "university", "college", "school or university"], edu.school);
       }
 
-      // Degree — standard dropdown (Airbus uses values prefixed by country code, e.g. "CA - Bachelor")
-      await fillLabeledFieldInBlock(container, ["degree", "qualification", "degree level"], edu.degree);
-      // Try dropdown select by degree keyword
+      // Degree — normalise first so "MBA"→"Masters", "B.Com"→"Bachelors", etc.
+      const degreeNormalized = normalizeDegreeForWorkday(edu.degree);
+      await fillLabeledFieldInBlock(container, ["degree", "qualification", "degree level"], degreeNormalized);
+      // Try dropdown select by normalized degree keyword
       const degreeField = findFieldByLabelInContainer(container, ["degree", "qualification"]);
       if (degreeField) {
         const select = degreeField.querySelector("select") || container.querySelector("select");
         if (select) {
-          fillSelectByKeyword(select, edu.degree);
+          fillSelectByKeyword(select, degreeNormalized);
         } else {
           // Button-based Workday dropdown for degree
           const fieldAutoId = degreeField.getAttribute?.("data-automation-id");
-          if (fieldAutoId) await selectDropdown(fieldAutoId, edu.degree);
+          if (fieldAutoId) await selectDropdown(fieldAutoId, degreeNormalized);
         }
       }
 
@@ -1796,6 +1807,25 @@
 
       await sleep(300);
     }
+  }
+
+  /**
+   * Normalise a degree string to the canonical Workday dropdown values:
+   * No Degree | Diploma | Associates | Bachelors | Masters | Doctorate
+   */
+  function normalizeDegreeForWorkday(degree) {
+    if (!degree) return degree;
+    const d = degree.toLowerCase().trim();
+    if (/phd|ph\.d|doctorate/.test(d)) return "Doctorate";
+    if (/mba|master|m\.s\.|m\.a\.|m\.eng|msc|m\.sc|mphil|m\.ed/.test(d)) return "Masters";
+    if (/bachelor|b\.s\.|b\.a\.|b\.com|b\.eng|b\.sc|b\.tech|hons|honours/.test(d)) return "Bachelors";
+    if (/associate/.test(d)) return "Associates";
+    if (/diploma|certificate|pg\s*dip/.test(d)) return "Diploma";
+    // Generic fallback: if the raw word appears in a known option, use it
+    for (const canonical of ["Doctorate","Masters","Bachelors","Associates","Diploma"]) {
+      if (canonical.toLowerCase().includes(d) || d.includes(canonical.toLowerCase())) return canonical;
+    }
+    return degree; // Return as-is — caller will do best-effort match
   }
 
   /**
