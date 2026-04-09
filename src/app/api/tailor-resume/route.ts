@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { RESUME_TAILOR_SYSTEM } from "@/lib/prompts";
+import { calcExperienceYears } from "@/lib/resumeValidation";
 
 /**
  * API ROUTE: POST /api/tailor-resume
@@ -64,6 +65,22 @@ export async function POST(request: NextRequest) {
       locationWarning = "\n\nIMPORTANT LOCATION NOTE: Both the candidate and job are in CANADA. You may suggest relocation to Canadian cities mentioned in the JD, but NEVER to any US city (e.g., San Francisco, New York, etc.).";
     }
 
+    // Pre-compute total years of experience so the AI uses the correct number
+    // in the summary instead of guessing from individual role tenures.
+    const resumeExperience = Array.isArray(parsedResume?.experience)
+      ? parsedResume.experience
+      : Array.isArray(parsedResume?.workExperience)
+        ? parsedResume.workExperience.map((j: { startDate?: string; endDate?: string }) => ({
+            startDate: j.startDate,
+            endDate: j.endDate || "Present",
+          }))
+        : [];
+    const totalYears = calcExperienceYears(resumeExperience);
+    const totalYearsRounded = totalYears < 1 ? totalYears : Math.floor(totalYears);
+    const experienceConstraint = totalYearsRounded >= 1
+      ? `\n\n⚠️ MANDATORY EXPERIENCE CONSTRAINT — HIGHEST PRIORITY AFTER RULE ZERO:\nThe candidate's calculated total career experience is ${totalYearsRounded}+ years (computed from their employment dates).\n- In the summary, you MUST use "${totalYearsRounded}+ years" — do NOT use any other number of years.\n- Do NOT use the tenure of a single role (e.g., "4+ years at Amazon") as the total experience figure.\n- This value was computed by the server and is authoritative. Override any estimate you might derive yourself.`
+      : "";
+
     const message = await anthropic.messages.create({
       model: modelId,
       max_tokens: 8192,
@@ -71,7 +88,7 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `Here is the candidate's resume:\n${JSON.stringify(parsedResume, null, 2)}\n\nHere is the target job description:\n${JSON.stringify(parsedJob, null, 2)}${locationWarning}\n\nTailor the resume for this job.`,
+          content: `Here is the candidate's resume:\n${JSON.stringify(parsedResume, null, 2)}\n\nHere is the target job description:\n${JSON.stringify(parsedJob, null, 2)}${locationWarning}${experienceConstraint}\n\nTailor the resume for this job.`,
         },
       ],
     });
