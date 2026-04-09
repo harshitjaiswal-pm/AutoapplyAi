@@ -1,9 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useAppStore, PipelineJob, Application, ResumeDefect } from "@/store/useAppStore";
+import {
+  useAppStore,
+  PipelineJob,
+  Application,
+  ResumeDefect,
+} from "@/store/useAppStore";
+import { runBatch, generateJobId } from "@/lib/batchProcessor";
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Types                                                                       */
@@ -20,27 +26,144 @@ interface TrackableJob {
   date: string;
   source: "pipeline" | "manual";
   defects?: ResumeDefect[];
-  sourceYears?: number;
-  tailoredYears?: number;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/*  Page                                                                        */
+/*  Helpers                                                                     */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-export default function DashboardPage() {
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function fmtDate(d: Date) {
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+/** Returns last N days as { label: "Apr 7", count: 0 }[] */
+function buildDailyActivity(jobs: TrackableJob[], days = 14) {
+  const buckets: { label: string; date: string; count: number }[] = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    buckets.push({
+      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      date: key,
+      count: 0,
+    });
+  }
+  for (const j of jobs) {
+    const key = j.date?.slice(0, 10);
+    const b = buckets.find((b) => b.date === key);
+    if (b) b.count++;
+  }
+  return buckets;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/*  Page wrapper (Suspense for useSearchParams)                                 */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+export default function DashboardPageWrapper() {
+  return (
+    <Suspense fallback={<div className="py-20 text-center text-neutral-400">Loading…</div>}>
+      <DashboardPage />
+    </Suspense>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/*  Main page                                                                   */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+function DashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const {
     applications,
     pipelineJobs,
-    updateApplicationStatus,
+    pipelineResumeText,
+    pipelineParsedResume,
+    currentBatch,
+    addPipelineJob,
+    addPipelineJobs,
     updatePipelineJob,
+    removePipelineJob,
+    clearPipelineJobs,
+    setPipelineResumeText,
+    setPipelineParsedResume,
+    setCurrentBatch,
+    updateCurrentBatch,
+    updateApplicationStatus,
     addApplication,
     userProfile,
     parsedResumeSummary,
   } = useAppStore();
 
-  // Sync completed applications from Chrome extension via pipeline-bridge.js
+  /* ── panel state ──────────────────────────────────────────────────────── */
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+  const [addMode, setAddMode] = useState<"single" | "bulk">("single");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [activeHistoryTab, setActiveHistoryTab] = useState<"all" | "applied" | "ready" | "failed">("all");
+
+  /* ── single job form ──────────────────────────────────────────────────── */
+  const [jobTitle, setJobTitle] = useState("");
+  const [company, setCompany] = useState("");
+  const [location, setLocation] = useState("");
+  const [jobUrl, setJobUrl] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
+  const [easyApply, setEasyApply] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+
+  /* ── batch run ────────────────────────────────────────────────────────── */
+  const [mode, setMode] = useState<"fast" | "pro">("fast");
+  const isRunning =
+    pipelineJobs.some((j) => j.status === "analyzing" || j.status === "tailoring") &&
+    currentBatch?.isRunning === true;
+
+  /* ── import from URL ──────────────────────────────────────────────────── */
+  const importJobs = useCallback((incoming: any[]) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return;
+    const newJobs: PipelineJob[] = incoming.map((j: any) => ({
+      id: generateJobId(),
+      jobTitle: j.jobTitle || "Untitled",
+      company: j.company || "Unknown",
+      location: j.location || "",
+      jobUrl: j.jobUrl || "",
+      jobDescription: j.jobDescription || "",
+      source: (j.source as any) || "linkedin",
+      easyApply: j.easyApply ?? false,
+      status: "queued" as const,
+      addedAt: new Date().toISOString(),
+    }));
+    addPipelineJobs(newJobs);
+  }, [addPipelineJobs]);
+
+  useEffect(() => {
+    const jobsParam = searchParams.get("jobs");
+    if (jobsParam) {
+      try { importJobs(JSON.parse(jobsParam)); } catch {}
+    }
+  }, [searchParams, importJobs]);
+
+  useEffect(() => {
+    function onBridgeMessage(e: MessageEvent) {
+      if (e.data?.__aa_bridge === "IMPORT_JOBS" && Array.isArray(e.data.jobs)) {
+        importJobs(e.data.jobs);
+      }
+    }
+    window.addEventListener("message", onBridgeMessage);
+    return () => window.removeEventListener("message", onBridgeMessage);
+  }, [importJobs]);
+
+  /* ── sync completed apps from extension ──────────────────────────────── */
   useEffect(() => {
     function syncCompleted() {
       try {
@@ -48,16 +171,10 @@ export default function DashboardPage() {
         if (!stored) return;
         const completed = JSON.parse(stored);
         if (!Array.isArray(completed)) return;
-
         for (const app of completed) {
-          const existsInApps = applications.some(
-            (a) => a.jobTitle === app.jobTitle && a.company === app.company
-          );
-          const existsInPipeline = pipelineJobs.some(
-            (j) => j.jobTitle === app.jobTitle && j.company === app.company
-          );
-
-          if (!existsInApps && !existsInPipeline) {
+          const inApps = applications.some((a) => a.jobTitle === app.jobTitle && a.company === app.company);
+          const inPipeline = pipelineJobs.some((j) => j.jobTitle === app.jobTitle && j.company === app.company);
+          if (!inApps && !inPipeline) {
             addApplication({
               id: app.id || `ext_${Date.now()}_${Math.random().toString(36).slice(2)}`,
               jobTitle: app.jobTitle,
@@ -68,590 +185,575 @@ export default function DashboardPage() {
               resumeVersion: "auto-applied",
               matchScore: app.matchScore || 0,
             });
-          } else if (existsInPipeline) {
-            const pj = pipelineJobs.find(
-              (j) => j.jobTitle === app.jobTitle && j.company === app.company
-            );
+          } else if (inPipeline) {
+            const pj = pipelineJobs.find((j) => j.jobTitle === app.jobTitle && j.company === app.company);
             if (pj && pj.status !== "applied") {
-              updatePipelineJob(pj.id, {
-                status: "applied",
-                appliedAt: app.completedAt || new Date().toISOString(),
-              });
+              updatePipelineJob(pj.id, { status: "applied", appliedAt: app.completedAt || new Date().toISOString() });
             }
           }
         }
         localStorage.removeItem("autoapply-completed-applications");
-      } catch (e) {
-        console.warn("Dashboard: Error syncing completed applications", e);
-      }
+      } catch {}
     }
-
     syncCompleted();
     window.addEventListener("autoapply-completed-sync", syncCompleted);
     return () => window.removeEventListener("autoapply-completed-sync", syncCompleted);
   }, [applications, pipelineJobs, addApplication, updatePipelineJob]);
 
-  /* ── Build unified job list ─────────────────────────────────────────────── */
+  /* ── add single job ───────────────────────────────────────────────────── */
+  function handleAddJob(e: React.FormEvent) {
+    e.preventDefault();
+    if (!jobTitle.trim() || !company.trim()) return;
+    addPipelineJob({
+      id: generateJobId(),
+      jobTitle: jobTitle.trim(),
+      company: company.trim(),
+      location: location.trim(),
+      jobUrl: jobUrl.trim(),
+      jobDescription: jobDescription.trim(),
+      source: "manual",
+      easyApply,
+      status: "queued",
+      addedAt: new Date().toISOString(),
+    });
+    setJobTitle(""); setCompany(""); setLocation(""); setJobUrl("");
+    setJobDescription(""); setEasyApply(false);
+    setAddPanelOpen(false);
+  }
+
+  /* ── bulk paste ───────────────────────────────────────────────────────── */
+  function handleBulkAdd() {
+    const lines = bulkText.split("\n").map((l) => l.trim()).filter(Boolean);
+    const jobs: PipelineJob[] = lines.map((line) => {
+      const [jobTitle = "Unknown Role", company = "Unknown Company"] = line.split("|").map((s) => s.trim());
+      return { id: generateJobId(), jobTitle, company, location: "", jobUrl: "", jobDescription: "", source: "manual" as const, easyApply: false, status: "queued" as const, addedAt: new Date().toISOString() };
+    });
+    if (jobs.length > 0) { addPipelineJobs(jobs); setBulkText(""); setAddPanelOpen(false); }
+  }
+
+  /* ── run batch ────────────────────────────────────────────────────────── */
+  async function handleRunBatch() {
+    const queued = pipelineJobs.filter((j) => j.status === "queued");
+    if (queued.length === 0 || !pipelineResumeText || !pipelineParsedResume) return;
+    const batch: import("@/store/useAppStore").BatchRun = {
+      id: `batch_${Date.now()}`,
+      startedAt: new Date().toISOString(),
+      totalJobs: queued.length,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      isRunning: true,
+    };
+    setCurrentBatch(batch);
+    try {
+      await runBatch(queued, pipelineParsedResume, mode, {
+        onJobStart: (id) => updatePipelineJob(id, { status: "analyzing" }),
+        onJobAnalyzed: (id) => updatePipelineJob(id, { status: "tailoring" }),
+        onJobComplete: (id, score, tailoredScore) => updatePipelineJob(id, { status: "ready", originalScore: score, tailoredScore }),
+        onJobFailed: (id, error) => updatePipelineJob(id, { status: "failed", error }),
+        onBatchProgress: (processed, total) => updateCurrentBatch({ processed }),
+        onBatchComplete: (succeeded, failed) => updateCurrentBatch({ succeeded, failed, isRunning: false, completedAt: new Date().toISOString() }),
+      });
+    } catch {}
+  }
+
+  /* ── metrics ──────────────────────────────────────────────────────────── */
   const trackableJobs: TrackableJob[] = [
-    ...pipelineJobs
-      .filter((j) =>
-        j.status === "ready" ||
-        j.status === "applied" ||
-        j.status === "skipped" ||
-        j.status === "failed"
-      )
-      .map((j) => ({
-        id: j.id,
-        jobTitle: j.jobTitle,
-        company: j.company,
-        jobUrl: j.jobUrl,
-        score: j.tailoredScore ?? 0,
-        originalScore: j.originalScore ?? 0,
-        status: j.status === "ready" ? "matched" : j.status,
-        date: j.appliedAt ?? j.processedAt ?? j.addedAt,
-        source: "pipeline" as const,
-      })),
+    ...pipelineJobs.filter((j) => ["ready","applied","skipped","failed"].includes(j.status)).map((j) => ({
+      id: j.id, jobTitle: j.jobTitle, company: j.company, jobUrl: j.jobUrl,
+      score: j.tailoredScore ?? 0, originalScore: j.originalScore ?? 0,
+      status: j.status === "ready" ? "matched" : j.status,
+      date: j.appliedAt ?? j.processedAt ?? j.addedAt, source: "pipeline" as const,
+    })),
     ...applications.map((a) => ({
-      id: a.id,
-      jobTitle: a.jobTitle,
-      company: a.company,
-      jobUrl: a.jobUrl,
-      score: a.matchScore,
-      originalScore: 0,
-      status: a.status,
-      date: a.appliedAt,
-      source: "manual" as const,
-      defects: a.defects,
-      sourceYears: a.sourceYears,
-      tailoredYears: a.tailoredYears,
+      id: a.id, jobTitle: a.jobTitle, company: a.company, jobUrl: a.jobUrl,
+      score: a.matchScore, originalScore: 0, status: a.status,
+      date: a.appliedAt, source: "manual" as const, defects: a.defects,
     })),
   ];
 
-  /* ── Metrics ────────────────────────────────────────────────────────────── */
-  const totalApplied =
-    pipelineJobs.filter((j) => j.status === "applied").length +
-    applications.filter((a) => a.status === "applied").length;
-
-  const totalInterviewing = applications.filter(
-    (a) => a.status === "interviewing"
-  ).length;
-
-  const totalOffers = applications.filter((a) => a.status === "offer").length;
-
-  const allScored = trackableJobs.filter((j) => j.score > 0);
-  const avgScore =
-    allScored.length > 0
-      ? Math.round(allScored.reduce((s, j) => s + j.score, 0) / allScored.length)
-      : 0;
-
-  const jobsWithDefects = trackableJobs.filter(
-    (j) => j.defects && j.defects.length > 0
-  );
-  const defectRate =
-    trackableJobs.length > 0
-      ? Math.round((jobsWithDefects.length / trackableJobs.length) * 100)
-      : 0;
-
-  const errorCount = trackableJobs.reduce(
-    (n, j) =>
-      n + (j.defects?.filter((d) => d.severity === "error").length ?? 0),
-    0
-  );
-
-  // Response rate: (interviewing + offers) / applied
-  const responseRate =
-    totalApplied > 0
-      ? Math.round(((totalInterviewing + totalOffers) / totalApplied) * 100)
-      : 0;
-
-  const pipelineProcessing = pipelineJobs.filter(
-    (j) => j.status === "analyzing" || j.status === "tailoring"
-  ).length;
+  const today = new Date().toISOString().slice(0, 10);
+  const totalApplied = pipelineJobs.filter((j) => j.status === "applied").length + applications.filter((a) => a.status === "applied").length;
+  const appliedToday = trackableJobs.filter((j) => (j.status === "applied" || j.status === "matched") && j.date?.slice(0, 10) === today).length;
   const pipelineQueued = pipelineJobs.filter((j) => j.status === "queued").length;
+  const pipelineProcessing = pipelineJobs.filter((j) => j.status === "analyzing" || j.status === "tailoring").length;
   const pipelineReady = pipelineJobs.filter((j) => j.status === "ready").length;
+  const totalInterviewing = applications.filter((a) => a.status === "interviewing").length;
+  const totalOffers = applications.filter((a) => a.status === "offer").length;
+  const allScored = trackableJobs.filter((j) => j.score > 0);
+  const avgScore = allScored.length > 0 ? Math.round(allScored.reduce((s, j) => s + j.score, 0) / allScored.length) : 0;
+  const responseRate = totalApplied > 0 ? Math.round(((totalInterviewing + totalOffers) / totalApplied) * 100) : 0;
+  const openJobs = pipelineJobs.filter((j) => !["applied","skipped"].includes(j.status)).length;
 
-  /* ── Filters ────────────────────────────────────────────────────────────── */
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [defectFilter, setDefectFilter] = useState<"all" | "defects-only" | "clean">("all");
-  const [expandedDefect, setExpandedDefect] = useState<string | null>(null);
+  const dailyActivity = buildDailyActivity(trackableJobs);
+  const maxActivity = Math.max(...dailyActivity.map((d) => d.count), 1);
 
+  /* ── filtered history ─────────────────────────────────────────────────── */
   const filteredJobs = trackableJobs
     .filter((j) => {
-      if (statusFilter !== "all" && j.status !== statusFilter) return false;
-      if (defectFilter === "defects-only" && (!j.defects || j.defects.length === 0))
-        return false;
-      if (defectFilter === "clean" && j.defects && j.defects.length > 0) return false;
+      if (activeHistoryTab === "applied" && j.status !== "applied") return false;
+      if (activeHistoryTab === "ready" && j.status !== "matched") return false;
+      if (activeHistoryTab === "failed" && j.status !== "failed") return false;
       if (search) {
         const q = search.toLowerCase();
-        return (
-          j.jobTitle.toLowerCase().includes(q) ||
-          j.company.toLowerCase().includes(q)
-        );
+        return j.jobTitle.toLowerCase().includes(q) || j.company.toLowerCase().includes(q);
       }
       return true;
     })
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  const profileName = userProfile
+    ? `${userProfile.firstName ?? ""} ${userProfile.lastName ?? ""}`.trim()
+    : null;
+
+  /* ── JSX ──────────────────────────────────────────────────────────────── */
   return (
-    <div className="max-w-6xl mx-auto py-10 space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-neutral-900 tracking-tight">
-            Applications Dashboard
-          </h1>
-          <p className="mt-1 text-sm text-neutral-400">
-            Quantity, quality, and data integrity — all in one place.
-          </p>
-        </div>
-        <div className="text-[11px] text-neutral-300 font-mono">
-          {new Date().toLocaleDateString("en-US", {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-          })}
-        </div>
-      </div>
-
-      {/* Profile and Resume cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white border border-neutral-200 rounded-xl p-5">
-          <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">
-            Your Profile
-          </p>
-          {userProfile ? (
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm font-semibold text-neutral-900">
-                  {userProfile.firstName} {userProfile.lastName}
-                </p>
-                <p className="text-[12px] text-neutral-500">{userProfile.email}</p>
-              </div>
-              <Link
-                href="/onboarding?edit=profile"
-                className="inline-block text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
-              >
-                Edit Profile →
-              </Link>
+    <div className="min-h-screen bg-neutral-50">
+      {/* ── HERO HEADER ─────────────────────────────────────────────────── */}
+      <div className="bg-gradient-to-br from-indigo-950 via-indigo-900 to-violet-900 text-white px-6 py-8">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-indigo-300 text-sm font-medium">{fmtDate(new Date())}</p>
+              <h1 className="text-2xl font-bold mt-0.5">
+                {greeting()}{profileName ? `, ${profileName.split(" ")[0]}` : ""} 👋
+              </h1>
+              <p className="text-indigo-300 text-sm mt-1">
+                {totalApplied === 0
+                  ? "Your job search command centre — let's get you hired."
+                  : `${totalApplied} application${totalApplied !== 1 ? "s" : ""} sent · ${openJobs} jobs in pipeline`}
+              </p>
             </div>
-          ) : (
-            <button
-              onClick={() => router.push("/onboarding")}
-              className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
-            >
-              Complete Profile →
-            </button>
-          )}
-        </div>
-
-        <div className="bg-white border border-neutral-200 rounded-xl p-5">
-          <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">
-            Resume
-          </p>
-          {parsedResumeSummary ? (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <p className="text-sm font-semibold text-neutral-900">
-                  {parsedResumeSummary.name}
-                </p>
-                <p className="text-[12px] text-neutral-500">
-                  {parsedResumeSummary.jobCount} experiences
-                </p>
-              </div>
+            <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => router.push("/onboarding")}
-                className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+                onClick={() => setAddPanelOpen(true)}
+                className="flex items-center gap-1.5 bg-white text-indigo-700 font-semibold text-sm px-4 py-2 rounded-lg hover:bg-indigo-50 transition-colors"
               >
-                Re-upload →
+                <span className="text-lg leading-none">+</span> Add Jobs
               </button>
+              <a
+                href="https://www.linkedin.com/jobs/search/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 bg-indigo-600/40 border border-indigo-500/50 text-white font-medium text-sm px-4 py-2 rounded-lg hover:bg-indigo-600/60 transition-colors"
+              >
+                LinkedIn Jobs →
+              </a>
             </div>
-          ) : (
-            <button
-              onClick={() => router.push("/onboarding")}
-              className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
-            >
-              Upload Resume →
-            </button>
-          )}
-        </div>
-
-        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-5">
-          <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wider mb-3">
-            Ready to apply?
-          </p>
-          <p className="text-[13px] text-indigo-700 mb-3">
-            Head to LinkedIn and let AutoApply AI handle the rest.
-          </p>
-          <a
-            href="https://www.linkedin.com/jobs/search/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block text-[12px] bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 font-medium transition-colors"
-          >
-            Open LinkedIn →
-          </a>
-        </div>
-      </div>
-
-      {/* KPI Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard
-          icon={
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
-          }
-          label="Applications Sent"
-          value={totalApplied}
-          sub={`${pipelineReady} ready to send`}
-          color="indigo"
-        />
-        <KpiCard
-          icon={
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.99 15a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.93 4h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 11a16 16 0 0 0 5 5l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21 17z"/></svg>
-          }
-          label="Response Rate"
-          value={responseRate > 0 ? `${responseRate}%` : "—"}
-          sub={`${totalInterviewing} interviewing · ${totalOffers} offer${totalOffers !== 1 ? "s" : ""}`}
-          color="emerald"
-          highlight={totalOffers > 0}
-        />
-        <KpiCard
-          icon={
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          }
-          label="Avg Match Score"
-          value={avgScore > 0 ? `${avgScore}` : "—"}
-          sub="out of 100"
-          color="amber"
-        />
-        <KpiCard
-          icon={
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-          }
-          label="Defect Rate"
-          value={jobsWithDefects.length > 0 ? `${defectRate}%` : "0%"}
-          sub={
-            errorCount > 0
-              ? `${errorCount} critical error${errorCount !== 1 ? "s" : ""} · ${jobsWithDefects.length} job${jobsWithDefects.length !== 1 ? "s" : ""} affected`
-              : jobsWithDefects.length > 0
-              ? `${jobsWithDefects.length} warning${jobsWithDefects.length !== 1 ? "s" : ""} — review recommended`
-              : "No data quality issues"
-          }
-          color={errorCount > 0 ? "red" : jobsWithDefects.length > 0 ? "amber" : "emerald"}
-          alert={errorCount > 0}
-        />
-      </div>
-
-      {/* Secondary stats bar */}
-      <div className="flex items-center gap-6 px-4 py-3 bg-neutral-50 border border-neutral-200 rounded-xl text-[12px] text-neutral-500">
-        <StatPill label="In pipeline" value={pipelineJobs.length} />
-        <div className="w-px h-4 bg-neutral-200" />
-        <StatPill label="Queued" value={pipelineQueued} />
-        <div className="w-px h-4 bg-neutral-200" />
-        <StatPill label="Processing" value={pipelineProcessing} loading={pipelineProcessing > 0} />
-        <div className="w-px h-4 bg-neutral-200" />
-        <StatPill label="Total tracked" value={trackableJobs.length} />
-        {jobsWithDefects.length > 0 && (
-          <>
-            <div className="w-px h-4 bg-neutral-200" />
-            <button
-              onClick={() => setDefectFilter(defectFilter === "defects-only" ? "all" : "defects-only")}
-              className={`flex items-center gap-1 font-medium transition-colors ${
-                defectFilter === "defects-only"
-                  ? "text-red-600"
-                  : "text-amber-600 hover:text-red-600"
-              }`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/></svg>
-              {jobsWithDefects.length} with guardrail flags
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Active batch progress */}
-      {pipelineProcessing > 0 && (
-        <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/30">
-          <div className="flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin shrink-0" />
-            <p className="text-[13px] font-medium text-indigo-700">
-              Processing {pipelineProcessing} job{pipelineProcessing !== 1 ? "s" : ""}…
-            </p>
           </div>
-          <div className="mt-2 w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
-            <div
-              className="bg-indigo-500 h-1 rounded-full transition-all duration-500"
-              style={{
-                width: `${
-                  pipelineJobs.length > 0
-                    ? ((pipelineJobs.length - pipelineQueued - pipelineProcessing) /
-                        pipelineJobs.length) *
-                      100
-                    : 0
-                }%`,
-              }}
-            />
+
+          {/* KPI Strip */}
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mt-7">
+            {[
+              { label: "Total Applied", value: totalApplied || "—", sub: "all time", accent: "text-white" },
+              { label: "Applied Today", value: appliedToday || "—", sub: today, accent: appliedToday > 0 ? "text-emerald-300" : "text-white" },
+              { label: "In Pipeline", value: openJobs || "—", sub: `${pipelineQueued} queued · ${pipelineReady} ready`, accent: "text-white" },
+              { label: "Avg Match Score", value: avgScore > 0 ? `${avgScore}` : "—", sub: "out of 100", accent: avgScore >= 75 ? "text-emerald-300" : avgScore >= 55 ? "text-amber-300" : "text-white" },
+              { label: "Response Rate", value: responseRate > 0 ? `${responseRate}%` : "—", sub: `${totalInterviewing} interview${totalInterviewing !== 1 ? "s" : ""}`, accent: responseRate > 20 ? "text-emerald-300" : "text-white" },
+              { label: "Offers", value: totalOffers || "—", sub: `${totalInterviewing} interviewing`, accent: totalOffers > 0 ? "text-emerald-300" : "text-white" },
+            ].map((kpi) => (
+              <div key={kpi.label} className="bg-white/10 backdrop-blur rounded-xl p-3.5">
+                <p className="text-[11px] text-indigo-300 font-medium uppercase tracking-wider">{kpi.label}</p>
+                <p className={`text-2xl font-bold mt-1 ${kpi.accent}`}>{kpi.value}</p>
+                <p className="text-[11px] text-indigo-400 mt-0.5 truncate">{kpi.sub}</p>
+              </div>
+            ))}
           </div>
         </div>
-      )}
-
-      {/* Filter bar */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <input
-          type="text"
-          placeholder="Search job title or company…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-[180px] px-3 py-2 text-[13px] border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 placeholder:text-neutral-300"
-        />
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg text-neutral-600 focus:outline-none"
-        >
-          <option value="all">All Statuses</option>
-          <option value="matched">Matched</option>
-          <option value="applied">Applied</option>
-          <option value="interviewing">Interviewing</option>
-          <option value="offer">Offer</option>
-          <option value="rejected">Rejected</option>
-          <option value="skipped">Skipped</option>
-          <option value="failed">Failed</option>
-        </select>
-        <select
-          value={defectFilter}
-          onChange={(e) => setDefectFilter(e.target.value as typeof defectFilter)}
-          className="px-3 py-2 text-[13px] border border-neutral-200 rounded-lg text-neutral-600 focus:outline-none"
-        >
-          <option value="all">All Data Quality</option>
-          <option value="defects-only">⚠ Flagged only</option>
-          <option value="clean">✓ Clean only</option>
-        </select>
       </div>
 
-      {/* Applications table */}
-      {filteredJobs.length === 0 ? (
-        <div className="border border-dashed border-neutral-200 rounded-xl py-16 text-center">
-          <p className="text-sm text-neutral-400">
-            {trackableJobs.length === 0
-              ? "No applications tracked yet."
-              : "No jobs match your filters."}
-          </p>
-          <p className="text-[12px] text-neutral-300 mt-1">
-            {trackableJobs.length === 0
-              ? "Use the Tailor page to tailor your first resume."
-              : "Try adjusting your search or filters."}
-          </p>
-        </div>
-      ) : (
-        <div className="border border-neutral-200 rounded-xl overflow-hidden">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="border-b border-neutral-200 bg-neutral-50">
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
-                  Job / Company
-                </th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
-                  Score
-                </th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
-                  Data Quality
-                </th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
-                  Date
-                </th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-100">
-              {filteredJobs.map((job) => {
-                const hasErrors = job.defects?.some((d) => d.severity === "error");
-                const hasWarnings = job.defects && job.defects.length > 0 && !hasErrors;
-                const isExpanded = expandedDefect === job.id;
+      {/* ── BODY ────────────────────────────────────────────────────────── */}
+      <div className="max-w-6xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-                return (
-                  <>
-                    <tr
-                      key={job.id}
-                      className={`transition-colors ${
-                        hasErrors
-                          ? "bg-red-50/40 hover:bg-red-50"
-                          : hasWarnings
-                          ? "bg-amber-50/30 hover:bg-amber-50/60"
-                          : "hover:bg-neutral-50"
-                      }`}
-                    >
-                      {/* Job + Company */}
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-neutral-900 max-w-[220px] truncate">
-                          {job.jobTitle}
-                        </p>
-                        <p className="text-[11px] text-neutral-400 mt-0.5">
-                          {job.company}
-                          {job.source === "pipeline" && (
-                            <span className="ml-1.5 px-1 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-400 font-medium">
-                              pipeline
-                            </span>
-                          )}
-                        </p>
-                      </td>
+        {/* ── LEFT COLUMN (2/3) ─────────────────────────────────────────── */}
+        <div className="lg:col-span-2 space-y-5">
 
-                      {/* Match score */}
-                      <td className="px-4 py-3">
-                        {job.score > 0 ? (
-                          <div>
-                            <span
-                              className={`font-semibold tabular-nums ${
-                                job.score >= 70
-                                  ? "text-emerald-600"
-                                  : job.score >= 55
-                                  ? "text-amber-500"
-                                  : "text-red-500"
-                              }`}
-                            >
-                              {job.score}
-                            </span>
-                            <span className="text-[10px] text-neutral-300">/100</span>
-                            {job.originalScore > 0 && job.originalScore !== job.score && (
-                              <p className="text-[10px] text-neutral-300 mt-0.5">
-                                was {job.originalScore}
-                                <span className={`ml-0.5 font-medium ${job.score > job.originalScore ? "text-emerald-400" : "text-red-400"}`}>
-                                  {job.score > job.originalScore ? `+${job.score - job.originalScore}` : `${job.score - job.originalScore}`}
-                                </span>
-                              </p>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-neutral-300">—</span>
-                        )}
-                      </td>
-
-                      {/* Status */}
-                      <td className="px-4 py-3">
-                        <StatusBadge
-                          status={job.status}
-                          jobId={job.id}
-                          onUpdate={(id, status) => {
-                            // Update application status
-                            updateApplicationStatus(id, status as Application["status"]);
-                          }}
-                        />
-                      </td>
-
-                      {/* Data quality / defect column */}
-                      <td className="px-4 py-3">
-                        {!job.defects ? (
-                          <span className="text-[11px] text-neutral-300">not checked</span>
-                        ) : job.defects.length === 0 ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                            Clean
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() =>
-                              setExpandedDefect(isExpanded ? null : job.id)
-                            }
-                            className={`inline-flex items-center gap-1.5 text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors ${
-                              hasErrors
-                                ? "text-red-600 bg-red-100 hover:bg-red-200"
-                                : "text-amber-600 bg-amber-100 hover:bg-amber-200"
-                            }`}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/></svg>
-                            {job.defects.length} flag{job.defects.length !== 1 ? "s" : ""}
-                            {job.sourceYears != null && job.tailoredYears != null && (
-                              <span className="text-[10px] opacity-70">
-                                · {job.sourceYears}y→{job.tailoredYears}y
-                              </span>
-                            )}
-                          </button>
-                        )}
-                      </td>
-
-                      {/* Date */}
-                      <td className="px-4 py-3 text-neutral-400 tabular-nums text-[12px]">
-                        {new Date(job.date).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-4 py-3">
-                        {job.jobUrl && (
-                          <a
-                            href={job.jobUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[11px] text-indigo-500 hover:text-indigo-700 font-medium"
-                          >
-                            View ↗
-                          </a>
-                        )}
-                      </td>
-                    </tr>
-
-                    {/* Defect detail row (expanded) */}
-                    {isExpanded && job.defects && job.defects.length > 0 && (
-                      <tr key={`${job.id}-defects`} className="bg-red-50/60">
-                        <td colSpan={6} className="px-6 pb-4 pt-2">
-                          <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-wider mb-2">
-                            Guardrail flags for {job.jobTitle} @ {job.company}
-                          </p>
-                          <div className="space-y-1.5">
-                            {job.defects.map((d, i) => (
-                              <div
-                                key={i}
-                                className={`text-[12px] px-3 py-2 rounded-lg border flex items-start gap-2 ${
-                                  d.severity === "error"
-                                    ? "bg-red-100 border-red-200 text-red-800"
-                                    : "bg-amber-50 border-amber-200 text-amber-800"
-                                }`}
-                              >
-                                <span className="font-bold shrink-0">
-                                  {d.severity === "error" ? "✗" : "⚠"}
-                                </span>
-                                <span>
-                                  {d.message}{" "}
-                                  <span className="opacity-60 text-[11px]">
-                                    (source: {d.sourceValue} · tailored: {d.tailoredValue})
-                                  </span>
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
+          {/* Activity Chart */}
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-sm font-semibold text-neutral-900">Applications per Day</h2>
+                <p className="text-xs text-neutral-400 mt-0.5">Last 14 days</p>
+              </div>
+              <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full">
+                {trackableJobs.length} total
+              </span>
+            </div>
+            <div className="flex items-end gap-1.5 h-28">
+              {dailyActivity.map((day) => (
+                <div key={day.date} className="flex-1 flex flex-col items-center gap-1 group">
+                  <div className="w-full relative flex items-end justify-center" style={{ height: "80px" }}>
+                    {day.count > 0 && (
+                      <div
+                        className="absolute bottom-0 w-full bg-indigo-500 rounded-t-sm group-hover:bg-indigo-400 transition-colors"
+                        style={{ height: `${Math.max(4, (day.count / maxActivity) * 80)}px` }}
+                      />
                     )}
-                  </>
+                    {day.count === 0 && (
+                      <div className="absolute bottom-0 w-full bg-neutral-100 rounded-t-sm" style={{ height: "4px" }} />
+                    )}
+                    {/* Tooltip */}
+                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:flex items-center bg-neutral-900 text-white text-[10px] px-2 py-0.5 rounded whitespace-nowrap z-10">
+                      {day.count} job{day.count !== 1 ? "s" : ""}
+                    </div>
+                  </div>
+                  <span className="text-[9px] text-neutral-400 rotate-45 origin-left ml-1 truncate w-6">
+                    {day.label.split(" ")[1]}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between mt-3 text-[11px] text-neutral-400">
+              {dailyActivity.filter((_, i) => i % 7 === 0 || i === dailyActivity.length - 1).map((d) => (
+                <span key={d.date}>{d.label}</span>
+              ))}
+            </div>
+          </div>
+
+          {/* Processing banner */}
+          {pipelineProcessing > 0 && (
+            <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3">
+              <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin shrink-0" />
+              <p className="text-sm font-medium text-indigo-700">
+                Processing {pipelineProcessing} job{pipelineProcessing !== 1 ? "s" : ""}…
+              </p>
+              <div className="flex-1 bg-indigo-100 rounded-full h-1 ml-2">
+                <div
+                  className="bg-indigo-500 h-1 rounded-full transition-all"
+                  style={{ width: `${pipelineJobs.length > 0 ? ((pipelineJobs.length - pipelineQueued - pipelineProcessing) / pipelineJobs.length) * 100 : 0}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Application History */}
+          <div className="bg-white rounded-2xl border border-neutral-200">
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-neutral-100">
+              <h2 className="text-sm font-semibold text-neutral-900">Application History</h2>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search jobs…"
+                className="text-xs border border-neutral-200 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+            </div>
+            {/* Tab bar */}
+            <div className="flex gap-0 border-b border-neutral-100 px-5">
+              {(["all", "applied", "ready", "failed"] as const).map((tab) => {
+                const counts = { all: trackableJobs.length, applied: trackableJobs.filter(j=>j.status==="applied").length, ready: trackableJobs.filter(j=>j.status==="matched").length, failed: trackableJobs.filter(j=>j.status==="failed").length };
+                return (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveHistoryTab(tab)}
+                    className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors capitalize ${
+                      activeHistoryTab === tab
+                        ? "border-indigo-600 text-indigo-700"
+                        : "border-transparent text-neutral-400 hover:text-neutral-600"
+                    }`}
+                  >
+                    {tab === "all" ? "All" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                    <span className="ml-1.5 text-[10px] bg-neutral-100 text-neutral-500 px-1.5 py-0.5 rounded-full">{counts[tab]}</span>
+                  </button>
                 );
               })}
-            </tbody>
-          </table>
+            </div>
+
+            {filteredJobs.length === 0 ? (
+              <div className="py-12 text-center text-neutral-400 text-sm">
+                {trackableJobs.length === 0 ? (
+                  <div>
+                    <p className="text-2xl mb-2">📋</p>
+                    <p className="font-medium text-neutral-500">No applications yet</p>
+                    <p className="text-xs mt-1">Add jobs to your pipeline or use the extension on LinkedIn</p>
+                  </div>
+                ) : "No matching applications"}
+              </div>
+            ) : (
+              <div className="divide-y divide-neutral-50">
+                {filteredJobs.map((job) => (
+                  <JobRow key={job.id} job={job} onStatusChange={(id, status) => {
+                    const app = applications.find((a) => a.id === id);
+                    if (app) updateApplicationStatus(id, status as any);
+                  }} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT COLUMN (1/3) ────────────────────────────────────────── */}
+        <div className="space-y-4">
+
+          {/* Setup Card */}
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-4">Your Setup</h2>
+            <div className="space-y-3">
+              {/* Resume */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${parsedResumeSummary ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-400"}`}>
+                    {parsedResumeSummary ? "✓" : "!"}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-neutral-800">
+                      {parsedResumeSummary ? parsedResumeSummary.name : "Resume"}
+                    </p>
+                    <p className="text-[11px] text-neutral-400">
+                      {parsedResumeSummary ? `${parsedResumeSummary.jobCount} experiences` : "Not uploaded"}
+                    </p>
+                  </div>
+                </div>
+                <Link href="/onboarding" className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium">
+                  {parsedResumeSummary ? "Change" : "Upload →"}
+                </Link>
+              </div>
+
+              {/* Profile */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${userProfile ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-400"}`}>
+                    {userProfile ? "✓" : "!"}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-neutral-800">
+                      {userProfile ? `${userProfile.firstName ?? ""} ${userProfile.lastName ?? ""}`.trim() : "Profile"}
+                    </p>
+                    <p className="text-[11px] text-neutral-400">
+                      {userProfile ? userProfile.email || "Profile complete" : "Not set up"}
+                    </p>
+                  </div>
+                </div>
+                <Link href="/onboarding?edit=profile" className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium">
+                  {userProfile ? "Edit" : "Setup →"}
+                </Link>
+              </div>
+
+              {/* Sync button */}
+              <div className="pt-1">
+                <button
+                  onClick={() => {
+                    const profile = userProfile;
+                    if (profile) {
+                      localStorage.setItem("aa_profile", JSON.stringify(profile));
+                      window.dispatchEvent(new Event("aa-profile-updated"));
+                    }
+                  }}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
+                >
+                  Sync to Extension
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Pipeline Control */}
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Pipeline</h2>
+              <button
+                onClick={() => setAddPanelOpen(true)}
+                className="text-[11px] text-indigo-600 hover:text-indigo-700 font-semibold"
+              >
+                + Add Jobs
+              </button>
+            </div>
+
+            {/* Status pills */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {[
+                { label: "Queued", value: pipelineQueued, color: "bg-neutral-50 text-neutral-600" },
+                { label: "Processing", value: pipelineProcessing, color: pipelineProcessing > 0 ? "bg-indigo-50 text-indigo-700" : "bg-neutral-50 text-neutral-600" },
+                { label: "Ready", value: pipelineReady, color: pipelineReady > 0 ? "bg-emerald-50 text-emerald-700" : "bg-neutral-50 text-neutral-600" },
+              ].map((s) => (
+                <div key={s.label} className={`${s.color} rounded-xl p-2.5 text-center`}>
+                  <p className="text-lg font-bold">{s.value}</p>
+                  <p className="text-[10px] font-medium mt-0.5">{s.label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Mode selector */}
+            <div className="flex gap-1.5 mb-3">
+              {(["fast", "pro"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+                    mode === m
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-neutral-500 border-neutral-200 hover:border-indigo-300"
+                  }`}
+                >
+                  {m === "fast" ? "⚡ Fast" : "🎯 Pro"}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={handleRunBatch}
+              disabled={pipelineQueued === 0 || !pipelineResumeText || isRunning}
+              className={`w-full py-2.5 text-sm font-semibold rounded-xl transition-colors ${
+                pipelineQueued > 0 && pipelineResumeText && !isRunning
+                  ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+                  : "bg-neutral-100 text-neutral-400 cursor-not-allowed"
+              }`}
+            >
+              {isRunning ? "Running…" : `Run Batch (${pipelineQueued} job${pipelineQueued !== 1 ? "s" : ""})`}
+            </button>
+
+            {/* Queue list */}
+            {pipelineJobs.length > 0 && (
+              <div className="mt-4 space-y-1.5 max-h-48 overflow-y-auto">
+                {pipelineJobs.slice(0, 20).map((job) => (
+                  <div key={job.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-neutral-50 group">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium text-neutral-800 truncate">{job.company}</p>
+                      <p className="text-[10px] text-neutral-400 truncate">{job.jobTitle}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <StatusDot status={job.status} score={job.tailoredScore} />
+                      <button onClick={() => removePipelineJob(job.id)} className="opacity-0 group-hover:opacity-100 text-neutral-300 hover:text-red-400 text-xs transition-all">×</button>
+                    </div>
+                  </div>
+                ))}
+                {pipelineJobs.length > 20 && (
+                  <p className="text-[10px] text-neutral-400 text-center py-1">+{pipelineJobs.length - 20} more</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Funnel */}
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-4">Application Funnel</h2>
+            <div className="space-y-2.5">
+              {[
+                { label: "Applied", value: totalApplied, max: Math.max(totalApplied, 1), color: "bg-indigo-500" },
+                { label: "Interviewing", value: totalInterviewing, max: Math.max(totalApplied, 1), color: "bg-violet-500" },
+                { label: "Offers", value: totalOffers, max: Math.max(totalApplied, 1), color: "bg-emerald-500" },
+              ].map((row) => (
+                <div key={row.label}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-neutral-500">{row.label}</span>
+                    <span className="text-xs font-semibold text-neutral-800">{row.value}</span>
+                  </div>
+                  <div className="h-2 bg-neutral-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${row.color} rounded-full transition-all duration-500`}
+                      style={{ width: `${totalApplied > 0 ? (row.value / row.max) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+              {totalApplied === 0 && (
+                <p className="text-[11px] text-neutral-400 text-center pt-1">Start applying to see your funnel</p>
+              )}
+            </div>
+          </div>
+
+          {/* Score Distribution */}
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-3">Avg Match Score</h2>
+            <div className="flex items-center justify-center py-3">
+              <ScoreGauge score={avgScore} />
+            </div>
+            <div className="grid grid-cols-3 gap-2 mt-3 text-center">
+              <div>
+                <p className="text-[10px] text-neutral-400">Low (&lt;60)</p>
+                <p className="text-sm font-semibold text-neutral-700">{allScored.filter(j=>j.score<60).length}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-neutral-400">Good (60–79)</p>
+                <p className="text-sm font-semibold text-neutral-700">{allScored.filter(j=>j.score>=60&&j.score<80).length}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-neutral-400">Great (80+)</p>
+                <p className="text-sm font-semibold text-amber-600">{allScored.filter(j=>j.score>=80).length}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── ADD JOBS PANEL ──────────────────────────────────────────────── */}
+      {addPanelOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setAddPanelOpen(false)} />
+          <div className="relative bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg mx-4 shadow-2xl z-10 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-100">
+              <h3 className="text-base font-semibold text-neutral-900">Add Jobs to Pipeline</h3>
+              <button onClick={() => setAddPanelOpen(false)} className="text-neutral-400 hover:text-neutral-700 text-xl font-light">×</button>
+            </div>
+
+            {/* Mode tabs */}
+            <div className="flex gap-1 p-4 pb-0">
+              {(["single", "bulk"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setAddMode(m)}
+                  className={`flex-1 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                    addMode === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-neutral-500 border-neutral-200"
+                  }`}
+                >
+                  {m === "single" ? "Single Job" : "Bulk Paste"}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-6">
+              {addMode === "single" ? (
+                <form onSubmit={handleAddJob} className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-neutral-600 mb-1">Job Title *</label>
+                      <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} required placeholder="Senior PM" className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-neutral-600 mb-1">Company *</label>
+                      <input value={company} onChange={(e) => setCompany(e.target.value)} required placeholder="Acme Inc" className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-neutral-600 mb-1">Location</label>
+                      <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Toronto, ON" className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-neutral-600 mb-1">Job URL</label>
+                      <input value={jobUrl} onChange={(e) => setJobUrl(e.target.value)} placeholder="https://…" className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-600 mb-1">Job Description</label>
+                    <textarea value={jobDescription} onChange={(e) => setJobDescription(e.target.value)} rows={4} placeholder="Paste the job description here…" className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" id="easyApply" checked={easyApply} onChange={(e) => setEasyApply(e.target.checked)} className="rounded" />
+                    <label htmlFor="easyApply" className="text-sm text-neutral-600">LinkedIn Easy Apply available</label>
+                  </div>
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl text-sm transition-colors">
+                    Add to Pipeline
+                  </button>
+                </form>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-neutral-500">One job per line: <code className="bg-neutral-100 px-1 rounded text-xs">Job Title | Company</code></p>
+                  <textarea
+                    value={bulkText}
+                    onChange={(e) => setBulkText(e.target.value)}
+                    rows={8}
+                    placeholder={"Senior PM | Shopify\nProduct Manager | Stripe\nHead of Product | Linear"}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 font-mono resize-none"
+                  />
+                  <button onClick={handleBulkAdd} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl text-sm transition-colors">
+                    Add {bulkText.split("\n").filter((l) => l.trim()).length} Jobs
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
-
-      {/* Legend */}
-      <div className="flex items-center gap-4 text-[11px] text-neutral-400 pt-2">
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-          Clean — no guardrail flags
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-          Warning — data discrepancy detected
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
-          Error — critical data integrity issue
-        </span>
-      </div>
     </div>
   );
 }
@@ -660,110 +762,100 @@ export default function DashboardPage() {
 /*  Sub-components                                                              */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-function KpiCard({
-  icon,
-  label,
-  value,
-  sub,
-  color,
-  alert,
-  highlight,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number | string;
-  sub: string;
-  color: "indigo" | "emerald" | "amber" | "red";
-  alert?: boolean;
-  highlight?: boolean;
-}) {
-  const colors = {
-    indigo: "border-indigo-100 bg-indigo-50 text-indigo-600",
-    emerald: "border-emerald-100 bg-emerald-50 text-emerald-600",
-    amber: "border-amber-100 bg-amber-50 text-amber-600",
-    red: "border-red-200 bg-red-50 text-red-600",
+function JobRow({ job, onStatusChange }: { job: TrackableJob; onStatusChange: (id: string, s: string) => void }) {
+  const statusColors: Record<string, string> = {
+    applied: "bg-indigo-100 text-indigo-700",
+    matched: "bg-emerald-100 text-emerald-700",
+    interviewing: "bg-violet-100 text-violet-700",
+    offer: "bg-amber-100 text-amber-800",
+    failed: "bg-red-100 text-red-700",
+    rejected: "bg-neutral-100 text-neutral-500",
+    skipped: "bg-neutral-100 text-neutral-400",
   };
+  const scoreColor = job.score >= 80 ? "text-emerald-600" : job.score >= 60 ? "text-amber-600" : job.score > 0 ? "text-red-500" : "text-neutral-300";
 
   return (
-    <div
-      className={`rounded-xl p-4 border relative overflow-hidden ${colors[color]} ${
-        highlight ? "ring-2 ring-emerald-400 ring-offset-1" : ""
-      }`}
-    >
-      {alert && (
-        <span className="absolute top-3 right-3 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-      )}
-      <div className="flex items-center gap-2 mb-2 opacity-60">{icon}</div>
-      <p className="text-2xl font-bold tabular-nums tracking-tight">{value}</p>
-      <p className="text-[11px] font-semibold opacity-80 mt-0.5">{label}</p>
-      <p className="text-[10px] opacity-50 mt-1 leading-relaxed">{sub}</p>
+    <div className="flex items-center gap-3 px-5 py-3 hover:bg-neutral-50 transition-colors group">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-neutral-900 truncate">{job.jobTitle}</p>
+          {job.defects && job.defects.length > 0 && (
+            <span className="text-amber-500 text-xs">⚠</span>
+          )}
+        </div>
+        <p className="text-xs text-neutral-400 mt-0.5">
+          {job.company}
+          {job.jobUrl && (
+            <a href={job.jobUrl} target="_blank" rel="noopener noreferrer" className="ml-2 text-indigo-400 hover:text-indigo-600">↗</a>
+          )}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {job.score > 0 && (
+          <span className={`text-xs font-bold ${scoreColor}`}>{job.score}</span>
+        )}
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusColors[job.status] ?? "bg-neutral-100 text-neutral-500"}`}>
+          {job.status}
+        </span>
+        {job.source === "manual" && (
+          <select
+            value={job.status}
+            onChange={(e) => onStatusChange(job.id, e.target.value)}
+            className="opacity-0 group-hover:opacity-100 text-[10px] border border-neutral-200 rounded px-1 py-0.5 text-neutral-500 focus:outline-none transition-opacity"
+          >
+            {["applied","interviewing","offer","rejected"].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
+      </div>
     </div>
   );
 }
 
-function StatPill({
-  label,
-  value,
-  loading,
-}: {
-  label: string;
-  value: number;
-  loading?: boolean;
-}) {
+function StatusDot({ status, score }: { status: string; score?: number }) {
+  const colors: Record<string, string> = {
+    queued: "bg-neutral-300",
+    analyzing: "bg-blue-400 animate-pulse",
+    tailoring: "bg-indigo-500 animate-pulse",
+    ready: "bg-emerald-500",
+    applied: "bg-indigo-500",
+    failed: "bg-red-400",
+    skipped: "bg-neutral-300",
+  };
   return (
-    <span className="flex items-center gap-1.5">
-      {loading && (
-        <span className="w-2 h-2 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
+    <div className="flex items-center gap-1">
+      {score !== undefined && score > 0 && (
+        <span className="text-[10px] text-neutral-400">{score}</span>
       )}
-      <span className="font-semibold text-neutral-700">{value}</span>
-      <span>{label}</span>
-    </span>
+      <div className={`w-2 h-2 rounded-full ${colors[status] ?? "bg-neutral-300"}`} />
+    </div>
   );
 }
 
-function StatusBadge({
-  status,
-  jobId,
-  onUpdate,
-}: {
-  status: string;
-  jobId: string;
-  onUpdate: (id: string, status: string) => void;
-}) {
-  const colors: Record<string, string> = {
-    matched: "text-neutral-600 bg-neutral-100",
-    approved: "text-blue-600 bg-blue-50",
-    applied: "text-emerald-600 bg-emerald-50",
-    responded: "text-amber-600 bg-amber-50",
-    interviewing: "text-purple-600 bg-purple-50",
-    rejected: "text-red-500 bg-red-50",
-    offer: "text-emerald-700 bg-emerald-100 font-bold",
-    skipped: "text-neutral-400 bg-neutral-50",
-    ready: "text-indigo-600 bg-indigo-50",
-    failed: "text-red-400 bg-red-50",
-  };
+function ScoreGauge({ score }: { score: number }) {
+  const r = 40;
+  const circ = 2 * Math.PI * r;
+  const pct = score / 100;
+  const dash = circ * pct;
+  const color = score >= 80 ? "#10b981" : score >= 60 ? "#f59e0b" : score > 0 ? "#ef4444" : "#e5e7eb";
 
   return (
-    <select
-      value={status}
-      onChange={(e) => onUpdate(jobId, e.target.value)}
-      className={`text-[11px] font-medium px-2 py-1 rounded-full border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-300 ${
-        colors[status] ?? "text-neutral-500 bg-neutral-100"
-      }`}
-    >
-      {[
-        "matched",
-        "applied",
-        "responded",
-        "interviewing",
-        "offer",
-        "rejected",
-        "skipped",
-      ].map((s) => (
-        <option key={s} value={s}>
-          {s.charAt(0).toUpperCase() + s.slice(1)}
-        </option>
-      ))}
-    </select>
+    <div className="relative w-24 h-24 flex items-center justify-center">
+      <svg width="96" height="96" viewBox="0 0 96 96" className="-rotate-90">
+        <circle cx="48" cy="48" r={r} fill="none" stroke="#f3f4f6" strokeWidth="10" />
+        <circle
+          cx="48" cy="48" r={r} fill="none"
+          stroke={color} strokeWidth="10"
+          strokeDasharray={`${dash} ${circ}`}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dasharray 0.6s ease" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-xl font-bold text-neutral-800">{score > 0 ? score : "—"}</span>
+        <span className="text-[9px] text-neutral-400">avg</span>
+      </div>
+    </div>
   );
 }
