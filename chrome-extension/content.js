@@ -919,7 +919,12 @@
           </div>
         </div>
 
-        <div style="padding: 16px 20px; display: flex; gap: 10px;">
+        <div style="padding: 16px 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+          <button id="confirm-prev" style="
+            background: #F9FAFB; color: #374151; border: 1px solid #D1D5DB; border-radius: 8px;
+            padding: 12px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+            display: none;
+          " title="Go back to the previous job">← Back</button>
           <button id="confirm-apply" style="
             flex: 1; background: #4F46E5; color: white; border: none; border-radius: 8px;
             padding: 12px; font-size: 13px; font-weight: 600; cursor: pointer;
@@ -941,9 +946,10 @@
 
   /**
    * Show the confirmation modal for a job and wait for user decision.
-   * Returns: "apply" | "skip" | "stop"
+   * Returns: "apply" | "skip" | "stop" | "previous"
+   * hasPrevious — if true, the ← Back button is shown so user can go back.
    */
-  function showConfirmation(jobNumber, totalJobs, job, tailoredResult, jobDescription) {
+  function showConfirmation(jobNumber, totalJobs, job, tailoredResult, jobDescription, hasPrevious = false) {
     return new Promise((resolve) => {
       const modal = createConfirmationModal();
       modal.style.display = "flex";
@@ -951,6 +957,10 @@
       document.getElementById("confirm-step").textContent = `Job ${jobNumber}/${totalJobs}`;
       document.getElementById("confirm-title").textContent = job.title;
       document.getElementById("confirm-company").textContent = `${job.company} — ${job.location}`;
+
+      // Show/hide Back button based on position in queue
+      const prevBtn = document.getElementById("confirm-prev");
+      if (prevBtn) prevBtn.style.display = hasPrevious ? "block" : "none";
 
       const preview = document.getElementById("confirm-resume-preview");
       const scoreEl = document.getElementById("confirm-score-value");
@@ -978,19 +988,22 @@
         applyBtn.removeEventListener("click", onApply);
         skipBtn.removeEventListener("click", onSkip);
         stopBtn.removeEventListener("click", onStop);
+        if (prevBtn) prevBtn.removeEventListener("click", onPrev);
       };
 
       const applyBtn = document.getElementById("confirm-apply");
-      const skipBtn = document.getElementById("confirm-skip");
-      const stopBtn = document.getElementById("confirm-stop");
+      const skipBtn  = document.getElementById("confirm-skip");
+      const stopBtn  = document.getElementById("confirm-stop");
 
-      const onApply = () => { cleanup(); resolve("apply"); };
-      const onSkip = () => { cleanup(); resolve("skip"); };
-      const onStop = () => { cleanup(); resolve("stop"); };
+      const onApply    = () => { cleanup(); resolve("apply"); };
+      const onSkip     = () => { cleanup(); resolve("skip"); };
+      const onStop     = () => { cleanup(); resolve("stop"); };
+      const onPrev     = () => { cleanup(); resolve("previous"); };
 
       applyBtn.addEventListener("click", onApply);
       skipBtn.addEventListener("click", onSkip);
       stopBtn.addEventListener("click", onStop);
+      if (prevBtn) prevBtn.addEventListener("click", onPrev);
     });
   }
 
@@ -1075,7 +1088,10 @@
 
       // Step 3: Show confirmation modal immediately — user verifies JD, then we open the ATS
       updateStatus(`Review job ${jobNumber}/${selectedJobs.length}: ${job.title}`);
-      const decision = await showConfirmation(jobNumber, selectedJobs.length, job, null, jobDescription);
+      const decision = await showConfirmation(
+        jobNumber, selectedJobs.length, job, null, jobDescription,
+        /* hasPrevious */ i > 0
+      );
 
       if (decision === "stop") {
         stopApplying();
@@ -1083,6 +1099,25 @@
       }
 
       if (!isApplying) break; // Stop was clicked externally (panel button) while modal was open
+
+      if (decision === "previous") {
+        // Reset the current job's status so it shows as pending again
+        updateJobStatus(job.id, "pending");
+        // Go back to the previous job. The for-loop will increment i at the end
+        // of this iteration, so we need to subtract 2 to land on i-1.
+        // We also reset the previous job's status in case it was skipped/opened,
+        // so the user can make a fresh decision.
+        if (i > 0) {
+          const prevJob = selectedJobs[i - 1];
+          if (prevJob && (prevJob.status === "skipped" || prevJob.status === "opened" || prevJob.status === "applying")) {
+            updateJobStatus(prevJob.id, "pending");
+            if (prevJob.status === "skipped") skippedCount = Math.max(0, skippedCount - 1);
+            if (prevJob.status === "opened") appliedCount = Math.max(0, appliedCount - 1);
+          }
+          i -= 2; // for-loop will do i++ → ends up at i-1
+        }
+        continue;
+      }
 
       if (decision === "skip") {
         updateJobStatus(job.id, "skipped");
