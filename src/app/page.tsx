@@ -10,15 +10,15 @@ export default async function HomePage() {
       {/* Hero */}
       <section className="max-w-2xl mx-auto text-center mb-24">
         <p className="text-[13px] font-medium text-indigo-500 tracking-wide uppercase mb-4">
-          AI-Powered Job Applications
+          AI Agent Built for Job Applications
         </p>
         <h1 className="text-4xl md:text-5xl font-bold text-neutral-900 leading-[1.15] tracking-tight">
-          Apply to jobs
+          Faster than generic agents.
           <br />
-          <span className="text-indigo-600">10x faster with AI</span>
+          <span className="text-indigo-600">Keeps you in control.</span>
         </h1>
         <p className="mt-5 text-base text-neutral-500 leading-relaxed max-w-lg mx-auto">
-          AutoApply AI scans LinkedIn jobs, tailors your resume for each role, and fills every application form automatically — you just review and submit.
+          AutoApply AI scans LinkedIn jobs, tailors your resume for each role, and fills every application form automatically — cheaper than hiring help, faster than doing it yourself, and you review before anything gets submitted.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
           <Link
@@ -83,10 +83,10 @@ export default async function HomePage() {
           Why AutoApply
         </p>
         <div className="bg-neutral-50 rounded-xl border border-neutral-100 divide-y divide-neutral-100">
-          <Row icon="01" title="Not a chatbot" desc="Purpose-built prompts tuned by career coaches for PM and BA roles. Not a generic AI conversation." />
-          <Row icon="02" title="Keyword-matched" desc="Every resume is tuned to the job's exact requirements — right keywords, right structure, nothing generic." />
-          <Row icon="03" title="One-click export" desc="Download a formatted PDF or Word doc instantly. No copy-pasting into templates." />
-          <Row icon="04" title="Track everything" desc="Dashboard shows every job you tailored for, match scores, and application status." />
+          <Row icon="⚡" title="Faster than generic agents" desc="Purpose-built for job applications — not a general-purpose chatbot. Fills Greenhouse, Workday, Lever, Ashby, and Easy Apply forms automatically." />
+          <Row icon="💸" title="Cheaper than the alternatives" desc="No recruiter fees, no resume writing services. AutoApply tailors every application for a fraction of the cost." />
+          <Row icon="🎯" title="You stay in control" desc="AutoApply fills and tailors — you review before anything is submitted. Nothing goes out without your say." />
+          <Row icon="📊" title="Track everything" desc="Dashboard shows every job applied for, match scores, funnel stages, and application status in one place." />
         </div>
       </section>
     </div>
