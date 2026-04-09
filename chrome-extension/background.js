@@ -1267,54 +1267,57 @@ function injectFloatingTrigger(tabId) {
 
           actions.appendChild(makeDivider());
 
-          // ② Download / generate resume — both use countdown timer
-          function startResumeCountdown(btn, labelEl, sublabelEl, isGenerate) {
+          // ── Helper: get the sublabel div inside a makeBtn button ──────────
+          function getSublabel(btn) {
+            return btn.querySelectorAll("div div")[1] || null;
+          }
+
+          // ── ② a: Download existing PDF — short 3s countdown then fire ────
+          // Bar shrinks from 100% → 0% in exactly 3 seconds. Accurate because
+          // the download itself is near-instant.
+          function startDownloadCountdown(btn) {
+            if (btn.dataset.counting) return;
+            btn.dataset.counting = "1";
             btn.style.opacity = "0.7";
             btn.style.pointerEvents = "none";
 
-            const SECS = 5;
-            const color = isGenerate ? "#D97706" : "#059669";
+            const sublabelEl = getSublabel(btn);
+            if (!sublabelEl) return;
+
+            const SECS = 3;
             let remaining = SECS;
             let cancelled = false;
             let tickInterval;
 
-            // Render bar WITHOUT transition first — so the browser paints 100% width
             sublabelEl.innerHTML = `
-              <div style="margin-top:4px;">
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <span id="aa-dl-count" style="font-size:10px;color:#6B7280;font-family:${FONT};min-width:28px;">${SECS}s</span>
-                  <div style="flex:1;height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;">
-                    <div id="aa-dl-bar" style="height:100%;width:100%;background:${color};border-radius:2px;"></div>
-                  </div>
-                  <span id="aa-dl-cancel" style="font-size:10px;color:#9CA3AF;cursor:pointer;font-family:${FONT};">✕</span>
+              <div style="margin-top:4px;display:flex;align-items:center;gap:6px;">
+                <span id="aa-dl-count" style="font-size:10px;color:#059669;font-weight:600;font-family:${FONT};min-width:20px;">${SECS}s</span>
+                <div style="flex:1;height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;">
+                  <div id="aa-dl-bar" style="height:100%;width:100%;background:#059669;border-radius:2px;"></div>
                 </div>
+                <span id="aa-dl-cancel" style="font-size:11px;color:#9CA3AF;cursor:pointer;padding:0 2px;font-family:${FONT};" title="Cancel">✕</span>
               </div>`;
 
             const countEl = sublabelEl.querySelector("#aa-dl-count");
             const barEl   = sublabelEl.querySelector("#aa-dl-bar");
             const cancel  = sublabelEl.querySelector("#aa-dl-cancel");
 
-            cancel.addEventListener("click", (e) => {
-              e.stopPropagation();
-              cancelled = true;
+            function restore() {
               clearInterval(tickInterval);
               btn.style.opacity = "";
               btn.style.pointerEvents = "";
               delete btn.dataset.counting;
-              sublabelEl.textContent = isGenerate ? "Creates resume PDF for this role" : "Your AI-customised resume PDF";
-            });
+              sublabelEl.textContent = "Your AI-customised resume PDF";
+            }
 
-            // Double rAF: first frame paints the bar at 100%.
-            // Second frame applies the transition — now the browser animates from 100% → 0%
-            // over exactly SECS seconds, so bar and number stay in sync.
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                barEl.style.transition = `width ${SECS}s linear`;
-                barEl.style.width = "0%";
-              });
-            });
+            cancel.addEventListener("click", (e) => { e.stopPropagation(); cancelled = true; restore(); });
 
-            // Update the number every second — matches the bar visually
+            // Paint bar at 100%, THEN start the 3s shrink transition
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              barEl.style.transition = `width ${SECS}s linear`;
+              barEl.style.width = "0%";
+            }));
+
             tickInterval = setInterval(() => {
               if (cancelled) return;
               remaining--;
@@ -1322,40 +1325,99 @@ function injectFloatingTrigger(tabId) {
               if (remaining <= 0) {
                 clearInterval(tickInterval);
                 if (!cancelled) {
-                  sublabelEl.textContent = isGenerate ? "Generating…" : "Downloading…";
-                  setStatus(isGenerate ? "Generating resume…" : "Downloading…");
+                  setStatus("Downloading…");
                   chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
                     setStatus("✅ Check your downloads!");
-                    btn.style.opacity = "";
-                    btn.style.pointerEvents = "";
-                    delete btn.dataset.counting;
-                    sublabelEl.textContent = isGenerate ? "Creates resume PDF for this role" : "Your AI-customised resume PDF";
-                    setTimeout(() => setStatus(""), 4000);
+                    restore();
+                    setTimeout(() => setStatus(""), 3500);
                   });
                 }
               }
             }, 1000);
           }
 
+          // ── ② b: Generate (tailor + PDF) — elapsed timer + simulated progress ─
+          // We don't know exactly how long tailoring takes (15–45s typically),
+          // so we show elapsed time counting UP and a bar that fills using an
+          // asymptotic curve. When the API responds the bar jumps to 100%.
+          // This gives honest, transparent feedback without fake precision.
+          function startGenerateProgress(btn) {
+            if (btn.dataset.counting) return;
+            btn.dataset.counting = "1";
+            btn.style.opacity = "0.7";
+            btn.style.pointerEvents = "none";
+
+            const sublabelEl = getSublabel(btn);
+            if (!sublabelEl) return;
+
+            let elapsed = 0;
+
+            // Phase labels help the user understand what's happening
+            const phases = [
+              { after: 0,  label: "Reading job description…" },
+              { after: 5,  label: "Matching your experience…" },
+              { after: 12, label: "Tailoring bullet points…"  },
+              { after: 22, label: "Generating PDF…"           },
+              { after: 35, label: "Almost ready…"             },
+            ];
+
+            sublabelEl.innerHTML = `
+              <div style="margin-top:3px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                  <span id="aa-gen-phase" style="font-size:10px;color:#D97706;font-family:${FONT};">Reading job description…</span>
+                  <span id="aa-gen-time" style="font-size:10px;color:#9CA3AF;font-family:${FONT};">0s</span>
+                </div>
+                <div style="height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;">
+                  <div id="aa-gen-bar" style="height:100%;width:2%;background:#D97706;border-radius:2px;transition:width 1s ease-out;"></div>
+                </div>
+                <div style="font-size:9px;color:#9CA3AF;font-family:${FONT};margin-top:3px;">usually 20–40s — you'll be notified</div>
+              </div>`;
+
+            const phaseEl = sublabelEl.querySelector("#aa-gen-phase");
+            const timeEl  = sublabelEl.querySelector("#aa-gen-time");
+            const barEl   = sublabelEl.querySelector("#aa-gen-bar");
+
+            setStatus("Tailoring resume…");
+
+            // Fire the request IMMEDIATELY — no artificial delay
+            chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
+              clearInterval(tickInterval);
+              // Snap bar to 100% then finish
+              if (barEl) { barEl.style.transition = "width 0.4s ease-out"; barEl.style.width = "100%"; }
+              if (phaseEl) phaseEl.textContent = "✅ Downloading!";
+              if (timeEl) timeEl.textContent = elapsed + "s";
+              setStatus(`✅ Done in ${elapsed}s — check downloads!`);
+              btn.style.opacity = "";
+              btn.style.pointerEvents = "";
+              delete btn.dataset.counting;
+              setTimeout(() => {
+                sublabelEl.textContent = "Creates resume PDF for this role";
+                setStatus("");
+              }, 4000);
+            });
+
+            // Tick every second: update elapsed, phase label, and bar width
+            // Bar uses asymptotic formula: pct = 88 × (1 − e^(−elapsed/28))
+            // This fills quickly at first then slows near 88%, giving realistic feel.
+            const tickInterval = setInterval(() => {
+              elapsed++;
+              const pct = Math.round(88 * (1 - Math.exp(-elapsed / 28)));
+              if (timeEl) timeEl.textContent = elapsed + "s";
+              if (barEl)  barEl.style.width = pct + "%";
+              const phase = [...phases].reverse().find(p => elapsed >= p.after);
+              if (phaseEl && phase) phaseEl.textContent = phase.label;
+            }, 1000);
+          }
+
+          // ── Render the right button ───────────────────────────────────────
           if (hasPdf) {
             const dlBtn = makeBtn("📄", "Download tailored resume", "Your AI-customised resume PDF", "#059669", () => {
-              // Find the sublabel div — it's the second div inside the text column
-              const textCol = dlBtn.querySelectorAll("div div");
-              const sublabelEl = textCol[1] || null;
-              if (sublabelEl && !dlBtn.dataset.counting) {
-                dlBtn.dataset.counting = "1";
-                startResumeCountdown(dlBtn, null, sublabelEl, false);
-              }
+              startDownloadCountdown(dlBtn);
             });
             actions.appendChild(dlBtn);
           } else if (hasResume) {
             const tailorBtn = makeBtn("✨", "Generate tailored resume", "Creates resume PDF for this role", "#D97706", () => {
-              const textCol = tailorBtn.querySelectorAll("div div");
-              const sublabelEl = textCol[1] || null;
-              if (sublabelEl && !tailorBtn.dataset.counting) {
-                tailorBtn.dataset.counting = "1";
-                startResumeCountdown(tailorBtn, null, sublabelEl, true);
-              }
+              startGenerateProgress(tailorBtn);
             });
             actions.appendChild(tailorBtn);
           }
