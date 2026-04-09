@@ -715,7 +715,12 @@
     // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
     const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
     const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
-      || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+      || (cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle
+          && cacheData.lastTailoredJob?.company === pendingJob.company);
+
+    if (!isSameJob) {
+      chrome.storage.local.remove(["tailoredResumePdf", "tailoredResumeFilename"]);
+    }
 
     const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
       ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })

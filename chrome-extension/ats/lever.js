@@ -117,8 +117,17 @@
       showBanner("Tailoring your resume for this role...", "ai", { subtext: "Basic info filled ✓ — personalising resume now..." });
       // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
       const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+      // isSameJob requires BOTH title AND company to match (title alone is too loose —
+      // two different "Senior Product Manager" roles at different companies would incorrectly share a cache).
       const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
-        || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+        || (cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle
+            && cacheData.lastTailoredJob?.company === pendingJob.company);
+
+      // Clear stale PDF from a previous job so we never upload the wrong resume
+      if (!isSameJob) {
+        chrome.storage.local.remove(["tailoredResumePdf", "tailoredResumeFilename"]);
+        LOG("Cleared stale resume PDF (different job)");
+      }
 
       const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
         ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
@@ -775,8 +784,17 @@
         if (!job) return;
         removeBanner();
         chrome.storage.local.set({ pendingApplication: job }, () => {
-          window.__autoapply_ats_injected = false;
-          setTimeout(() => init(), 300);
+          // If we are on the job DETAIL page (no /apply suffix), navigate to the apply
+          // page so the form is present when lever.js re-injects and fills it.
+          // pendingApplication stays in storage — the /apply page injection will consume it.
+          if (!window.location.pathname.endsWith("/apply")) {
+            const applyUrl = window.location.href.replace(/\/?$/, "/apply");
+            window.location.href = applyUrl;
+          } else {
+            // Already on /apply — re-run init() in place
+            window.__autoapply_ats_injected = false;
+            setTimeout(() => init(), 300);
+          }
         });
       });
 
