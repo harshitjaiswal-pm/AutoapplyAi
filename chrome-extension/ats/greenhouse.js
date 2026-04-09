@@ -114,78 +114,15 @@
       showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
       await fillBasicFieldsOnly();
 
-      // ── STEP 2: Fire tailoring as a background Promise ──
-      showBanner("Tailoring your resume for this role...", "ai", {
-        subtext: "Basic info filled ✓ — personalising resume now...",
+      // ── STEP 2: Show YOUR TURN immediately — no waiting ──
+      // User can start reviewing the form right away.
+      // Tailoring + resume upload continue silently in the background.
+      showBanner("YOUR TURN — Basic info filled. Review and submit when ready.", "user", {
+        subtext: "✨ Tailoring resume in background — cover letter & extra fields will fill automatically...",
       });
-      // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
-      const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
-      // [AutoQA fix 2026-04-09] Added company check to isSameJob — title-only match
-      // could cause a wrong cache hit when two different jobs share the same title
-      // (e.g. two "Senior Product Manager" roles at different companies). Lever.js
-      // already required both title AND company; greenhouse.js was inconsistent.
-      const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
-        || (cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle
-            && cacheData.lastTailoredJob?.company === pendingJob.company);
+      chrome.storage.local.remove(["pendingApplication"]);
 
-      const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
-        ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
-        : sendMessageWithTimeout({
-          type: "TAILOR_AND_FILL",
-          job: { ...pendingJob, jobDescription },
-        }, 90000).catch(err => ({ error: err.message }));
-
-      // ── STEP 3: Wait for tailoring, then fill remaining fields ──
-      const tailoredData = await tailoringPromise;
-
-      if (tailoredData?.error) {
-        console.error("AutoApply: Tailoring error:", tailoredData.error);
-        showBanner("Tailoring had an issue — basic info already filled.", "error", { subtext: tailoredData.error });
-        showBanner("Review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
-        return;
-      }
-
-      if (!tailoredData?.tailoredResult) {
-        showBanner("Tailoring returned no data — basic info already filled.", "error");
-        showBanner("Review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
-        return;
-      }
-
-      showBanner("Filling remaining fields with tailored content...", "ai");
-      console.log("AutoApply: Got tailored result, filling Greenhouse form");
-
-      // Fill all fields (cover letter, dropdowns, custom Q&A) with tailored data
-      await fillGreenhouseForm(tailoredData.tailoredResult, pendingJob, jobDescription);
-
-      // Attempt resume file upload
-      await attemptResumeUpload();
-
-      // Download tailored resume PDF
-      chrome.runtime.sendMessage({
-        type: "DOWNLOAD_RESUME",
-        job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
-      });
-
-      showBanner(
-        "Fields filled — upload the downloaded resume PDF, then review and submit.",
-        "user",
-        { subtext: "AutoApply stops here — you stay in control of the final submit." }
-      );
-
-      // Signal that this application was completed (form filled successfully)
-      chrome.runtime.sendMessage({
-        type: "APPLICATION_COMPLETED",
-        job: {
-          id: pendingJob.id,
-          jobTitle: pendingJob.jobTitle,
-          company: pendingJob.company,
-          jobUrl: pendingJob.jobUrl || window.location.href,
-          matchScore: tailoredData.tailoredResult?.matchScore || 0,
-          completedAt: new Date().toISOString(),
-        },
-      });
-
-      // Start watching for application submission
+      // Watch for submission in the background
       watchSubmit({
         jobTitle: pendingJob.jobTitle,
         company: pendingJob.company,
@@ -195,7 +132,61 @@
         resumeFilename: pendingJob.resumeFilename || "resume.pdf",
       });
 
-      chrome.storage.local.remove(["pendingApplication"]);
+      // ── STEP 3: Tailoring + extra fields + resume — all non-blocking ──
+      (async () => {
+        try {
+          const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+          const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
+            || (cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle
+                && cacheData.lastTailoredJob?.company === pendingJob.company);
+
+          const tailoredData = await ((cacheData.lastTailoredResult && isSameJob)
+            ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
+            : sendMessageWithTimeout({
+                type: "TAILOR_AND_FILL",
+                job: { ...pendingJob, jobDescription },
+              }, 90000).catch(err => ({ error: err.message })));
+
+          if (tailoredData?.tailoredResult) {
+            console.log("AutoApply: Background tailoring done — filling remaining fields");
+            await fillGreenhouseForm(tailoredData.tailoredResult, pendingJob, jobDescription);
+
+            // Try programmatic resume upload first
+            const uploaded = await attemptResumeUpload();
+            if (uploaded) {
+              showBanner("YOUR TURN — Resume uploaded ✓, all fields filled. Review and submit.", "user", {
+                subtext: "AutoApply stops here — you stay in control of the final submit.",
+              });
+            } else {
+              // Show a download button in the banner — no forced wait, user grabs it when ready
+              showBanner("YOUR TURN — Fields filled. Get your tailored resume below.", "user", {
+                subtext: "Download your tailored PDF and drag it into the resume upload field.",
+              });
+              chrome.runtime.sendMessage({
+                type: "DOWNLOAD_RESUME",
+                job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
+              });
+            }
+
+            chrome.runtime.sendMessage({
+              type: "APPLICATION_COMPLETED",
+              job: {
+                id: pendingJob.id,
+                jobTitle: pendingJob.jobTitle,
+                company: pendingJob.company,
+                jobUrl: pendingJob.jobUrl || window.location.href,
+                matchScore: tailoredData.tailoredResult?.matchScore || 0,
+                completedAt: new Date().toISOString(),
+              },
+            });
+          } else {
+            console.warn("AutoApply: Background tailoring returned no data —", tailoredData?.error);
+            // Banner already shows YOUR TURN — no need to change it
+          }
+        } catch (bgErr) {
+          console.warn("AutoApply: Background tailoring error (non-fatal):", bgErr.message);
+        }
+      })();
 
     } catch (err) {
       console.error("AutoApply: Greenhouse error", err);
