@@ -2403,11 +2403,22 @@
 
       banner.style.background = cfg.bg;
       banner.innerHTML = `
-        <div style="
+        <button id="aa-btn-collapse" style="
+          all: initial;
+          position: absolute;
+          top: 6px; right: 8px;
+          background: rgba(255,255,255,0.15);
+          border: none; border-radius: 4px;
+          color: #fff; font-size: 11px; font-weight: 700;
+          cursor: pointer; padding: 2px 8px; line-height: 1.6;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          z-index: 1;
+        " title="Collapse banner">▲</button>
+        <div id="aa-banner-inner" style="
           all: initial;
           display: block;
           position: relative;
-          padding: 10px 20px 12px;
+          padding: 10px 36px 12px 20px;
           box-sizing: border-box;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
           color: #fff;
@@ -2419,6 +2430,14 @@
           ${subtextRow}
           ${actionRow}
         </div>`;
+
+      // Restore collapsed state across banner updates
+      if (banner._collapsed) {
+        const inner = document.getElementById("aa-banner-inner");
+        if (inner) inner.style.display = "none";
+        const colBtn = document.getElementById("aa-btn-collapse");
+        if (colBtn) colBtn.textContent = "▼";
+      }
 
       // Push page content down so the banner never hides anything
       requestAnimationFrame(() => {
@@ -2510,6 +2529,25 @@
       document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
         chrome.storage.local.set({ _aa_paused: false });
         showBanner("Resuming...", "ai", { subtext: "Picking up where we left off..." });
+      });
+
+      document.getElementById("aa-btn-collapse")?.addEventListener("click", () => {
+        const inner = document.getElementById("aa-banner-inner");
+        const colBtn = document.getElementById("aa-btn-collapse");
+        if (!inner || !colBtn) return;
+        banner._collapsed = !banner._collapsed;
+        if (banner._collapsed) {
+          inner.style.display = "none";
+          colBtn.textContent = "▼";
+          colBtn.title = "Expand banner";
+        } else {
+          inner.style.display = "block";
+          colBtn.textContent = "▲";
+          colBtn.title = "Collapse banner";
+        }
+        requestAnimationFrame(() => {
+          document.body.style.paddingTop = (banner.offsetHeight || 0) + "px";
+        });
       });
     });
 
