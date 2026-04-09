@@ -768,11 +768,21 @@
       const basicFilled = await fillBasicProfile();
       // ATS-specific supplemental fill — catches fields missed by the generic label matcher
       if (isICIMS || isTaleo) {
-        const storedProfile = await chrome.storage.local.get(["userProfile"]);
+        const storedProfile = await chrome.storage.local.get(["userProfile", "parsedResume"]);
         const atsFilled = isICIMS
           ? fillICIMSForm(storedProfile.userProfile || {})
           : fillTaleoForm(storedProfile.userProfile || {});
         try { AALog && AALog.form("ats.fillAtsSpecific.done", { ats: isICIMS ? "icims" : "taleo", fieldsFilled: atsFilled }); } catch(_){}
+
+        // Fill Work History section (iCIMS only — Taleo typically pre-populates from profile)
+        if (isICIMS) {
+          const workExp = storedProfile.parsedResume?.workExperience || [];
+          if (workExp.length > 0) {
+            showBanner("Filling iCIMS Work History...", "ai", { subtext: `Adding ${workExp.length} work experience entr${workExp.length === 1 ? "y" : "ies"}...` });
+            const whFilled = await fillICIMSWorkHistory(workExp);
+            try { AALog && AALog.form("ats.icims.workHistory.done", { entries: whFilled }); } catch(_){}
+          }
+        }
       }
       try { AALog && AALog.form("ats.fillBasic.done", { fieldsFilled: basicFilled }); } catch(_){}
 
@@ -1968,6 +1978,138 @@
 
     console.log(`AutoApply: iCIMS-specific fill: ${filled} fields`);
     return filled;
+  }
+
+  /**
+   * Fill iCIMS Work History section by clicking "Add Work History" for each
+   * entry and filling the resulting fields.
+   *
+   * iCIMS renders work history as a repeating section. Each entry is created
+   * by clicking an "Add" / "Add Work History" button, which shows an inline
+   * form (or modal). Fields use predictable id/name patterns:
+   *   employer / company / organization → company name
+   *   title / jobtitle / job_title       → job title
+   *   startdate / start_date / datefrom  → start date (MM/YYYY or MM/DD/YYYY)
+   *   enddate   / end_date   / dateto    → end date
+   *   current / currentemployer          → "currently work here" checkbox
+   *   description / duties / jobdesc     → job description
+   *
+   * Returns the number of entries filled.
+   */
+  async function fillICIMSWorkHistory(workExp) {
+    if (!workExp || workExp.length === 0) return 0;
+
+    // ── Locate the Work History section ──────────────────────────────────────
+    // Find the "Add Work History" / "Add a record" button near a heading that
+    // says "Work History" or "Work Experience".
+    function findAddWorkHistoryButton() {
+      // Strategy 1: button text
+      for (const btn of document.querySelectorAll("button, a[role='button'], input[type='button'], input[type='submit']")) {
+        const t = (btn.textContent || btn.value || "").trim().toLowerCase();
+        if (/add work history/i.test(t) || /add (a )?record/i.test(t) || t === "add") {
+          // Only if the button is inside (or near) a "work history" section
+          let el = btn;
+          for (let d = 0; d < 10 && el && el !== document.body; d++, el = el.parentElement) {
+            if ((el.textContent || "").toLowerCase().includes("work history") ||
+                (el.textContent || "").toLowerCase().includes("work experience") ||
+                (el.textContent || "").toLowerCase().includes("employment")) {
+              return btn;
+            }
+          }
+        }
+      }
+      // Strategy 2: aria-label
+      for (const btn of document.querySelectorAll("button[aria-label]")) {
+        const a = (btn.getAttribute("aria-label") || "").toLowerCase();
+        if (a.includes("add") && (a.includes("work") || a.includes("employment") || a.includes("history"))) {
+          return btn;
+        }
+      }
+      return null;
+    }
+
+    // ── Find the fields within a just-opened work history entry form ──────────
+    function findWHField(patterns) {
+      for (const pattern of patterns) {
+        const el = document.querySelector(
+          `input[id*="${pattern}" i], input[name*="${pattern}" i], ` +
+          `textarea[id*="${pattern}" i], textarea[name*="${pattern}" i]`
+        );
+        if (el && el.offsetParent !== null) return el;
+      }
+      return null;
+    }
+
+    // ── Format a date string (ISO "2020-03" or "2020") to MM/YYYY ────────────
+    function fmtDate(d) {
+      if (!d) return "";
+      const m = String(d).match(/^(\d{4})-(\d{2})/);
+      if (m) return `${m[2]}/${m[1]}`;
+      const y = String(d).match(/^(\d{4})/);
+      if (y) return `01/${y[1]}`;
+      return d;
+    }
+
+    let entriesFilled = 0;
+    for (let i = 0; i < workExp.length; i++) {
+      const exp = workExp[i];
+      const addBtn = findAddWorkHistoryButton();
+      if (!addBtn) {
+        console.log(`AutoApply: iCIMS WH — no Add button found at entry ${i + 1}, stopping`);
+        break;
+      }
+
+      addBtn.click();
+      // Wait for the inline form / modal to appear
+      await new Promise(r => setTimeout(r, 1200));
+
+      // Fill company
+      const companyInput = findWHField(["employer", "company", "organization", "orgname"]);
+      if (companyInput) setNativeValue(companyInput, exp.company || "");
+
+      // Fill job title
+      const titleInput = findWHField(["jobtitle", "job_title", "title", "position"]);
+      if (titleInput) setNativeValue(titleInput, exp.title || exp.role || "");
+
+      // Fill start date
+      const startInput = findWHField(["startdate", "start_date", "datefrom", "date_from", "begindate"]);
+      if (startInput) setNativeValue(startInput, fmtDate(exp.startDate));
+
+      // Fill end date (skip if current position)
+      const isCurrent = exp.current || (exp.endDate || "").toLowerCase().includes("present");
+      if (!isCurrent) {
+        const endInput = findWHField(["enddate", "end_date", "dateto", "date_to"]);
+        if (endInput) setNativeValue(endInput, fmtDate(exp.endDate));
+      } else {
+        // Tick the "currently work here" checkbox
+        const currentCb = document.querySelector(
+          'input[type="checkbox"][id*="current" i], input[type="checkbox"][name*="current" i]'
+        );
+        if (currentCb && !currentCb.checked) currentCb.click();
+      }
+
+      // Fill description / duties
+      const descInput = findWHField(["description", "duties", "jobdesc", "jobnotes", "summary", "responsibilities"]);
+      if (descInput) setNativeValue(descInput, exp.description || exp.summary || "");
+
+      // Click the Save/Add button inside the inline form if present
+      await new Promise(r => setTimeout(r, 300));
+      const saveBtns = Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit']"))
+        .filter(b => {
+          const t = (b.textContent || b.value || "").trim().toLowerCase();
+          return /^save$/i.test(t) || /^add$/i.test(t) || /save record/i.test(t) || /save entry/i.test(t);
+        });
+      if (saveBtns.length > 0) {
+        saveBtns[saveBtns.length - 1].click(); // click the last matching save (modal footer)
+        await new Promise(r => setTimeout(r, 800));
+      }
+
+      entriesFilled++;
+      console.log(`AutoApply: iCIMS WH — filled entry ${i + 1}: "${exp.title}" at "${exp.company}"`);
+    }
+
+    console.log(`AutoApply: iCIMS Work History fill complete — ${entriesFilled} entr${entriesFilled === 1 ? "y" : "ies"} filled`);
+    return entriesFilled;
   }
 
   /**
