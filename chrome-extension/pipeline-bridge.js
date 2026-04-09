@@ -101,4 +101,26 @@
       new CustomEvent("autoapply-completed-sync", { detail: { applications: completed } })
     );
   });
+
+  /* ── Funnel Stats Sync: Extension → React App ── */
+  // Sync 4-stage funnel stats so the dashboard can display real conversion data
+  function syncFunnelStats() {
+    chrome.storage.local.get(["funnelStats"], (result) => {
+      const stats = result.funnelStats || { opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 };
+      localStorage.setItem("autoapply-funnel-stats", JSON.stringify(stats));
+      window.dispatchEvent(new CustomEvent("autoapply-funnel-sync", { detail: stats }));
+      console.log("AutoApply Bridge: Funnel stats synced", stats);
+    });
+  }
+
+  syncFunnelStats();
+
+  // Re-sync whenever funnelStats changes in chrome.storage (real-time updates)
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.funnelStats) {
+      const stats = changes.funnelStats.newValue || { opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 };
+      localStorage.setItem("autoapply-funnel-stats", JSON.stringify(stats));
+      window.dispatchEvent(new CustomEvent("autoapply-funnel-sync", { detail: stats }));
+    }
+  });
 })();

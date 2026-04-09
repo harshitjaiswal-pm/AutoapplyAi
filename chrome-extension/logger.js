@@ -91,6 +91,21 @@
     self.__aa_enqueueLogWrite = bgEnqueueWrite;
   }
 
+  // Fallback: write directly to chrome.storage when background SW is unreachable.
+  // Uses a simple in-content-script lock via promise chain to prevent concurrent writes.
+  let _directWriteChain = Promise.resolve();
+  function directStorageWrite(toWrite) {
+    _directWriteChain = _directWriteChain.then(() => new Promise((resolve) => {
+      try {
+        chrome.storage.local.get([STORAGE_KEY], (result) => {
+          const existing = Array.isArray(result[STORAGE_KEY]) ? result[STORAGE_KEY] : [];
+          const next = existing.concat(toWrite).slice(-MAX_ENTRIES);
+          chrome.storage.local.set({ [STORAGE_KEY]: next }, resolve);
+        });
+      } catch (_) { resolve(); }
+    }));
+  }
+
   function scheduleFlush() {
     if (flushTimer) return;
     flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
@@ -105,12 +120,18 @@
       if (isBackground) {
         bgEnqueueWrite(toWrite);
       } else {
-        // Content-script / popup → ask background to persist.
-        chrome.runtime.sendMessage({ __aa_log_batch: true, entries: toWrite }, () => {
-          // Swallow lastError — if background isn't reachable (e.g. extension
-          // reload), the logs are just dropped. We never throw from logging.
-          void chrome.runtime.lastError;
-        });
+        // Content-script / popup → try background first (serialized writes).
+        // If SW is idle (MV3 common case), fall back to direct chrome.storage write.
+        try {
+          chrome.runtime.sendMessage({ __aa_log_batch: true, entries: toWrite }, () => {
+            if (chrome.runtime.lastError) {
+              // SW unreachable — write directly to storage as fallback
+              directStorageWrite(toWrite);
+            }
+          });
+        } catch (e) {
+          directStorageWrite(toWrite);
+        }
       }
     } catch (e) {
       // chrome.storage not available (unlikely) — drop silently.

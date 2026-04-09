@@ -67,6 +67,47 @@
   setTimeout(() => init(), 1500);
 
   async function init() {
+    // ── Funnel Stage 4: Confirmation page detection ──────────────────────────
+    // Greenhouse redirects to a new page on submit — MutationObserver can't catch
+    // that. Instead, at init() time we check if this IS a confirmation page.
+    // If so, look up the lastFilledJob and record stage 4 (completed).
+    const pageTextEarly = (document.body?.innerText || "").toLowerCase();
+    const pageHtmlEarly = (document.body?.innerHTML || "").toLowerCase();
+    const isConfirmationPage =
+      pageTextEarly.includes("application sent") ||
+      pageTextEarly.includes("application submitted") ||
+      pageTextEarly.includes("thank you for applying") ||
+      pageTextEarly.includes("your application has been received") ||
+      pageTextEarly.includes("thank you for your interest") ||
+      pageTextEarly.includes("successfully submitted") ||
+      pageHtmlEarly.includes("submit-success") ||
+      pageHtmlEarly.includes("application-success");
+
+    if (isConfirmationPage) {
+      const lastData = await new Promise(r => chrome.storage.local.get(["lastFilledJob"], r));
+      const lastJob = lastData.lastFilledJob;
+      if (lastJob && !lastJob._completionRecorded) {
+        console.log("AutoApply: Detected Greenhouse confirmation page — recording Stage 4 (completed)");
+        // Mark as recorded so re-injection doesn't double-count
+        chrome.storage.local.set({ lastFilledJob: { ...lastJob, _completionRecorded: true } });
+        chrome.runtime.sendMessage({
+          type: "FUNNEL_STAGE",
+          stage: "completed",
+          job: {
+            id: lastJob.id,
+            jobTitle: lastJob.jobTitle,
+            company: lastJob.company,
+            jobUrl: lastJob.jobUrl || window.location.href,
+            matchScore: lastJob.matchScore || 0,
+            completedAt: new Date().toISOString(),
+          },
+        }).catch(() => {});
+        // Update banner to show success
+        showBanner("✅ Application completed and logged to your dashboard!", "success");
+      }
+      return; // Don't try to fill a confirmation page
+    }
+
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     if (!stored.pendingApplication) {
       console.log("AutoApply: No pending application found");
@@ -122,6 +163,20 @@
       });
       chrome.storage.local.remove(["pendingApplication"]);
 
+      // ── Funnel Stage 2: Form filled ──────────────────────────────────────
+      // Store lastFilledJob so the confirmation page can attribute Stage 4
+      const lastFilledJobData = {
+        id: pendingJob.id,
+        jobTitle: pendingJob.jobTitle,
+        company: pendingJob.company,
+        jobUrl: pendingJob.jobUrl || window.location.href,
+        jobDescription: pendingJob.jobDescription || "",
+        funnelFormFilledAt: new Date().toISOString(),
+        _completionRecorded: false,
+      };
+      chrome.storage.local.set({ lastFilledJob: lastFilledJobData });
+      chrome.runtime.sendMessage({ type: "FUNNEL_STAGE", stage: "formFilled", job: lastFilledJobData }).catch(() => {});
+
       // Watch for submission in the background
       watchSubmit({
         jobTitle: pendingJob.jobTitle,
@@ -149,6 +204,21 @@
 
           if (tailoredData?.tailoredResult) {
             console.log("AutoApply: Background tailoring done — filling remaining fields");
+
+            // ── Funnel Stage 3: Tailored resume created ───────────────────
+            const matchScore = tailoredData.tailoredResult?.matchScore || 0;
+            chrome.runtime.sendMessage({
+              type: "FUNNEL_STAGE",
+              stage: "resumeTailored",
+              job: { id: pendingJob.id, jobTitle: pendingJob.jobTitle, company: pendingJob.company, matchScore },
+            }).catch(() => {});
+            // Update lastFilledJob with score so Stage 4 can include it
+            chrome.storage.local.get(["lastFilledJob"], (d) => {
+              if (d.lastFilledJob) {
+                chrome.storage.local.set({ lastFilledJob: { ...d.lastFilledJob, matchScore, funnelResumeTailoredAt: new Date().toISOString() } });
+              }
+            });
+
             await fillGreenhouseForm(tailoredData.tailoredResult, pendingJob, jobDescription);
 
             // Try programmatic resume upload first

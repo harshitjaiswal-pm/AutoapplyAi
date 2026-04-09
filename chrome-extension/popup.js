@@ -177,11 +177,20 @@ function humanizeLogEntry(entry) {
   if (stage.includes("batch.start"))          return { type: "info",    msg: `Starting batch — ${data.total ?? "?"} jobs` };
   if (stage.includes("batch.jobStart"))       return { type: "info",    msg: `Processing job ${data.jobNumber ?? "?"}/${data.total ?? "?"}` };
   if (stage.includes("linkedin.jd.scraped"))  return { type: "info",    msg: `Job description found (${data.jdLen ?? 0} chars)` };
-  if (stage.includes("linkedin.clickApply"))  return { type: "info",    msg: "Opening application page…" };
-  if (stage.includes("linkedin.apply.result"))return { type: "info",    msg: `Apply result: ${data.applyType ?? "unknown"}` };
-  if (stage.includes("tailoring.done"))       return { type: "success", msg: `Resume tailored — match score ${data.matchScore ?? "?"}%` };
-  if (stage.includes("tailoring.start"))      return { type: "info",    msg: "Tailoring resume for this role…" };
-  if (entry.category === "ERROR")             return { type: "error",   msg: `Error: ${stage}` };
+  if (stage.includes("linkedin.clickApply.noButton"))     return { type: "error",   msg: `No Apply button found — job may use unsupported format` };
+  if (stage.includes("linkedin.processJob.noApplyButton"))return { type: "error",   msg: `Failed: Apply button not found on ${data.company || "company"} job` };
+  if (stage.includes("linkedin.processJob.alreadyApplied"))return { type: "warn",  msg: `Skipped: already applied to ${data.company || "this job"}` };
+  if (stage.includes("linkedin.processJob.panelMismatch"))return { type: "warn",   msg: `Skipped: LinkedIn panel showed wrong job — retrying` };
+  if (stage.includes("linkedin.clickApply.easyApply"))    return { type: "warn",   msg: "Skipped Easy Apply job (not yet supported)" };
+  if (stage.includes("linkedin.clickApply.external"))     return { type: "success", msg: `Opened application page` };
+  if (stage.includes("linkedin.clickApply"))              return { type: "info",    msg: "Opening application page…" };
+  if (stage.includes("linkedin.apply.result"))            return { type: "info",    msg: `Apply result: ${data.applyType ?? "unknown"}` };
+  if (stage.includes("bg.tailorAndFill.done"))            return { type: "success", msg: `Resume tailored — ${data.ms ?? "?"}ms` };
+  if (stage.includes("bg.tailorAndFill.exception"))       return { type: "error",   msg: `Tailoring failed — ${data.message || "API error"}` };
+  if (stage.includes("bg.inject.failed"))                 return { type: "error",   msg: `Failed to inject script into tab` };
+  if (stage.includes("tailoring.done"))                   return { type: "success", msg: `Resume tailored — match score ${data.matchScore ?? "?"}%` };
+  if (stage.includes("tailoring.start"))                  return { type: "info",    msg: "Tailoring resume for this role…" };
+  if (entry.category === "ERROR")                         return { type: "error",   msg: `Error: ${stage.replace(/\./g, " › ")}` };
   if (entry.category === "API")               return { type: "info",    msg: `AI request: ${stage}` };
   return null; // skip low-level entries
 }

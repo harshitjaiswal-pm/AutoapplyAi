@@ -124,6 +124,10 @@ function DashboardPage() {
 
   /* ── batch run ────────────────────────────────────────────────────────── */
   const [mode, setMode] = useState<"fast" | "pro">("fast");
+
+  /* ── funnel stats (synced from extension via pipeline-bridge) ──────────── */
+  interface FunnelStats { opened: number; formFilled: number; resumeTailored: number; completed: number; }
+  const [funnelStats, setFunnelStats] = useState<FunnelStats>({ opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 });
   const isRunning =
     pipelineJobs.some((j) => j.status === "analyzing" || j.status === "tailoring") &&
     currentBatch?.isRunning === true;
@@ -162,6 +166,22 @@ function DashboardPage() {
     window.addEventListener("message", onBridgeMessage);
     return () => window.removeEventListener("message", onBridgeMessage);
   }, [importJobs]);
+
+  /* ── sync funnel stats from extension ────────────────────────────────── */
+  useEffect(() => {
+    function loadFunnel() {
+      try {
+        const raw = localStorage.getItem("autoapply-funnel-stats");
+        if (raw) setFunnelStats(JSON.parse(raw));
+      } catch {}
+    }
+    loadFunnel();
+    function onFunnelSync(e: CustomEvent) {
+      if (e.detail) setFunnelStats(e.detail as FunnelStats);
+    }
+    window.addEventListener("autoapply-funnel-sync", onFunnelSync as EventListener);
+    return () => window.removeEventListener("autoapply-funnel-sync", onFunnelSync as EventListener);
+  }, []);
 
   /* ── sync completed apps from extension ──────────────────────────────── */
   useEffect(() => {
@@ -625,28 +645,43 @@ function DashboardPage() {
 
           {/* Funnel */}
           <div className="bg-white rounded-2xl border border-neutral-200 p-5">
-            <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-4">Application Funnel</h2>
-            <div className="space-y-2.5">
+            <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Application Funnel</h2>
+            <p className="text-[10px] text-neutral-400 mb-4">Tracked automatically by the extension</p>
+            <div className="space-y-3">
               {[
-                { label: "Applied", value: totalApplied, max: Math.max(totalApplied, 1), color: "bg-indigo-500" },
-                { label: "Interviewing", value: totalInterviewing, max: Math.max(totalApplied, 1), color: "bg-violet-500" },
-                { label: "Offers", value: totalOffers, max: Math.max(totalApplied, 1), color: "bg-emerald-500" },
-              ].map((row) => (
-                <div key={row.label}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-neutral-500">{row.label}</span>
-                    <span className="text-xs font-semibold text-neutral-800">{row.value}</span>
+                { label: "Opened from LinkedIn", value: funnelStats.opened,         color: "bg-indigo-400",  emoji: "🔍" },
+                { label: "Filled Application",   value: funnelStats.formFilled,     color: "bg-violet-500",  emoji: "✏️" },
+                { label: "Resume Tailored",       value: funnelStats.resumeTailored, color: "bg-amber-500",   emoji: "✨" },
+                { label: "Application Completed", value: funnelStats.completed,      color: "bg-emerald-500", emoji: "✅" },
+              ].map((row, i, arr) => {
+                const maxVal = Math.max(funnelStats.opened, 1);
+                const pct = Math.round((row.value / maxVal) * 100);
+                const prevVal = i > 0 ? arr[i-1].value : null;
+                const convRate = (prevVal && prevVal > 0) ? Math.round((row.value / prevVal) * 100) : null;
+                return (
+                  <div key={row.label}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-neutral-600 flex items-center gap-1">
+                        <span>{row.emoji}</span> {row.label}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {convRate !== null && row.value > 0 && (
+                          <span className="text-[10px] text-neutral-400">{convRate}%</span>
+                        )}
+                        <span className="text-xs font-bold text-neutral-800 w-6 text-right">{row.value}</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${row.color} rounded-full transition-all duration-700`}
+                        style={{ width: `${funnelStats.opened > 0 ? pct : 0}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-2 bg-neutral-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${row.color} rounded-full transition-all duration-500`}
-                      style={{ width: `${totalApplied > 0 ? (row.value / row.max) * 100 : 0}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-              {totalApplied === 0 && (
-                <p className="text-[11px] text-neutral-400 text-center pt-1">Start applying to see your funnel</p>
+                );
+              })}
+              {funnelStats.opened === 0 && (
+                <p className="text-[11px] text-neutral-400 text-center pt-1">Apply from LinkedIn to see your funnel</p>
               )}
             </div>
           </div>

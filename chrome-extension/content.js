@@ -602,10 +602,21 @@
         continue; // Keep looking for an external Apply button which takes priority
       }
 
-      // External Apply button — usually has an external link icon or opens new tab
-      if ((text === "apply" || text === "apply now" ||
-           ariaLabel.includes("apply to") || ariaLabel.includes("apply for")) &&
-          !text.includes("easy")) {
+      // External Apply button — detect both "apply" text and "apply on company website" variants
+      const isApplyText = (
+        text === "apply" ||
+        text === "apply now" ||
+        text === "apply on company website" ||
+        text === "apply on employer site" ||
+        text.startsWith("apply") && text.length < 35 && !text.includes("easy")
+      );
+      const isApplyAria = (
+        ariaLabel.includes("apply to") ||
+        ariaLabel.includes("apply for") ||
+        ariaLabel.includes("apply on") ||
+        ariaLabel.includes("apply now")
+      );
+      if ((isApplyText || isApplyAria) && !text.includes("easy")) {
         candidates.push({ kind: "apply_candidate", text: text.slice(0, 60), ariaLabel: ariaLabel.slice(0, 80), tag: btn.tagName, href: href.slice(0, 80) });
         // Prefer buttons that link to external company website
         if (btn.tagName === "A" || href || btn.querySelector("svg") ||
@@ -856,9 +867,19 @@
         skippedCount++;
         updateStatus(`Skipped (Easy Apply): ${job.title}`);
         return { success: false, reason: "Easy Apply — skipped" };
+      } else if (applyType === "already_applied") {
+        // Already applied — skip, don't count as failure
+        updateJobStatus(job.id, "skipped");
+        skippedCount++;
+        updateStatus(`Skipped (already applied): ${job.title}`);
+        try { AALog && AALog.nav("linkedin.processJob.alreadyApplied", { title: job.title, company: job.company }); } catch(_){}
+        return { success: false, reason: "Already applied" };
       } else {
-        updateJobStatus(job.id, "failed");
-        return { success: false, reason: "No Apply button found" };
+        // null — no Apply button found — log the reason clearly
+        const reason = "No Apply button found — check extension logs for candidates";
+        updateJobStatus(job.id, "failed", reason);
+        try { AALog && AALog.error("linkedin.processJob.noApplyButton", { title: job.title, company: job.company }); } catch(_){}
+        return { success: false, reason };
       }
     } catch (e) {
       console.error("AutoApply: Error processing job", job.title, e);
@@ -1405,7 +1426,15 @@
       if (statusText) job.statusText = statusText;
       // Track when we started processing this job (for elapsed timer)
       if (status === "applying" && !job.startedAt) job.startedAt = Date.now();
-      if (status !== "applying") { job.startedAt = null; job.statusText = ""; }
+      if (status !== "applying") {
+        job.startedAt = null;
+        // Preserve failure reasons — only clear statusText for non-failed transitions
+        if (status === "failed" && statusText) {
+          job.failReason = statusText; // Persists across renders
+        } else if (status !== "failed") {
+          job.statusText = "";
+        }
+      }
     }
     persistState();
     renderJobList();
@@ -1702,6 +1731,7 @@
             ${job.easyApply ? '<span style="color: #9CA3AF; font-size: 10px; margin-left: 4px;">(Easy Apply)</span>' : ""}
           </p>
           ${job.status === "applying" && job.statusText ? `<p style="margin:2px 0 0;font-size:10px;color:#B45309;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${job.statusText}</p>` : ""}
+          ${job.status === "failed" && job.failReason ? `<p style="margin:2px 0 0;font-size:10px;color:#DC2626;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${job.failReason}">↳ ${job.failReason}</p>` : ""}
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;">
           ${job.status !== "pending" ? `<span style="

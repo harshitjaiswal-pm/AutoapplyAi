@@ -166,7 +166,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       sendResponse({ success: true });
     });
+
+    // ── Funnel Stage 1: Opened from LinkedIn ────────────────────────────────
+    chrome.storage.local.get(["funnelStats"], (stored) => {
+      const s = stored.funnelStats || { opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 };
+      s.opened = (s.opened || 0) + 1;
+      chrome.storage.local.set({ funnelStats: s });
+    });
+
     return true;
+  }
+
+  /* ── From ATS scripts: Funnel stage progression ── */
+  if (message.type === "FUNNEL_STAGE") {
+    const { stage, job } = message;
+    chrome.storage.local.get(["funnelStats"], (stored) => {
+      const s = stored.funnelStats || { opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 };
+      if (stage === "formFilled")     s.formFilled    = (s.formFilled    || 0) + 1;
+      if (stage === "resumeTailored") s.resumeTailored = (s.resumeTailored || 0) + 1;
+      if (stage === "completed") {
+        s.completed = (s.completed || 0) + 1;
+        // Also record in applicationHistory for the dashboard table
+        if (job) {
+          recordApplication({
+            jobTitle: job.jobTitle || "",
+            company: job.company || "",
+            jobUrl: job.jobUrl || "",
+            ats: "greenhouse",
+            resumeFilename: "",
+          });
+        }
+      }
+      chrome.storage.local.set({ funnelStats: s }, () => {
+        console.log("AutoApply BG: Funnel stage", stage, "— stats:", s);
+      });
+    });
+    sendResponse({ success: true });
+    return false;
   }
 
   /* ── From ATS generic.js: Re-arm expectingNewTab before clicking an apply button ── */
