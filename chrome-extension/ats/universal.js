@@ -30,27 +30,43 @@
     const text  = (document.body?.innerText || "").toLowerCase();
     const title = (document.title || "").toLowerCase();
     const url   = window.location.href.toLowerCase();
+    const html  = (document.body?.innerHTML || "").toLowerCase();
 
-    // Strong signals — any one is enough
+    // Bail immediately on clearly non-job pages
+    if (!text || text.length < 100) return false; // page not rendered yet
+    if (url.includes("google.com") || url.includes("facebook.com") || url.includes("twitter.com")) return false;
+
+    // URL-based strong signals — company career portals
+    const jobUrlPatterns = [
+      /\/jobs\/\w/, /\/job\/\w/, /\/careers\/\w/, /\/career\/\w/,
+      /\/positions\/\w/, /\/openings\/\w/, /\/opportunities\/\w/,
+      /\/en\/job\//, /\/us\/en\//, // eBay pattern
+    ];
+    if (jobUrlPatterns.some(p => p.test(url))) {
+      // URL looks like a job page — just need minimal content confirmation
+      if (text.length > 300) return true;
+    }
+
+    // Strong content signals — any one is enough
     const strongSignals = [
-      /apply\s*(for|now|here|today)/i.test(document.body?.innerHTML || ""),
+      /apply\s*(now|for|here|today)/i.test(html),
       /(job|position|role|opening)\s*(description|overview|summary)/i.test(text),
       text.includes("responsibilities") && text.includes("qualifications"),
       text.includes("what you'll do") || text.includes("what you will do"),
       text.includes("what we're looking for") || text.includes("what we are looking for"),
       text.includes("about the role") || text.includes("about this role"),
       text.includes("about the position") || text.includes("about the job"),
+      text.includes("hybrid") && (text.includes("toronto") || text.includes("remote") || text.includes("onsite")),
     ];
     if (strongSignals.some(Boolean)) return true;
 
     // Weaker signals — need 2+
     const weakSignals = [
       /\b(engineer|developer|manager|analyst|designer|director|coordinator|specialist|consultant|associate|architect|lead)\b/i.test(title),
-      url.includes("/jobs/") || url.includes("/careers/") || url.includes("/job-") || url.includes("/position"),
+      url.includes("/jobs") || url.includes("/careers") || url.includes("/job-") || url.includes("/position"),
       text.includes("compensation") || text.includes("salary range") || text.includes("pay range"),
       text.includes("requirements") && (text.includes("experience") || text.includes("skills")),
       text.includes("benefits") && text.includes("experience"),
-      !!document.querySelector('button, a').textContent?.toLowerCase().includes("apply"),
     ];
     return weakSignals.filter(Boolean).length >= 2;
   }
@@ -317,30 +333,51 @@
   /* ── Boot ─────────────────────────────────────────────────────────────── */
 
   function boot() {
-    // If the ATS banner is already present (ATS script running), don't show button
-    if (document.getElementById("autoapply-banner") || document.getElementById("aa-universal-btn")) return;
+    // If the ATS banner or our button is already present, nothing to do
+    if (document.getElementById("autoapply-banner") ||
+        document.getElementById("aa-universal-btn")  ||
+        document.getElementById("aa-floating-root")) return;
     if (detectJobPage()) {
       LOG("Job page detected →", window.location.href.substring(0, 80));
       showFloatingButton();
+      return true;
     }
+    return false;
+  }
+
+  // Retry boot on SPA / lazy-rendered pages (React apps like eBay, Lever external).
+  // Many company career sites render content AFTER document_idle fires, so the first
+  // boot() call sees an empty DOM. We poll up to 5 times with increasing delays.
+  function bootWithRetry() {
+    if (boot()) return; // detected immediately
+    const delays = [800, 1600, 2800, 4500, 7000];
+    let attempt = 0;
+    function tryNext() {
+      if (attempt >= delays.length) return;
+      setTimeout(() => {
+        if (!boot()) { attempt++; tryNext(); }
+      }, delays[attempt++]);
+    }
+    tryNext();
   }
 
   // Run after DOM is ready
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
+    document.addEventListener("DOMContentLoaded", bootWithRetry);
   } else {
-    boot();
+    bootWithRetry();
   }
 
-  // Also re-run on SPA navigation (React / Vue / Angular)
+  // Also re-run on SPA navigation (React / Vue / Angular) — URL change means new page
   let _lastUrl = location.href;
   const _observer = new MutationObserver(() => {
     if (location.href !== _lastUrl) {
       _lastUrl = location.href;
-      // Small delay for SPA to render new content
-      setTimeout(() => {
-        if (!document.getElementById("autoapply-banner")) boot();
-      }, 1200);
+      // Remove stale button from previous page
+      document.getElementById("aa-universal-btn")?.remove();
+      document.getElementById("aa-universal-panel")?.remove();
+      // Detect new page with retry
+      setTimeout(bootWithRetry, 600);
     }
   });
   _observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
