@@ -748,19 +748,24 @@
       '.jobs-search__job-details, .job-details-jobs-unified-top-card, [class*="job-details"], [class*="jobs-details"]';
     const panel = document.querySelector(detailSelector);
     if (!panel) return false;
-    const panelText = (panel.innerText || "").slice(0, 800).toLowerCase();
-    if (!panelText) return false;
+    const fullPanelText = (panel.innerText || "").toLowerCase();
+    if (!fullPanelText) return false;
+    // Use a tight 500-char window for header-area checks (company/title appear first)
+    const headerText = fullPanelText.slice(0, 500);
     const titleFirst25 = (job.title || "").toLowerCase().substring(0, 25);
     const companyFirst20 = (job.company || "").toLowerCase().substring(0, 20);
-    const titleMatch = titleFirst25.length >= 4 && panelText.includes(titleFirst25);
-    const companyMatch = companyFirst20.length >= 3 && panelText.includes(companyFirst20);
+    const titleMatch = titleFirst25.length >= 4 && headerText.includes(titleFirst25);
+    // Company match: check both header (strong) and broader text (weaker)
+    const companyInHeader = companyFirst20.length >= 3 && headerText.includes(companyFirst20);
+    const companyInPage   = companyFirst20.length >= 5 && fullPanelText.slice(0, 800).includes(companyFirst20);
 
-    // Require BOTH title AND company when both strings are long enough to be reliable.
-    // Fall back to OR only when one of the identifiers is too short to be meaningful.
-    if (titleFirst25.length >= 8 && companyFirst20.length >= 3) {
-      return titleMatch && companyMatch;
-    }
-    return titleMatch || companyMatch;
+    // Company confirmed in header = high confidence, accept it alone
+    if (companyInHeader) return true;
+    // Title match + company anywhere in page = good enough
+    if (titleMatch && companyInPage) return true;
+    // Title alone when it's long and unique enough
+    if (titleMatch && titleFirst25.length >= 20) return true;
+    return false;
   }
 
   /**
@@ -780,25 +785,32 @@
       }
 
       // Step 1b: Verify the detail panel actually switched to the correct job.
-      // clickJobCard() can return true even when the panel didn't change (e.g. the
-      // previous job's content was still visible). If we proceed with the wrong job
-      // in the panel, we'll click the wrong Apply button and open the wrong tab.
-      if (!isPanelShowingJob(job)) {
-        // Panel may still be rendering — wait an extra 2s and try once more
-        await new Promise((r) => setTimeout(r, 2000));
-        if (!isPanelShowingJob(job)) {
-          // One final attempt: re-click the card
-          console.warn(`AutoApply: Panel mismatch after click for "${job.title}" — retrying card click`);
-          try { AALog && AALog.error("linkedin.processJob.panelMismatch", { title: job.title, company: job.company }); } catch(_){}
-          await clickJobCard(job);
-          await new Promise((r) => setTimeout(r, 2000));
-          if (!isPanelShowingJob(job)) {
-            console.error(`AutoApply: Panel still not showing "${job.title}" after retry — aborting to avoid wrong-tab apply`);
-            try { AALog && AALog.error("linkedin.processJob.panelMismatchAbort", { title: job.title, company: job.company }); } catch(_){}
-            updateJobStatus(job.id, "failed");
-            return { success: false, reason: "Detail panel did not load the correct job" };
-          }
+      // Poll with increasing patience — LinkedIn sometimes takes 3-4s to render
+      // promoted listings (e.g. MongoDB "Be an early applicant" jobs).
+      let panelOk = isPanelShowingJob(job);
+      if (!panelOk) {
+        // Wait up to 4s total in 500ms ticks for the panel to confirm
+        for (let attempt = 0; attempt < 8 && !panelOk; attempt++) {
+          await new Promise((r) => setTimeout(r, 500));
+          panelOk = isPanelShowingJob(job);
         }
+      }
+      if (!panelOk) {
+        // Re-click once and give another 4s
+        console.warn(`AutoApply: Panel mismatch after click for "${job.title}" — retrying card click`);
+        try { AALog && AALog.error("linkedin.processJob.panelMismatch", { title: job.title, company: job.company }); } catch(_){}
+        await clickJobCard(job);
+        for (let attempt = 0; attempt < 8 && !panelOk; attempt++) {
+          await new Promise((r) => setTimeout(r, 500));
+          panelOk = isPanelShowingJob(job);
+        }
+      }
+      if (!panelOk) {
+        console.error(`AutoApply: Panel still not showing "${job.title}" after retry — aborting to avoid wrong-tab apply`);
+        try { AALog && AALog.error("linkedin.processJob.panelMismatchAbort", { title: job.title, company: job.company }); } catch(_){}
+        const reason = "Panel mismatch — LinkedIn didn't load this job's details in time";
+        updateJobStatus(job.id, "failed", reason);
+        return { success: false, reason };
       }
 
       // Step 2: Scroll the detail panel to load the full JD
@@ -821,12 +833,18 @@
       // Step 3: Final safety check — confirm panel still shows the right job before
       // sending PREPARE_APPLICATION. This guards against the panel swapping to a
       // different job between the card-click and the JD scrape (e.g. a race where
-      // LinkedIn auto-selects a promoted listing).
-      if (!isPanelShowingJob(job)) {
+      // LinkedIn auto-selects a promoted listing). Wait briefly if still loading.
+      let finalPanelOk = isPanelShowingJob(job);
+      if (!finalPanelOk) {
+        await new Promise((r) => setTimeout(r, 1500));
+        finalPanelOk = isPanelShowingJob(job);
+      }
+      if (!finalPanelOk) {
         console.error(`AutoApply: Panel no longer shows "${job.title}" before PREPARE_APPLICATION — aborting`);
         try { AALog && AALog.error("linkedin.processJob.panelChangedBeforePrepare", { title: job.title, company: job.company }); } catch(_){}
-        updateJobStatus(job.id, "failed");
-        return { success: false, reason: "Detail panel changed before application could be prepared" };
+        const reason = "Panel changed before apply — LinkedIn switched to a different listing";
+        updateJobStatus(job.id, "failed", reason);
+        return { success: false, reason };
       }
 
       // Step 3: Store job + JD in background so ATS scripts can pick it up
