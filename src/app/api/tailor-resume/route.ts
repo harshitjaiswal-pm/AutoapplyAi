@@ -94,6 +94,18 @@ export async function POST(request: NextRequest) {
     // Strip markdown code fences if present (Haiku sometimes adds these)
     responseText = responseText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
 
+    // [Fix 2026-04-08] More robust JSON extraction: if stripping code fences wasn't enough
+    // (e.g. model added preamble like "Here is the tailored resume:"), extract the outermost
+    // JSON object by finding the first { and last } to handle cases where the model wraps
+    // the JSON in prose. This prevents the occasional 500 "AI returned invalid format" error.
+    if (!responseText.startsWith("{")) {
+      const firstBrace = responseText.indexOf("{");
+      const lastBrace = responseText.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        responseText = responseText.slice(firstBrace, lastBrace + 1);
+      }
+    }
+
     const tailoredResult = JSON.parse(responseText);
 
     return NextResponse.json({ tailoredResult });

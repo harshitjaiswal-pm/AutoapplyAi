@@ -63,6 +63,15 @@ export async function POST(request: NextRequest) {
     // Strip markdown code fences if present (Haiku sometimes adds these)
     responseText = responseText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
 
+    // [Fix 2026-04-08] Extract outermost JSON object if model added preamble prose
+    if (!responseText.startsWith("{")) {
+      const firstBrace = responseText.indexOf("{");
+      const lastBrace = responseText.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        responseText = responseText.slice(firstBrace, lastBrace + 1);
+      }
+    }
+
     // Step 5: Parse the JSON
     const parsedResume = JSON.parse(responseText);
 

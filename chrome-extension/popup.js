@@ -221,9 +221,13 @@ function refreshLogs() {
     const errors = entries.filter((e) => e.category === "ERROR").length;
     const forms  = entries.filter((e) => e.stage?.includes("form.fill")).length;
 
-    document.getElementById("log-count").textContent      = total;
-    document.getElementById("log-error-count").textContent = errors;
-    document.getElementById("log-form-count").textContent  = forms;
+    // [Fix 2026-04-08] Guard getElementById — elements may not exist if popup.html
+    // renders a different view (e.g., during loading). Use safe helper to avoid
+    // "Cannot read properties of null (reading 'textContent')" crash.
+    const _setTxt = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+    _setTxt("log-count", total);
+    _setTxt("log-error-count", errors);
+    _setTxt("log-form-count", forms);
 
     // Human-readable feed
     const feed = document.getElementById("log-feed");

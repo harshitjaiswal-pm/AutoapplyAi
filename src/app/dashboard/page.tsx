@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAppStore, PipelineJob, Application, ResumeDefect } from "@/store/useAppStore";
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -27,12 +29,15 @@ interface TrackableJob {
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 export default function DashboardPage() {
+  const router = useRouter();
   const {
     applications,
     pipelineJobs,
     updateApplicationStatus,
     updatePipelineJob,
     addApplication,
+    userProfile,
+    parsedResumeSummary,
   } = useAppStore();
 
   // Sync completed applications from Chrome extension via pipeline-bridge.js
@@ -206,6 +211,86 @@ export default function DashboardPage() {
             month: "short",
             day: "numeric",
           })}
+        </div>
+      </div>
+
+      {/* Profile and Resume cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white border border-neutral-200 rounded-xl p-5">
+          <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">
+            Your Profile
+          </p>
+          {userProfile ? (
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-neutral-900">
+                  {userProfile.firstName} {userProfile.lastName}
+                </p>
+                <p className="text-[12px] text-neutral-500">{userProfile.email}</p>
+              </div>
+              <Link
+                href="/onboarding?edit=profile"
+                className="inline-block text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+              >
+                Edit Profile →
+              </Link>
+            </div>
+          ) : (
+            <button
+              onClick={() => router.push("/onboarding")}
+              className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+            >
+              Complete Profile →
+            </button>
+          )}
+        </div>
+
+        <div className="bg-white border border-neutral-200 rounded-xl p-5">
+          <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">
+            Resume
+          </p>
+          {parsedResumeSummary ? (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-neutral-900">
+                  {parsedResumeSummary.name}
+                </p>
+                <p className="text-[12px] text-neutral-500">
+                  {parsedResumeSummary.jobCount} experiences
+                </p>
+              </div>
+              <button
+                onClick={() => router.push("/onboarding")}
+                className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+              >
+                Re-upload →
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => router.push("/onboarding")}
+              className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+            >
+              Upload Resume →
+            </button>
+          )}
+        </div>
+
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-5">
+          <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wider mb-3">
+            Ready to apply?
+          </p>
+          <p className="text-[13px] text-indigo-700 mb-3">
+            Head to LinkedIn and let AutoApply AI handle the rest.
+          </p>
+          <a
+            href="https://www.linkedin.com/jobs/search/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block text-[12px] bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 font-medium transition-colors"
+          >
+            Open LinkedIn →
+          </a>
         </div>
       </div>
 

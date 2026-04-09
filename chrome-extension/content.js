@@ -954,9 +954,16 @@
       const modal = createConfirmationModal();
       modal.style.display = "flex";
 
-      document.getElementById("confirm-step").textContent = `Job ${jobNumber}/${totalJobs}`;
-      document.getElementById("confirm-title").textContent = job.title;
-      document.getElementById("confirm-company").textContent = `${job.company} — ${job.location}`;
+      // [Fix 2026-04-08] Guard against null getElementById — these elements are created in
+      // createConfirmationModal() but could be absent if the DOM was modified externally
+      // (e.g., host page removes injected elements). Optional-chain assignment prevents
+      // the "Cannot read properties of null (reading 'textContent')" crash.
+      const _csStep = document.getElementById("confirm-step");
+      const _csTitle = document.getElementById("confirm-title");
+      const _csCompany = document.getElementById("confirm-company");
+      if (_csStep) _csStep.textContent = `Job ${jobNumber}/${totalJobs}`;
+      if (_csTitle) _csTitle.textContent = job.title;
+      if (_csCompany) _csCompany.textContent = `${job.company} — ${job.location}`;
 
       // Show/hide Back button based on position in queue
       const prevBtn = document.getElementById("confirm-prev");

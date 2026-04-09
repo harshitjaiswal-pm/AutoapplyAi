@@ -23,6 +23,11 @@
       "css": ["content.css"]
     },
     {
+      "matches": ["https://*.vercel.app/*", "http://localhost:3000/*"],
+      "js": ["logger.js", "ats/profile-sync.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*", "https://*.vercel.app/dashboard*", "http://localhost:3000/dashboard*"],
       "js": ["logger.js", "pipeline-bridge.js"],
       "run_at": "document_idle"

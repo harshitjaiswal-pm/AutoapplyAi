@@ -1,35 +1,49 @@
 import Link from "next/link";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
-export default function HomePage() {
+export default async function HomePage() {
+  const session = await getServerSession(authOptions);
+
   return (
     <div className="py-24 animate-fade-in">
       {/* Hero */}
       <section className="max-w-2xl mx-auto text-center mb-24">
         <p className="text-[13px] font-medium text-indigo-500 tracking-wide uppercase mb-4">
-          AI Resume Tailoring
+          AI-Powered Job Applications
         </p>
         <h1 className="text-4xl md:text-5xl font-bold text-neutral-900 leading-[1.15] tracking-tight">
-          Stop applying blindly.
+          Apply to jobs
           <br />
-          <span className="text-indigo-400">Get the interview.</span>
+          <span className="text-indigo-600">10x faster with AI</span>
         </h1>
-        <p className="mt-5 text-base text-neutral-500 leading-relaxed max-w-md mx-auto">
-          Paste a job description. Get a resume tailored to that specific role
-          in seconds — then download and apply.
+        <p className="mt-5 text-base text-neutral-500 leading-relaxed max-w-lg mx-auto">
+          AutoApply AI scans LinkedIn jobs, tailors your resume for each role, and fills every application form automatically — you just review and submit.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
           <Link
-            href="/tailor"
-            className="bg-indigo-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg hover:bg-indigo-700 transition-colors"
+            href={session ? "/dashboard" : "/auth/signin"}
+            className="bg-indigo-600 text-white text-sm font-medium px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors"
           >
-            Start tailoring
+            Get Started Free →
           </Link>
-          <Link
-            href="/dashboard"
-            className="text-sm text-neutral-500 hover:text-neutral-900 px-4 py-2.5 border border-neutral-200 rounded-lg hover:border-neutral-300 transition-colors"
-          >
-            View dashboard
-          </Link>
+          {!session && (
+            <Link
+              href="/auth/signin"
+              className="text-sm text-neutral-500 hover:text-neutral-900 px-4 py-3 border border-neutral-200 rounded-lg hover:border-neutral-300 transition-colors"
+            >
+              Sign In
+            </Link>
+          )}
+        </div>
+      </section>
+
+      {/* Feature bullets */}
+      <section className="max-w-3xl mx-auto mb-24">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <FeatureBullet icon="🔗" title="Scan LinkedIn Jobs" desc="AutoApply AI finds and extracts job listings instantly from LinkedIn." />
+          <FeatureBullet icon="🤖" title="AI Tailors Your Resume" desc="We customize your resume for each role with relevant keywords and experience." />
+          <FeatureBullet icon="✅" title="Forms Fill Automatically" desc="Application forms populate with your info — just review and submit." />
         </div>
       </section>
 
@@ -75,6 +89,24 @@ export default function HomePage() {
           <Row icon="04" title="Track everything" desc="Dashboard shows every job you tailored for, match scores, and application status." />
         </div>
       </section>
+    </div>
+  );
+}
+
+function FeatureBullet({
+  icon,
+  title,
+  desc,
+}: {
+  icon: string;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <div className="rounded-xl p-6 border border-neutral-100 bg-neutral-50/50">
+      <div className="text-3xl mb-3">{icon}</div>
+      <h3 className="text-sm font-semibold text-neutral-900 mb-2">{title}</h3>
+      <p className="text-[13px] text-neutral-500 leading-relaxed">{desc}</p>
     </div>
   );
 }

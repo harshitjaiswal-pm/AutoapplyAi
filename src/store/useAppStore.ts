@@ -164,6 +164,30 @@ export interface BatchRun {
  * THE STORE — Zustand with localStorage persistence for pipeline data.
  */
 
+interface UserProfile {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  city: string;
+  province: string;
+  address: string;
+  postalCode: string;
+  linkedin: string;
+  github: string;
+  portfolio: string;
+  currentCompany: string;
+  pronouns: string;
+  requireSponsorship: string;
+  salaryExpectation: string;
+}
+
+interface ParsedResumeSummary {
+  name: string;
+  jobCount: number;
+  skillCount: number;
+}
+
 interface AppState {
   // === Original single-resume flow ===
   rawResumeText: string;
@@ -202,6 +226,18 @@ interface AppState {
   clearPipelineJobs: () => void;
   setCurrentBatch: (batch: BatchRun | null) => void;
   updateCurrentBatch: (updates: Partial<BatchRun>) => void;
+
+  // === Onboarding ===
+  onboardingComplete: boolean;
+  onboardingStep: number;
+  userProfile: UserProfile | null;
+  parsedResumeSummary: ParsedResumeSummary | null;
+
+  // Onboarding actions
+  setOnboardingComplete: (val: boolean) => void;
+  setOnboardingStep: (val: number) => void;
+  setUserProfile: (profile: UserProfile) => void;
+  setParsedResumeSummary: (summary: ParsedResumeSummary | null) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -263,6 +299,17 @@ export const useAppStore = create<AppState>()(
             ? { ...state.currentBatch, ...updates }
             : null,
         })),
+
+      // === Onboarding ===
+      onboardingComplete: false,
+      onboardingStep: 1,
+      userProfile: null,
+      parsedResumeSummary: null,
+
+      setOnboardingComplete: (val) => set({ onboardingComplete: val }),
+      setOnboardingStep: (val) => set({ onboardingStep: val }),
+      setUserProfile: (profile) => set({ userProfile: profile }),
+      setParsedResumeSummary: (summary) => set({ parsedResumeSummary: summary }),
     }),
     {
       name: "autoapply-pipeline",
@@ -272,6 +319,8 @@ export const useAppStore = create<AppState>()(
         applications: state.applications,
         pipelineResumeText: state.pipelineResumeText,
         pipelineParsedResume: state.pipelineParsedResume,
+        userProfile: state.userProfile,
+        parsedResumeSummary: state.parsedResumeSummary,
       }),
     }
   )
