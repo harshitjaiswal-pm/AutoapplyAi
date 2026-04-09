@@ -535,9 +535,9 @@
     isLoading = true;
 
     try {
-      // Load application context from chrome.storage
+      // Load full profile + application context from chrome.storage
       const storageData = await new Promise((resolve) => {
-        chrome.storage.local.get(["parsedResume", "pendingApplication"], (result) => {
+        chrome.storage.local.get(["parsedResume", "pendingApplication", "userProfile"], (result) => {
           resolve(result);
         });
       });
@@ -545,21 +545,59 @@
       const pageContext = getPageContext();
       const parsedResume = storageData.parsedResume || {};
       const pendingApplication = storageData.pendingApplication || {};
+      const userProfile = storageData.userProfile || {};
 
-      // Build system context for the AI
-      let systemContext = "";
+      // ── Build comprehensive system context ──────────────────────────────
+      const profileLines = [];
+
+      // Identity
+      const fullName = [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ");
+      if (fullName)                profileLines.push(`Name: ${fullName}`);
+      if (userProfile.email)       profileLines.push(`Email: ${userProfile.email}`);
+      if (userProfile.phone)       profileLines.push(`Phone: ${userProfile.phone}`);
+
+      // Location
+      const location = [userProfile.city, userProfile.province, userProfile.country].filter(Boolean).join(", ");
+      if (location)                profileLines.push(`Location: ${location}`);
+
+      // Current role
+      if (userProfile.currentTitle)    profileLines.push(`Current title: ${userProfile.currentTitle}`);
+      if (userProfile.currentEmployer || userProfile.currentCompany)
+                                       profileLines.push(`Current company: ${userProfile.currentEmployer || userProfile.currentCompany}`);
+
+      // Links
+      if (userProfile.linkedinUrl || userProfile.linkedin)
+                                       profileLines.push(`LinkedIn: ${userProfile.linkedinUrl || userProfile.linkedin}`);
+      if (userProfile.githubUrl || userProfile.github)
+                                       profileLines.push(`GitHub: ${userProfile.githubUrl || userProfile.github}`);
+      if (userProfile.portfolioUrl || userProfile.website)
+                                       profileLines.push(`Portfolio: ${userProfile.portfolioUrl || userProfile.website}`);
+
+      // Skills / summary
+      if (userProfile.skills)          profileLines.push(`Skills: ${userProfile.skills}`);
+      if (userProfile.yearsExperience) profileLines.push(`Years of experience: ${userProfile.yearsExperience}`);
+      if (userProfile.summary)         profileLines.push(`Summary: ${userProfile.summary}`);
+
+      // Resume data
+      if (parsedResume.name && !fullName) profileLines.push(`Name (from resume): ${parsedResume.name}`);
+      if (parsedResume.summary)           profileLines.push(`Resume summary: ${parsedResume.summary.slice(0, 300)}`);
+
+      const profileSection = profileLines.length > 0
+        ? `\n\nUSER PROFILE:\n${profileLines.join("\n")}`
+        : "";
+
+      // Job context
+      let jobSection = "";
       if (pendingApplication.jobTitle && pendingApplication.company) {
-        systemContext = `You are an AI assistant helping the user apply for ${pendingApplication.jobTitle} at ${pendingApplication.company}.`;
-        if (parsedResume.summary || parsedResume.name) {
-          const resumeSummary = parsedResume.summary || `Resume: ${parsedResume.name || "User"}`;
-          systemContext += ` The user's resume summary: ${resumeSummary.slice(0, 300)}.`;
-        }
+        jobSection = `\n\nCURRENT JOB APPLICATION:\nRole: ${pendingApplication.jobTitle} at ${pendingApplication.company}`;
         if (pendingApplication.jobDescription) {
-          const jdExcerpt = pendingApplication.jobDescription.slice(0, 500);
-          systemContext += ` Job description excerpt: ${jdExcerpt}.`;
+          jobSection += `\nJob description excerpt: ${pendingApplication.jobDescription.slice(0, 500)}`;
         }
-        systemContext += " Answer questions helpfully based on this context.";
       }
+
+      const systemContext = `You are AutoApply AI, a career assistant helping the user with job applications.
+Answer questions about the user's profile, resume, the current job, or this page directly and concisely.
+When asked for profile details (email, LinkedIn, phone, etc.), respond with the exact value from the user's profile.${profileSection}${jobSection}`;
 
       const apiMessages = messages
         .filter(m => m.role === "user" || m.role === "assistant")
