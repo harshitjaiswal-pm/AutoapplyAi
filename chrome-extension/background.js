@@ -1232,12 +1232,28 @@ function injectFloatingTrigger(tabId) {
       /* ── Populate panel based on storage state ── */
       function buildPanel() {
         actions.innerHTML = "";
-        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumePdf", "parsedResume", "userProfile"], (stored) => {
-          const hasPdf    = !!stored.tailoredResumePdf;
+        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumePdf", "tailoredResumeFilename", "lastTailoredJob", "parsedResume", "userProfile"], (stored) => {
           const hasResume = !!stored.parsedResume;
           const lastJob   = stored.lastFilledJob;
           const pending   = stored.pendingApplication;
-          const jobInfo   = lastJob || pending;
+          const jobInfo   = pending || lastJob;  // prefer current pending over stale lastFilledJob
+
+          // Only offer "Download" if the stored PDF is for the current page/job.
+          // Compare by URL first, then by company+title similarity.
+          // If it's for a different job, show "Generate" instead so the user
+          // gets a fresh tailored resume for this role.
+          const tailoredJob = stored.lastTailoredJob;
+          const currentUrl  = window.location.href;
+          let pdfMatchesCurrent = false;
+          if (stored.tailoredResumePdf && tailoredJob) {
+            const sameUrl     = tailoredJob.applyUrl === currentUrl || tailoredJob.jobUrl === currentUrl;
+            const sameCompany = tailoredJob.company && jobInfo?.company &&
+              tailoredJob.company.toLowerCase().includes(jobInfo.company.toLowerCase().slice(0, 6));
+            const sameTitle   = tailoredJob.jobTitle && jobInfo?.jobTitle &&
+              tailoredJob.jobTitle.toLowerCase().slice(0, 20) === jobInfo.jobTitle.toLowerCase().slice(0, 20);
+            pdfMatchesCurrent = sameUrl || (sameCompany && sameTitle);
+          }
+          const hasPdf = pdfMatchesCurrent;
 
           // ① Fill this form
           const fillBtn = makeBtn("✏️", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""} — ${jobInfo.company || ""}`.slice(0, 32) : "Re-run AutoApply on this page", "#4F46E5", () => {
