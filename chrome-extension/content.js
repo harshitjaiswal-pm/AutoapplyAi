@@ -1735,11 +1735,45 @@
 
   /** Re-scan the page for new job cards, clearing prior results. */
   function requestReScan() {
-    scrapedJobs = scrapeJobCards();
-    selectedJobIds.clear();
+    const freshJobs = scrapeJobCards();
+    if (freshJobs.length === 0) {
+      updateStatus("No jobs found on this page — try scrolling to load more.", "error");
+      return;
+    }
+
+    // Merge: preserve ID, status, and metadata for jobs that were already in the list.
+    // scrapeJobCards() gives every job a new Date.now() ID, which breaks updateJobStatus()
+    // (the batch loop holds references to the old IDs). Matching on linkedinJobId keeps
+    // everything in sync.
+    const existingMap = new Map(scrapedJobs.map(j => [j.linkedinJobId, j]));
+    for (const job of freshJobs) {
+      const prev = existingMap.get(job.linkedinJobId);
+      if (prev) {
+        job.id          = prev.id;           // keep original ID — batch loop depends on this
+        job.status      = prev.status;
+        job.statusText  = prev.statusText;
+        job.failReason  = prev.failReason;
+        job.atsTabId    = prev.atsTabId;
+      }
+    }
+
+    scrapedJobs = freshJobs;
+
+    // Re-sync selectedJobIds: drop any IDs that no longer exist in the new list
+    const validIds = new Set(scrapedJobs.map(j => j.id));
+    for (const id of [...selectedJobIds]) {
+      if (!validIds.has(id)) selectedJobIds.delete(id);
+    }
+    // If not in an active batch, also clear selections for a clean slate
+    if (!isApplying) selectedJobIds.clear();
+
     persistState();
     renderJobList();
-    updateStatus(`Found ${scrapedJobs.length} jobs on this page`);
+    const newCount = freshJobs.filter(j => !existingMap.has(j.linkedinJobId)).length;
+    updateStatus(newCount > 0
+      ? `Re-scanned: ${scrapedJobs.length} jobs found (${newCount} new)`
+      : `Re-scanned: ${scrapedJobs.length} jobs found`
+    );
     updateActionBar();
   }
 
