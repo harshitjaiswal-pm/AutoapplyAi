@@ -731,6 +731,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  /* ── From floating panel: Re-fill the current ATS page WITHOUT reloading ── */
+  if (message.type === "FILL_CURRENT_PAGE") {
+    const tabId = sender.tab?.id;
+    const url   = sender.tab?.url;
+    if (!tabId || !url) { sendResponse({ error: "No tab" }); return false; }
+
+    console.log("AutoApply BG: FILL_CURRENT_PAGE for tab", tabId, url);
+
+    // Step 1: Restore pendingApplication from lastFilledJob (if missing)
+    //         so the ATS content script has something to work with.
+    chrome.storage.local.get(["pendingApplication", "lastFilledJob"], async (stored) => {
+      const hasPending = !!stored.pendingApplication;
+      const lastJob    = stored.lastFilledJob;
+
+      if (!hasPending && lastJob) {
+        // Re-populate pendingApplication from the last job we worked on
+        const restored = {
+          id:             lastJob.id,
+          jobTitle:       lastJob.jobTitle,
+          company:        lastJob.company,
+          jobUrl:         lastJob.jobUrl || url,
+          applyUrl:       lastJob.jobUrl || url,
+          jobDescription: lastJob.jobDescription || "",
+          _queuedAt:      Date.now(),
+          _restoredForRefill: true,
+        };
+        await new Promise(r => chrome.storage.local.set({ pendingApplication: restored }, r));
+        console.log("AutoApply BG: Restored pendingApplication from lastFilledJob for FILL_CURRENT_PAGE");
+      }
+
+      // Step 2: Clear dedup guards so the inject isn't blocked
+      injectedTabIds.delete(tabId);
+      ownedByJob.delete(tabId);
+
+      // Step 3: Re-inject the banner + ATS script (same as normal flow)
+      injectInstantBanner(tabId);
+      setTimeout(() => injectATSScript(tabId, url), 300);
+
+      sendResponse({ success: true });
+    });
+    return true; // async
+  }
+
   /* ── Legacy: pipeline bridge support ── */
   if (message.type === "SEND_JOBS_TO_PIPELINE") {
     const { jobs, url } = message;
@@ -1111,38 +1154,185 @@ function injectFloatingTrigger(tabId) {
   chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
-      if (document.getElementById("aa-floating-trigger")) return;
-      const btn = document.createElement("button");
-      btn.id = "aa-floating-trigger";
-      btn.title = "Apply with AutoApply";
-      btn.innerHTML = "🤖 AutoApply";
-      btn.style.cssText = [
+      // Only inject once
+      if (document.getElementById("aa-floating-root")) return;
+
+      /* ── Shared styles ── */
+      const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+      const GRAD = "linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%)";
+
+      /* ── Root wrapper (positions everything) ── */
+      const root = document.createElement("div");
+      root.id = "aa-floating-root";
+      root.style.cssText = "all:initial;position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+
+      /* ── Panel (hidden initially) ── */
+      const panel = document.createElement("div");
+      panel.id = "aa-floating-panel";
+      panel.style.cssText = [
+        "all:initial", "display:none",
+        "background:#fff", "border-radius:14px",
+        "box-shadow:0 8px 40px rgba(0,0,0,0.18),0 2px 8px rgba(79,70,229,0.15)",
+        "border:1px solid rgba(79,70,229,0.12)",
+        "width:220px", "overflow:hidden",
+        "font-family:" + FONT,
+        "animation:aa-slide-in 0.18s ease",
+      ].join(";");
+
+      /* ── Panel header ── */
+      const header = document.createElement("div");
+      header.style.cssText = "background:" + GRAD + ";padding:10px 14px;display:flex;align-items:center;justify-content:space-between;";
+      header.innerHTML = `
+        <span style="color:#fff;font-size:12px;font-weight:700;font-family:${FONT};letter-spacing:0.3px;">🤖 AutoApply Actions</span>
+        <span id="aa-panel-status" style="color:rgba(255,255,255,0.7);font-size:10px;font-family:${FONT};"></span>
+      `;
+      panel.appendChild(header);
+
+      /* ── Action buttons container ── */
+      const actions = document.createElement("div");
+      actions.style.cssText = "padding:8px;display:flex;flex-direction:column;gap:4px;";
+      panel.appendChild(actions);
+
+      /* ── Helper to create an action button ── */
+      function makeBtn(emoji, label, sublabel, color, onClick) {
+        const btn = document.createElement("button");
+        btn.style.cssText = [
+          "all:initial", "display:flex", "align-items:center", "gap:10px",
+          "width:100%", "padding:9px 12px", "border-radius:10px",
+          "cursor:pointer", "transition:background 0.12s",
+          "font-family:" + FONT, "box-sizing:border-box",
+        ].join(";");
+        btn.innerHTML = `
+          <span style="font-size:18px;line-height:1;">${emoji}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:700;color:${color};font-family:${FONT};">${label}</div>
+            ${sublabel ? `<div style="font-size:10px;color:#9CA3AF;font-family:${FONT};margin-top:1px;">${sublabel}</div>` : ""}
+          </div>
+        `;
+        btn.onmouseenter = () => btn.style.background = "#F3F4F6";
+        btn.onmouseleave = () => btn.style.background = "transparent";
+        btn.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+        return btn;
+      }
+
+      /* ── Divider ── */
+      function makeDivider() {
+        const d = document.createElement("div");
+        d.style.cssText = "height:1px;background:#F3F4F6;margin:2px 0;";
+        return d;
+      }
+
+      /* ── Populate panel based on storage state ── */
+      function buildPanel() {
+        actions.innerHTML = "";
+        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumePdf", "parsedResume", "userProfile"], (stored) => {
+          const hasPdf    = !!stored.tailoredResumePdf;
+          const hasResume = !!stored.parsedResume;
+          const lastJob   = stored.lastFilledJob;
+          const pending   = stored.pendingApplication;
+          const jobInfo   = lastJob || pending;
+
+          // ① Fill this form
+          const fillBtn = makeBtn("✏️", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""} — ${jobInfo.company || ""}`.slice(0, 32) : "Re-run AutoApply on this page", "#4F46E5", () => {
+            setStatus("Filling form…");
+            chrome.runtime.sendMessage({ type: "FILL_CURRENT_PAGE" }, (r) => {
+              setStatus(r?.success ? "Filling… check the page!" : "Error — try reload");
+              setTimeout(() => setStatus(""), 4000);
+            });
+          });
+          actions.appendChild(fillBtn);
+
+          actions.appendChild(makeDivider());
+
+          // ② Download / show resume
+          if (hasPdf) {
+            const dlBtn = makeBtn("📄", "Download tailored resume", "Your AI-customised resume PDF", "#059669", () => {
+              setStatus("Downloading…");
+              chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
+                setStatus("Check your downloads!");
+                setTimeout(() => setStatus(""), 3000);
+              });
+            });
+            actions.appendChild(dlBtn);
+          } else if (hasResume) {
+            const tailorBtn = makeBtn("✨", "Generate tailored resume", "Creates resume PDF for this role", "#D97706", () => {
+              setStatus("Requesting resume…");
+              chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
+                setStatus("Check your downloads!");
+                setTimeout(() => setStatus(""), 3000);
+              });
+            });
+            actions.appendChild(tailorBtn);
+          }
+
+          actions.appendChild(makeDivider());
+
+          // ③ Open application page (only when we have a different URL stored)
+          const applyUrl = pending?.applyUrl || pending?.jobUrl || lastJob?.jobUrl;
+          if (applyUrl && applyUrl !== window.location.href) {
+            const navBtn = makeBtn("🔗", "Go to application page", applyUrl.replace(/^https?:\/\//, "").slice(0, 40), "#6B7280", () => {
+              window.location.href = applyUrl;
+            });
+            actions.appendChild(navBtn);
+          }
+
+          // ④ Force-reload this page (re-injects ATS script on page load)
+          const reloadBtn = makeBtn("🔄", "Reload + re-inject", "Reloads page, re-runs AutoApply", "#6B7280", () => {
+            window.location.reload();
+          });
+          actions.appendChild(reloadBtn);
+        });
+      }
+
+      function setStatus(msg) {
+        const el = document.getElementById("aa-panel-status");
+        if (el) el.textContent = msg;
+      }
+
+      /* ── Main toggle button ── */
+      const pill = document.createElement("button");
+      pill.id = "aa-floating-trigger";
+      pill.innerHTML = "🤖 AutoApply";
+      pill.style.cssText = [
         "all:initial",
-        "position:fixed", "bottom:20px", "right:20px", "z-index:2147483646",
-        "background:linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%)",
+        "background:" + GRAD,
         "color:#fff", "border:none", "border-radius:999px",
         "padding:10px 18px", "font-size:13px", "font-weight:700",
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+        "font-family:" + FONT,
         "cursor:pointer", "box-shadow:0 4px 20px rgba(79,70,229,0.5)",
         "display:flex", "align-items:center", "gap:6px",
         "transition:transform 0.15s,box-shadow 0.15s",
+        "white-space:nowrap",
       ].join(";");
-      btn.onmouseenter = () => { btn.style.transform = "scale(1.05)"; btn.style.boxShadow = "0 6px 28px rgba(79,70,229,0.65)"; };
-      btn.onmouseleave = () => { btn.style.transform = "scale(1)"; btn.style.boxShadow = "0 4px 20px rgba(79,70,229,0.5)"; };
-      btn.addEventListener("click", () => {
-        // Navigate to stored apply URL — extension auto-injects on arrival.
-        // Falls back to reloading current page.
-        chrome.storage.local.get(["pendingApplication"], (stored) => {
-          const url = stored.pendingApplication?.applyUrl || stored.pendingApplication?.jobUrl;
-          if (url && url !== window.location.href) {
-            window.location.href = url;
-          } else {
-            // Already on the apply page — force re-inject by reloading
-            window.location.reload();
-          }
-        });
+      pill.onmouseenter = () => { pill.style.transform = "scale(1.05)"; pill.style.boxShadow = "0 6px 28px rgba(79,70,229,0.65)"; };
+      pill.onmouseleave = () => { pill.style.transform = "scale(1)"; pill.style.boxShadow = "0 4px 20px rgba(79,70,229,0.5)"; };
+
+      let open = false;
+      pill.addEventListener("click", (e) => {
+        e.stopPropagation();
+        open = !open;
+        if (open) {
+          buildPanel(); // refresh state every open
+          panel.style.display = "block";
+          pill.innerHTML = "✕ Close";
+        } else {
+          panel.style.display = "none";
+          pill.innerHTML = "🤖 AutoApply";
+        }
       });
-      (document.body || document.documentElement).appendChild(btn);
+
+      // Close panel when clicking outside
+      document.addEventListener("click", (e) => {
+        if (open && !root.contains(e.target)) {
+          open = false;
+          panel.style.display = "none";
+          pill.innerHTML = "🤖 AutoApply";
+        }
+      });
+
+      root.appendChild(panel);
+      root.appendChild(pill);
+      (document.body || document.documentElement).appendChild(root);
     },
   }).catch(() => {});
 }
