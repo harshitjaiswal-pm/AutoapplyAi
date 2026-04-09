@@ -336,29 +336,16 @@
     // If the ATS banner or our button is already present, nothing to do
     if (document.getElementById("autoapply-banner") ||
         document.getElementById("aa-universal-btn")  ||
-        document.getElementById("aa-floating-root")) return;
-    if (detectJobPage()) {
-      LOG("Job page detected →", window.location.href.substring(0, 80));
-      showFloatingButton();
-      return true;
-    }
-    return false;
+        document.getElementById("aa-floating-root")) return true;
+    // Always show the floating button — no page detection needed.
+    // The user may be on any step of a multi-page application flow.
+    LOG("Showing floating trigger →", window.location.href.substring(0, 80));
+    showFloatingButton();
+    return true;
   }
 
-  // Retry boot on SPA / lazy-rendered pages (React apps like eBay, Lever external).
-  // Many company career sites render content AFTER document_idle fires, so the first
-  // boot() call sees an empty DOM. We poll up to 5 times with increasing delays.
   function bootWithRetry() {
-    if (boot()) return; // detected immediately
-    const delays = [800, 1600, 2800, 4500, 7000];
-    let attempt = 0;
-    function tryNext() {
-      if (attempt >= delays.length) return;
-      setTimeout(() => {
-        if (!boot()) { attempt++; tryNext(); }
-      }, delays[attempt++]);
-    }
-    tryNext();
+    boot();
   }
 
   // Run after DOM is ready
