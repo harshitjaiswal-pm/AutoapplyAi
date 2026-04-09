@@ -181,7 +181,12 @@ function humanizeLogEntry(entry) {
   if (stage.includes("linkedin.processJob.noApplyButton"))return { type: "error",   msg: `Failed: Apply button not found on ${data.company || "company"} job` };
   if (stage.includes("linkedin.processJob.alreadyApplied"))return { type: "warn",  msg: `Skipped: already applied to ${data.company || "this job"}` };
   if (stage.includes("linkedin.processJob.panelMismatch"))return { type: "warn",   msg: `Skipped: LinkedIn panel showed wrong job — retrying` };
-  if (stage.includes("linkedin.clickApply.easyApply"))    return { type: "warn",   msg: "Skipped Easy Apply job (not yet supported)" };
+  if (stage.includes("linkedin.clickApply.easyApply"))    return { type: "info",    msg: `Opening Easy Apply for ${data.company || "job"}` };
+  if (stage.includes("linkedin.easyApply.step"))          return { type: "info",    msg: `Easy Apply — ${data.label || "step " + (data.step || "?")}` };
+  if (stage.includes("linkedin.easyApply.submitted"))     return { type: "success", msg: `✅ Easy Apply submitted: ${data.company || "job"}` };
+  if (stage.includes("linkedin.easyApply.noModal"))       return { type: "error",   msg: `Easy Apply modal didn't open for ${data.title || "job"}` };
+  if (stage.includes("linkedin.easyApply.noActionBtn"))   return { type: "warn",    msg: `Easy Apply — no Next/Submit on step ${data.step || "?"}` };
+  if (stage.includes("linkedin.easyApply.exception"))     return { type: "error",   msg: `Easy Apply error: ${data.msg || "unknown"}` };
   if (stage.includes("linkedin.clickApply.external"))     return { type: "success", msg: `Opened application page` };
   if (stage.includes("linkedin.clickApply"))              return { type: "info",    msg: "Opening application page…" };
   if (stage.includes("linkedin.apply.result"))            return { type: "info",    msg: `Apply result: ${data.applyType ?? "unknown"}` };

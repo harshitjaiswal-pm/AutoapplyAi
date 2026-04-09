@@ -1251,23 +1251,88 @@ function injectFloatingTrigger(tabId) {
 
           actions.appendChild(makeDivider());
 
-          // ② Download / show resume
+          // ② Download / generate resume — both use countdown timer
+          function startResumeCountdown(btn, labelEl, sublabelEl, isGenerate) {
+            // Disable button immediately
+            btn.style.opacity = "0.7";
+            btn.style.pointerEvents = "none";
+
+            const SECS = 5;
+            let remaining = SECS;
+
+            // Replace sublabel with countdown bar
+            sublabelEl.innerHTML = `
+              <div style="margin-top:4px;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span id="aa-dl-count" style="font-size:10px;color:#6B7280;font-family:${FONT};min-width:28px;">5s</span>
+                  <div style="flex:1;height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;">
+                    <div id="aa-dl-bar" style="height:100%;width:100%;background:${isGenerate ? "#D97706" : "#059669"};border-radius:2px;transition:width 1s linear;"></div>
+                  </div>
+                  <span id="aa-dl-cancel" style="font-size:10px;color:#9CA3AF;cursor:pointer;font-family:${FONT};">✕</span>
+                </div>
+              </div>`;
+
+            const countEl = sublabelEl.querySelector("#aa-dl-count");
+            const barEl   = sublabelEl.querySelector("#aa-dl-bar");
+            const cancel  = sublabelEl.querySelector("#aa-dl-cancel");
+
+            let cancelled = false;
+            cancel.addEventListener("click", (e) => {
+              e.stopPropagation();
+              cancelled = true;
+              clearInterval(tick);
+              btn.style.opacity = "";
+              btn.style.pointerEvents = "";
+              delete btn.dataset.counting;
+              sublabelEl.textContent = isGenerate ? "Creates resume PDF for this role" : "Your AI-customised resume PDF";
+            });
+
+            // Kick off bar shrink on next frame (after DOM paint)
+            requestAnimationFrame(() => {
+              barEl.style.width = "0%";
+            });
+
+            const tick = setInterval(() => {
+              if (cancelled) return;
+              remaining--;
+              if (countEl) countEl.textContent = remaining + "s";
+              if (remaining <= 0) {
+                clearInterval(tick);
+                if (!cancelled) {
+                  sublabelEl.textContent = isGenerate ? "Generating…" : "Downloading…";
+                  setStatus(isGenerate ? "Generating resume…" : "Downloading…");
+                  chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
+                    setStatus("Check your downloads!");
+                    btn.style.opacity = "";
+                    btn.style.pointerEvents = "";
+                    delete btn.dataset.counting;
+                    sublabelEl.textContent = isGenerate ? "Creates resume PDF for this role" : "Your AI-customised resume PDF";
+                    setTimeout(() => setStatus(""), 4000);
+                  });
+                }
+              }
+            }, 1000);
+          }
+
           if (hasPdf) {
             const dlBtn = makeBtn("📄", "Download tailored resume", "Your AI-customised resume PDF", "#059669", () => {
-              setStatus("Downloading…");
-              chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
-                setStatus("Check your downloads!");
-                setTimeout(() => setStatus(""), 3000);
-              });
+              // Find the sublabel div — it's the second div inside the text column
+              const textCol = dlBtn.querySelectorAll("div div");
+              const sublabelEl = textCol[1] || null;
+              if (sublabelEl && !dlBtn.dataset.counting) {
+                dlBtn.dataset.counting = "1";
+                startResumeCountdown(dlBtn, null, sublabelEl, false);
+              }
             });
             actions.appendChild(dlBtn);
           } else if (hasResume) {
             const tailorBtn = makeBtn("✨", "Generate tailored resume", "Creates resume PDF for this role", "#D97706", () => {
-              setStatus("Requesting resume…");
-              chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
-                setStatus("Check your downloads!");
-                setTimeout(() => setStatus(""), 3000);
-              });
+              const textCol = tailorBtn.querySelectorAll("div div");
+              const sublabelEl = textCol[1] || null;
+              if (sublabelEl && !tailorBtn.dataset.counting) {
+                tailorBtn.dataset.counting = "1";
+                startResumeCountdown(tailorBtn, null, sublabelEl, true);
+              }
             });
             actions.appendChild(tailorBtn);
           }

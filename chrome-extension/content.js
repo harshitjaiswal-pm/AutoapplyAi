@@ -663,8 +663,12 @@
     }
 
     if (bestType === "easy_apply") {
-      // Don't click Easy Apply — just report it
-      try { AALog && AALog.nav("linkedin.clickApply.easyApply", { candidates }); } catch(_){}
+      // Click the Easy Apply button — the modal will open and handleEasyApply() takes over
+      const btnLabel = bestApplyBtn.getAttribute("aria-label") || bestApplyBtn.textContent.trim();
+      console.log("AutoApply: Clicking Easy Apply button: " + btnLabel);
+      try { AALog && AALog.nav("linkedin.clickApply.easyApply", { label: btnLabel, candidates }); } catch(_){}
+      bestApplyBtn.click();
+      await new Promise((r) => setTimeout(r, 800));
       return "easy_apply";
     }
 
@@ -880,11 +884,14 @@
         await new Promise((r) => setTimeout(r, 5000));
         return { success: true, type: "external" };
       } else if (applyType === "easy_apply") {
-        // Skip Easy Apply for now — we're focused on external
-        updateJobStatus(job.id, "skipped");
-        skippedCount++;
-        updateStatus(`Skipped (Easy Apply): ${job.title}`);
-        return { success: false, reason: "Easy Apply — skipped" };
+        // Handle inline — fills the modal step by step
+        const result = await handleEasyApply(job, jobData);
+        if (result.success) {
+          appliedCount++;
+          updateStatus(`✅ Easy Apply submitted: ${job.title}`);
+          return { success: true, type: "easy_apply" };
+        }
+        return { success: false, reason: "Easy Apply did not complete" };
       } else if (applyType === "already_applied") {
         // Already applied — skip, don't count as failure
         updateJobStatus(job.id, "skipped");
@@ -1261,9 +1268,12 @@
         await new Promise((r) => setTimeout(r, 3000));
         if (!isApplying) break; // Stop clicked during post-open wait
       } else if (applyType === "easy_apply") {
-        updateJobStatus(job.id, "skipped");
-        skippedCount++;
-        updateStatus(`Skipped (Easy Apply): ${job.title}`);
+        // jobData was built earlier in this iteration
+        const eaResult = await handleEasyApply(job, jobData);
+        if (eaResult.success) {
+          appliedCount++;
+          updateStatus(`✅ Easy Apply submitted: ${job.title}`);
+        }
       } else if (applyType === "already_applied") {
         updateJobStatus(job.id, "skipped");
         skippedCount++;
@@ -1285,6 +1295,419 @@
     updateStatus(`Done! ${appliedCount} applied, ${skippedCount} skipped.`, "success");
     renderJobList();
   }
+
+  /* ══════════════════════════════════════════════════════════════════════
+   *  LINKEDIN EASY APPLY ENGINE
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  /**
+   * Main entry point: called after the Easy Apply button has been clicked.
+   * Waits for the modal, then walks through every step filling fields,
+   * and finally submits.
+   */
+  async function handleEasyApply(job, jobData) {
+    try {
+      // Load profile from storage — needed to fill contact / work-auth fields
+      const stored = await new Promise(r =>
+        chrome.storage.local.get(["userProfile", "tailoredResumePdf", "parsedResume"], r)
+      );
+      const profile = stored.userProfile || {};
+      const hasPdf  = !!stored.tailoredResumePdf;
+
+      updateJobStatus(job.id, "applying", "Easy Apply — waiting for modal…");
+      const modal = await waitForEasyApplyModal();
+      if (!modal) {
+        updateJobStatus(job.id, "failed", "Easy Apply modal did not open");
+        try { AALog && AALog.error("linkedin.easyApply.noModal", { title: job.title }); } catch(_){}
+        return { success: false };
+      }
+
+      let stepCount = 0;
+      const MAX_STEPS = 12;
+
+      while (stepCount < MAX_STEPS) {
+        stepCount++;
+        await new Promise(r => setTimeout(r, 600)); // let React render
+
+        // Fill all fields on the current step
+        const stepLabel = getEasyApplyStepLabel(modal);
+        updateJobStatus(job.id, "applying", `Easy Apply — ${stepLabel}`);
+        console.log(`AutoApply EasyApply: Step ${stepCount} — ${stepLabel}`);
+        try { AALog && AALog.state("linkedin.easyApply.step", { step: stepCount, label: stepLabel, title: job.title }); } catch(_){}
+
+        await fillEasyApplyStep(modal, profile, stored, job, jobData);
+
+        await new Promise(r => setTimeout(r, 400));
+
+        // Find the action button — priority: Submit > Review > Next/Continue
+        const submitBtn  = findEasyApplyBtn(modal, ["submit application"]);
+        const reviewBtn  = findEasyApplyBtn(modal, ["review your application", "review"]);
+        const nextBtn    = findEasyApplyBtn(modal, ["continue to next step", "next", "continue"]);
+
+        if (submitBtn) {
+          console.log("AutoApply EasyApply: Submitting application");
+          updateJobStatus(job.id, "applying", "Easy Apply — submitting…");
+          submitBtn.click();
+          await new Promise(r => setTimeout(r, 2000));
+          // Check for success confirmation
+          const confirmed = await checkEasyApplySuccess(modal);
+          if (confirmed) {
+            // Log funnel completion
+            chrome.runtime.sendMessage({ type: "FUNNEL_STAGE", stage: "completed", job: {
+              jobTitle: job.title, company: job.company, jobUrl: window.location.href,
+            }});
+            updateJobStatus(job.id, "applied");
+            try { AALog && AALog.nav("linkedin.easyApply.submitted", { title: job.title, company: job.company }); } catch(_){}
+          } else {
+            updateJobStatus(job.id, "applied", "Submitted (verify manually)");
+          }
+          return { success: true };
+        }
+
+        if (reviewBtn) {
+          reviewBtn.click();
+          continue; // next iteration will see Submit button
+        }
+
+        if (nextBtn) {
+          // Check for validation errors before clicking Next
+          const errors = getEasyApplyErrors(modal);
+          if (errors.length > 0) {
+            console.warn("AutoApply EasyApply: Validation errors on step", stepCount, errors);
+            // Attempt a second fill pass for any fields still empty
+            await fillEasyApplyStep(modal, profile, stored, job, jobData, true);
+            await new Promise(r => setTimeout(r, 400));
+          }
+          nextBtn.click();
+          continue;
+        }
+
+        // No action button found — something unexpected; bail
+        console.warn("AutoApply EasyApply: No action button found on step", stepCount);
+        try { AALog && AALog.error("linkedin.easyApply.noActionBtn", { step: stepCount, title: job.title }); } catch(_){}
+        break;
+      }
+
+      if (stepCount >= MAX_STEPS) {
+        console.error("AutoApply EasyApply: Exceeded max steps");
+        updateJobStatus(job.id, "failed", "Easy Apply — too many steps");
+      }
+      return { success: false };
+    } catch (err) {
+      console.error("AutoApply EasyApply error:", err);
+      updateJobStatus(job.id, "failed", "Easy Apply error: " + err.message);
+      try { AALog && AALog.error("linkedin.easyApply.exception", { title: job.title, msg: err.message }); } catch(_){}
+      return { success: false };
+    }
+  }
+
+  /** Wait up to 8s for the Easy Apply modal to appear */
+  async function waitForEasyApplyModal() {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const modal = findEasyApplyModal();
+      if (modal) return modal;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return null;
+  }
+
+  function findEasyApplyModal() {
+    // LinkedIn's easy apply modal selectors (multiple variants observed in the wild)
+    return (
+      document.querySelector('[data-test-modal-id="easy-apply-modal"]') ||
+      document.querySelector('.jobs-easy-apply-content') ||
+      document.querySelector('[aria-label*="Easy Apply"]') ||
+      document.querySelector('[aria-label*="easy apply"]') ||
+      (() => {
+        // Fallback: any open artdeco-modal that contains an easy-apply-related class
+        for (const m of document.querySelectorAll('.artdeco-modal, [role="dialog"]')) {
+          const t = (m.innerText || "").toLowerCase();
+          if (t.includes("easy apply") || t.includes("contact info") || t.includes("resume")) return m;
+        }
+        return null;
+      })()
+    );
+  }
+
+  /** Human-readable step label from the modal progress text */
+  function getEasyApplyStepLabel(modal) {
+    const prog = modal.querySelector('[class*="progress"], [class*="header-progress"], [class*="pagination"]');
+    if (prog) return prog.innerText.trim().replace(/\n/g, " ") || "filling…";
+    const h3 = modal.querySelector("h3");
+    if (h3) return h3.innerText.trim().slice(0, 60);
+    return "filling…";
+  }
+
+  /** Find action button inside the modal by matching text labels */
+  function findEasyApplyBtn(modal, labels) {
+    for (const btn of modal.querySelectorAll("button")) {
+      const t = (btn.getAttribute("aria-label") || btn.innerText || "").toLowerCase().trim();
+      if (labels.some(l => t.includes(l))) return btn;
+    }
+    return null;
+  }
+
+  /** Collect visible validation error messages from the current step */
+  function getEasyApplyErrors(modal) {
+    const errors = [];
+    for (const el of modal.querySelectorAll('[class*="error"], [class*="invalid"], [aria-invalid="true"]')) {
+      const t = el.innerText?.trim();
+      if (t) errors.push(t);
+    }
+    return errors;
+  }
+
+  /** Check if the modal shows a success/confirmation state */
+  async function checkEasyApplySuccess(modal) {
+    await new Promise(r => setTimeout(r, 1500));
+    const text = (modal?.innerText || document.body.innerText).toLowerCase();
+    return (
+      text.includes("application submitted") ||
+      text.includes("applied successfully") ||
+      text.includes("your application was sent") ||
+      text.includes("your application has been submitted") ||
+      !findEasyApplyModal() // modal closed = success
+    );
+  }
+
+  /**
+   * Fill all fields on the current Easy Apply step.
+   * Handles: text inputs, phone, selects, radio yes/no, textareas, file upload.
+   */
+  async function fillEasyApplyStep(modal, profile, stored, job, jobData, retryPass = false) {
+    const fullName   = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
+    const email      = profile.email || "";
+    const phone      = profile.phone || "";
+    const city       = profile.city || "";
+    const country    = profile.country || "Canada";
+    const linkedinUrl = profile.linkedinUrl || profile.linkedin || "";
+    const firstName  = profile.firstName || fullName.split(" ")[0] || "";
+    const lastName   = profile.lastName  || fullName.split(" ").slice(1).join(" ") || "";
+
+    // ── Text / textarea inputs ──────────────────────────────────────────
+    const textInputs = modal.querySelectorAll(
+      "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
+    );
+
+    for (const input of textInputs) {
+      // Skip if already filled and not a retry pass
+      if (!retryPass && input.value && input.value.trim().length > 0) continue;
+
+      const label = getInputLabel(modal, input).toLowerCase();
+      const placeholder = (input.placeholder || "").toLowerCase();
+      const hint = label + " " + placeholder;
+
+      let value = null;
+
+      // Contact info
+      if (hint.match(/\bfirst.?name\b/))             value = firstName;
+      else if (hint.match(/\blast.?name\b/))          value = lastName;
+      else if (hint.match(/\bfull.?name\b|your name/)) value = fullName;
+      else if (hint.includes("email"))                 value = email;
+      else if (hint.match(/phone|mobile|cell/))        value = phone;
+      else if (hint.match(/city|town|municipality/))   value = city;
+      else if (hint.match(/linkedin/))                 value = linkedinUrl;
+      else if (hint.match(/website|portfolio|github/)) value = profile.portfolioUrl || profile.website || profile.github || "";
+
+      // Numeric / years
+      else if (hint.match(/years.*(experience|exp)\b/)) value = profile.yearsExperience || "5";
+      else if (hint.match(/salary|compensation|expected|desired/)) value = "";
+
+      // Generic short answer — skip (needs AI, handled below via textarea detection)
+
+      if (value !== null && value !== "") {
+        easyApplySetValue(input, value);
+      }
+    }
+
+    // ── Textareas: cover letter / open-ended questions ──────────────────
+    for (const ta of modal.querySelectorAll("textarea")) {
+      if (!retryPass && ta.value && ta.value.trim().length > 0) continue;
+      const label = getInputLabel(modal, ta).toLowerCase();
+      // Cover letter
+      if (label.includes("cover") || label.includes("letter") || label.includes("why") || label.includes("motivation")) {
+        const cover = buildEasyApplyCoverSnippet(profile, job);
+        easyApplySetValue(ta, cover);
+      }
+      // "Additional information" or generic — provide a short placeholder
+      else if (ta.value.trim() === "") {
+        easyApplySetValue(ta, "N/A");
+      }
+    }
+
+    // ── Select dropdowns ────────────────────────────────────────────────
+    for (const sel of modal.querySelectorAll("select")) {
+      if (!retryPass && sel.value) continue;
+      const label = getInputLabel(modal, sel).toLowerCase();
+      await fillEasyApplySelect(sel, label, profile, job);
+    }
+
+    // ── Radio / ARIA radio groups (Yes/No questions) ────────────────────
+    const fieldsets = modal.querySelectorAll("fieldset, [role='group'], [class*='form-component']");
+    for (const fs of fieldsets) {
+      const groupLabel = (fs.querySelector("legend, label, [class*='label']")?.innerText || "").toLowerCase();
+      if (!groupLabel) continue;
+      const yesOrNo = resolveYesNo(groupLabel, profile);
+      if (yesOrNo === null) continue;
+
+      // Native radio inputs
+      const radios = fs.querySelectorAll("input[type='radio']");
+      if (radios.length > 0) {
+        for (const r of radios) {
+          const rLabel = (r.getAttribute("aria-label") || r.closest("label")?.innerText || getInputLabel(modal, r)).toLowerCase();
+          const isYesOpt = rLabel.includes("yes");
+          const isNoOpt  = rLabel.includes("no");
+          if ((yesOrNo === "Yes" && isYesOpt) || (yesOrNo === "No" && isNoOpt)) {
+            if (!r.checked) { r.click(); break; }
+          }
+        }
+        continue;
+      }
+
+      // ARIA role=radio
+      const ariaRadios = fs.querySelectorAll("[role='radio']");
+      for (const r of ariaRadios) {
+        const rLabel = (r.getAttribute("aria-label") || r.innerText || "").toLowerCase();
+        const isYesOpt = rLabel.includes("yes");
+        const isNoOpt  = rLabel.includes("no");
+        if ((yesOrNo === "Yes" && isYesOpt) || (yesOrNo === "No" && isNoOpt)) {
+          if (r.getAttribute("aria-checked") !== "true") r.click();
+          break;
+        }
+      }
+    }
+
+    // ── Resume file upload ──────────────────────────────────────────────
+    // Only try to upload if we have a tailored PDF and a visible file input
+    if (stored.tailoredResumePdf) {
+      const fileInput = modal.querySelector("input[type='file']");
+      if (fileInput) {
+        try {
+          // Convert base64 PDF to a File object and attach to the input
+          const base64  = stored.tailoredResumePdf.replace(/^data:application\/pdf;base64,/, "");
+          const bytes   = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+          const blob    = new Blob([bytes], { type: "application/pdf" });
+          const safeName = ((job.title || "Resume") + "_" + (job.company || "")).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40) + ".pdf";
+          const file    = new File([blob], safeName, { type: "application/pdf" });
+          const dt      = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+          fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+          console.log("AutoApply EasyApply: Uploaded resume PDF");
+        } catch (err) {
+          console.warn("AutoApply EasyApply: Resume upload failed", err.message);
+        }
+      }
+    }
+  }
+
+  /** Get the label text associated with a form input */
+  function getInputLabel(modal, input) {
+    // 1. explicit <label for="...">
+    const id = input.id;
+    if (id) {
+      const lbl = modal.querySelector(`label[for="${id}"]`);
+      if (lbl) return lbl.innerText || "";
+    }
+    // 2. wrapping label
+    const parent = input.closest("label");
+    if (parent) return parent.innerText || "";
+    // 3. preceding sibling label / span with class containing "label"
+    const container = input.closest("div, fieldset, li") || modal;
+    const lbl2 = container.querySelector("label, [class*='label'], legend");
+    if (lbl2 && lbl2 !== input) return lbl2.innerText || "";
+    // 4. aria-label / aria-labelledby
+    const ariaLabel = input.getAttribute("aria-label");
+    if (ariaLabel) return ariaLabel;
+    const labelledById = input.getAttribute("aria-labelledby");
+    if (labelledById) {
+      const el = document.getElementById(labelledById);
+      if (el) return el.innerText || "";
+    }
+    return "";
+  }
+
+  /** React-compatible value setter (same technique as greenhouse.js setNativeValue) */
+  function easyApplySetValue(input, value) {
+    try {
+      const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (setter) setter.call(input, value);
+      else input.value = value;
+    } catch (_) {
+      input.value = value;
+    }
+    input.dispatchEvent(new Event("input",  { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur",   { bubbles: true }));
+  }
+
+  /** Fill a <select> based on its label / profile data */
+  async function fillEasyApplySelect(sel, label, profile, job) {
+    const opts = Array.from(sel.options).map(o => o.text.toLowerCase());
+
+    // Helper: pick option whose text includes a keyword
+    function pick(keyword) {
+      const idx = opts.findIndex(o => o.includes(keyword));
+      if (idx > 0) { sel.selectedIndex = idx; sel.dispatchEvent(new Event("change", { bubbles: true })); return true; }
+      return false;
+    }
+
+    if (label.match(/country|nation/)) {
+      const c = (profile.country || "Canada").toLowerCase();
+      if (!pick(c)) pick("canada");
+    } else if (label.match(/province|state|region/)) {
+      pick((profile.province || "").toLowerCase());
+    } else if (label.match(/sponsor|visa|immigration/)) {
+      pick("no");
+    } else if (label.match(/authoriz|eligible|work permit/)) {
+      pick("yes");
+    } else if (label.match(/hear|source|referral|found/)) {
+      if (!pick("linkedin")) pick("online");
+    } else if (label.match(/education|degree|qualification/)) {
+      if (!pick("bachelor") && !pick("undergraduate")) pick("degree");
+    } else if (label.match(/employ.*type|work type|job type/)) {
+      pick("full");
+    } else if (label.match(/willing.*relocat|relocat/)) {
+      pick("no");
+    }
+    // Leave others at default (first non-empty option)
+  }
+
+  /**
+   * Resolve whether a yes/no question should be "Yes" or "No"
+   * based on the question text and user profile.
+   * Returns "Yes", "No", or null (don't auto-answer).
+   */
+  function resolveYesNo(text, profile) {
+    // Work authorization
+    if (text.match(/legally authorized|authorized to work|work authoriz|eligible to work/)) return "Yes";
+    // Visa sponsorship
+    if (text.match(/visa sponsor|require sponsor|need sponsor|immigration sponsor/)) {
+      return (profile.requireSponsorship === "Yes") ? "Yes" : "No";
+    }
+    // Hybrid / remote
+    if (text.match(/hybrid|remote|onsite|on.site|work from/)) return "Yes";
+    // Background check
+    if (text.match(/background check|drug test/)) return "Yes";
+    // Worked here before
+    if (text.match(/previously work|worked (at|here|before|for)|former employee|previously employ/)) return "No";
+    // Relatives / conflicts
+    if (text.match(/relative|family member|conflict of interest/)) return "No";
+    return null;
+  }
+
+  /** Build a minimal cover letter blurb for Easy Apply cover letter fields */
+  function buildEasyApplyCoverSnippet(profile, job) {
+    const name    = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "I";
+    const role    = job.title || "this position";
+    const company = job.company || "your company";
+    const years   = profile.yearsExperience ? `${profile.yearsExperience} years of experience` : "relevant experience";
+    return `I am excited to apply for the ${role} role at ${company}. With ${years} and a strong background in ${profile.skills?.slice(0, 80) || "the required areas"}, I am confident in my ability to contribute effectively to your team. I look forward to the opportunity to discuss how my skills align with your needs.`;
+  }
+
+  /* ── end LINKEDIN EASY APPLY ENGINE ── */
 
   function stopApplying() {
     isApplying = false;
