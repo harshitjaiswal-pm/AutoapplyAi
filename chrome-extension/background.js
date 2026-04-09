@@ -1269,20 +1269,22 @@ function injectFloatingTrigger(tabId) {
 
           // ② Download / generate resume — both use countdown timer
           function startResumeCountdown(btn, labelEl, sublabelEl, isGenerate) {
-            // Disable button immediately
             btn.style.opacity = "0.7";
             btn.style.pointerEvents = "none";
 
             const SECS = 5;
+            const color = isGenerate ? "#D97706" : "#059669";
             let remaining = SECS;
+            let cancelled = false;
+            let tickInterval;
 
-            // Replace sublabel with countdown bar
+            // Render bar WITHOUT transition first — so the browser paints 100% width
             sublabelEl.innerHTML = `
               <div style="margin-top:4px;">
                 <div style="display:flex;align-items:center;gap:6px;">
-                  <span id="aa-dl-count" style="font-size:10px;color:#6B7280;font-family:${FONT};min-width:28px;">5s</span>
+                  <span id="aa-dl-count" style="font-size:10px;color:#6B7280;font-family:${FONT};min-width:28px;">${SECS}s</span>
                   <div style="flex:1;height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;">
-                    <div id="aa-dl-bar" style="height:100%;width:100%;background:${isGenerate ? "#D97706" : "#059669"};border-radius:2px;transition:width 1s linear;"></div>
+                    <div id="aa-dl-bar" style="height:100%;width:100%;background:${color};border-radius:2px;"></div>
                   </div>
                   <span id="aa-dl-cancel" style="font-size:10px;color:#9CA3AF;cursor:pointer;font-family:${FONT};">✕</span>
                 </div>
@@ -1292,33 +1294,38 @@ function injectFloatingTrigger(tabId) {
             const barEl   = sublabelEl.querySelector("#aa-dl-bar");
             const cancel  = sublabelEl.querySelector("#aa-dl-cancel");
 
-            let cancelled = false;
             cancel.addEventListener("click", (e) => {
               e.stopPropagation();
               cancelled = true;
-              clearInterval(tick);
+              clearInterval(tickInterval);
               btn.style.opacity = "";
               btn.style.pointerEvents = "";
               delete btn.dataset.counting;
               sublabelEl.textContent = isGenerate ? "Creates resume PDF for this role" : "Your AI-customised resume PDF";
             });
 
-            // Kick off bar shrink on next frame (after DOM paint)
+            // Double rAF: first frame paints the bar at 100%.
+            // Second frame applies the transition — now the browser animates from 100% → 0%
+            // over exactly SECS seconds, so bar and number stay in sync.
             requestAnimationFrame(() => {
-              barEl.style.width = "0%";
+              requestAnimationFrame(() => {
+                barEl.style.transition = `width ${SECS}s linear`;
+                barEl.style.width = "0%";
+              });
             });
 
-            const tick = setInterval(() => {
+            // Update the number every second — matches the bar visually
+            tickInterval = setInterval(() => {
               if (cancelled) return;
               remaining--;
-              if (countEl) countEl.textContent = remaining + "s";
+              if (countEl) countEl.textContent = remaining > 0 ? `${remaining}s` : "…";
               if (remaining <= 0) {
-                clearInterval(tick);
+                clearInterval(tickInterval);
                 if (!cancelled) {
                   sublabelEl.textContent = isGenerate ? "Generating…" : "Downloading…";
                   setStatus(isGenerate ? "Generating resume…" : "Downloading…");
                   chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
-                    setStatus("Check your downloads!");
+                    setStatus("✅ Check your downloads!");
                     btn.style.opacity = "";
                     btn.style.pointerEvents = "";
                     delete btn.dataset.counting;
