@@ -307,6 +307,16 @@
     fillInput('input[name="phone"]', user.phone || "");
     fillInput('input[name*="linkedin"], input[name*="urls[LinkedIn]"], input[name*="urls[0]"]', user.linkedin || "");
 
+    // Current company / org
+    if (user.currentEmployer || user.currentCompany) {
+      fillInput('input[name="org"], input[name*="company"], input[name*="current_company"]', user.currentEmployer || user.currentCompany);
+    }
+    // Current location (city or city+province)
+    const location = [user.city, user.province].filter(Boolean).join(", ");
+    if (location) {
+      fillInput('input[name*="location"], input[id*="location"]', location);
+    }
+
     // GitHub / Portfolio (fill immediately — no tailoring needed)
     if (user.github) {
       fillInput('input[name*="github"], input[name*="urls[GitHub]"], input[name*="urls[1]"]', user.github);
