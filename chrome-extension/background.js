@@ -501,14 +501,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return match;
           }
 
-          /* Helper: find the React Select class instance (stateNode) from a control element.
-             The instance has setValue(), focusInput(), and other internal methods. */
+          /* Helper: find the React Select fiber entry point from a control element.
+             Returns { instance, options, onChangeProp } where:
+             - instance: RS class component stateNode (RS v4, may be null for RS v5)
+             - options: available options array
+             - onChangeProp: onChange function from fiber props (RS v5 fallback) */
           function getSelectInstance(control) {
+            // Walk up to find the fiber key — try the control itself and parent containers
             var fiberKey = Object.keys(control).find(function(k) {
               return k.indexOf("__reactFiber") === 0 || k.indexOf("__reactInternalInstance") === 0;
             });
             if (!fiberKey) {
-              // Try parent containers
               var container = control.closest('[class*="select__container"], [class*="select"]') || control.parentElement;
               if (container) {
                 fiberKey = Object.keys(container).find(function(k) {
@@ -517,25 +520,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 if (fiberKey) control = container;
               }
             }
-            if (!fiberKey) return null;
+            if (!fiberKey) return { instance: null, options: [], onChangeProp: null };
 
             var fiber = control[fiberKey];
             var current = fiber;
-            var maxWalk = 30;
+            var maxWalk = 50;
             var instance = null;
             var options = null;
+            var onChangeProp = null;
 
             while (current && maxWalk-- > 0) {
-              // React Select class component: has stateNode with focusInput method
+              // RS v4: class component with stateNode.focusInput
               if (current.stateNode && typeof current.stateNode.focusInput === "function") {
                 instance = current.stateNode;
                 options = instance.props ? instance.props.options : null;
                 break;
               }
+              // RS v5: function component — look for memoizedProps with options + onChange
+              var props = current.memoizedProps || current.pendingProps;
+              if (props) {
+                if (Array.isArray(props.options) && props.options.length > 0) {
+                  options = props.options;
+                }
+                if (!options && Array.isArray(props.value) && props.options) {
+                  options = props.options;
+                }
+                if (typeof props.onChange === "function" && !onChangeProp && options) {
+                  onChangeProp = props.onChange;
+                }
+              }
               current = current.return;
             }
 
-            return { instance: instance, options: options || [] };
+            // If we found options + onChange via function component, that's RS v5
+            return { instance: instance, options: options || [], onChangeProp: onChangeProp };
+          }
+
+          /* Fallback: DOM click simulation to open dropdown and click the option.
+             Used when both RS v4 instance.setValue() and RS v5 onChange prop fail. */
+          function clickSelectOption(control, optionLabel, callback) {
+            // Click to open the dropdown
+            control.click();
+            setTimeout(function() {
+              // Find the dropdown menu that appeared
+              var menu = document.querySelector('[class*="select__menu"]');
+              if (!menu) {
+                // Try clicking the control's parent (sometimes the clickable area is wrapper)
+                var wrapper = control.parentElement;
+                if (wrapper) wrapper.click();
+                setTimeout(function() { menu = document.querySelector('[class*="select__menu"]'); doClick(menu); }, 300);
+                return;
+              }
+              doClick(menu);
+            }, 300);
+
+            function doClick(menu) {
+              if (!menu) { callback(false); return; }
+              var optionEls = menu.querySelectorAll('[class*="select__option"]');
+              var vl = optionLabel.toLowerCase().trim();
+              var found = false;
+              for (var i = 0; i < optionEls.length; i++) {
+                var text = (optionEls[i].textContent || "").toLowerCase().trim();
+                if (text === vl || text.indexOf(vl) === 0 || (vl === "no" && text.indexOf("no") === 0) || (vl === "yes" && text.indexOf("yes") === 0)) {
+                  optionEls[i].click();
+                  found = true;
+                  break;
+                }
+              }
+              // Close menu if option not found or to ensure cleanup
+              if (!found) {
+                document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+              }
+              callback(found);
+            }
           }
 
           // Build control → field mapping
@@ -583,31 +640,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             var item = controlMap[index];
             var result = getSelectInstance(item.control);
+            var options = result.options;
+            console.log("AutoApply: [main-world] \"" + item.labelText + "\" — instance:", !!result.instance, "onChange:", !!result.onChangeProp, "options:", options.length);
 
-            if (!result.instance) {
-              console.log("AutoApply: [main-world] No Select instance for \"" + item.labelText + "\"");
-              // Move to next dropdown after delay
-              setTimeout(function() { fillDropdownSequentially(index + 1); }, 300);
+            var match = findMatch(options, item.value);
+
+            function next(delay) {
+              setTimeout(function() { fillDropdownSequentially(index + 1); }, delay || 700);
+            }
+
+            if (!match && options.length === 0) {
+              // No options found at all — try DOM click approach directly
+              console.log("AutoApply: [main-world] No options for \"" + item.labelText + "\" — trying DOM click");
+              clickSelectOption(item.control, item.value, function(ok) {
+                console.log("AutoApply: [main-world] DOM click for \"" + item.labelText + "\":", ok ? "success" : "failed");
+                next(800);
+              });
               return;
             }
 
-            var options = result.options;
-            console.log("AutoApply: [main-world] \"" + item.labelText + "\" has " + options.length + " options");
-            var match = findMatch(options, item.value);
-
-            if (match) {
-              console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\" (via setValue)");
-              // Use React Select's internal setValue method — this properly updates
-              // both React Select's internal state AND calls the parent form's onChange,
-              // which updates Greenhouse's form validation state.
-              result.instance.setValue(match, "select-option", match);
-            } else {
+            if (!match) {
               console.log("AutoApply: [main-world] No match for \"" + item.value + "\" in \"" + item.labelText + "\". Available: " +
                 options.map(function(o) { return o.label; }).join(" | "));
+              next(300);
+              return;
             }
 
-            // Delay before filling the next dropdown to let React finish re-rendering
-            setTimeout(function() { fillDropdownSequentially(index + 1); }, 600);
+            if (result.instance) {
+              // RS v4: use internal setValue() — most reliable
+              console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\" (RS v4 setValue)");
+              result.instance.setValue(match, "select-option", match);
+              next(700);
+            } else if (result.onChangeProp) {
+              // RS v5: call onChange prop directly with the option object
+              console.log("AutoApply: [main-world] " + item.labelText + " -> \"" + match.label + "\" (RS v5 onChange)");
+              try {
+                result.onChangeProp(match, { action: "select-option", option: match });
+                next(700);
+              } catch (e) {
+                // RS v5 onChange failed — fall back to DOM click
+                console.log("AutoApply: [main-world] RS v5 onChange failed for \"" + item.labelText + "\", trying DOM click:", e.message);
+                clickSelectOption(item.control, item.value, function(ok) {
+                  console.log("AutoApply: [main-world] DOM click fallback for \"" + item.labelText + "\":", ok ? "success" : "failed");
+                  next(800);
+                });
+              }
+            } else {
+              // No instance, no onChange prop — use DOM click as last resort
+              console.log("AutoApply: [main-world] No RS instance for \"" + item.labelText + "\" — using DOM click");
+              clickSelectOption(item.control, item.value, function(ok) {
+                console.log("AutoApply: [main-world] DOM click for \"" + item.labelText + "\":", ok ? "success" : "failed");
+                next(800);
+              });
+            }
           }
 
           // Start the sequential fill chain

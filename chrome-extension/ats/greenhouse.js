@@ -548,7 +548,7 @@
       { labels: ["race", "ethnicity"],                                         value: user.ethnicity || "Prefer not to disclose" },
       { labels: ["veteran"],                                                   value: user.veteranStatus || "Prefer not to disclose" },
       { labels: ["disability"],                                                value: user.disabilityStatus || "Prefer not to disclose" },
-      { labels: ["previously been employed", "worked here", "employed at"],   value: "not previously" },
+      { labels: ["previously been employed", "worked here", "employed at", "worked at", "worked for", "worked before", "ever worked", "previously work", "former employee"], value: "No" },
     ];
 
     // ── Radio / checkbox questions (common in custom Greenhouse forms) ──
