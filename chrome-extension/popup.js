@@ -7,6 +7,7 @@ const LOG_STORAGE_KEY = "_aa_logs";
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initDashboard();
+  initHistory();
   initProfile();
   initLogs();
   initPopupChat();
@@ -29,8 +30,9 @@ function initTabs() {
         tab.classList.add("active");
         tab.style.display = tabName === "chat" ? "flex" : "block";
       }
-      if (tabName === "logs") refreshLogs();
-      if (tabName === "chat") popupChatFocus();
+      if (tabName === "logs")    refreshLogs();
+      if (tabName === "chat")    popupChatFocus();
+      if (tabName === "history") refreshHistory();
     });
   });
   // Show the initially active tab correctly
@@ -46,12 +48,15 @@ function initDashboard() {
   const openBtn      = document.getElementById("open-pipeline");
   const clearBtn     = document.getElementById("clear-data");
 
-  // Load session stats
-  chrome.storage.local.get(["_aa_scrapedJobs", "completedApplications"], (result) => {
-    const scraped = Array.isArray(result._aa_scrapedJobs) ? result._aa_scrapedJobs.length : 0;
-    const sent    = Array.isArray(result.completedApplications) ? result.completedApplications.length : 0;
+  // Load session stats + all-time history count
+  chrome.storage.local.get(["_aa_scrapedJobs", "completedApplications", "applicationHistory"], (result) => {
+    const scraped  = Array.isArray(result._aa_scrapedJobs)        ? result._aa_scrapedJobs.length        : 0;
+    const sent     = Array.isArray(result.completedApplications)  ? result.completedApplications.length  : 0;
+    const allTime  = Array.isArray(result.applicationHistory)     ? result.applicationHistory.length     : 0;
     scrapedCount.textContent = scraped;
     sentCount.textContent    = sent;
+    const appliedEl = document.getElementById("applied-total");
+    if (appliedEl) appliedEl.textContent = allTime;
   });
 
   // Open the pipeline page in a new tab
@@ -501,4 +506,137 @@ function renderPopupChat(showTyping = false) {
   `;
 
   container.scrollTop = container.scrollHeight;
+}
+
+/* ─────────────── HISTORY TAB ─────────────── */
+
+let _historyCache = [];
+
+function initHistory() {
+  const searchInput = document.getElementById("hist-search");
+  const exportBtn   = document.getElementById("hist-export");
+  const clearBtn    = document.getElementById("hist-clear");
+
+  searchInput?.addEventListener("input", () => renderHistoryList(_historyCache, searchInput.value));
+
+  exportBtn?.addEventListener("click", () => exportHistoryCSV(_historyCache));
+
+  clearBtn?.addEventListener("click", () => {
+    if (!confirm("Clear all application history? This cannot be undone.")) return;
+    chrome.storage.local.remove(["applicationHistory"], () => {
+      _historyCache = [];
+      renderHistoryStats([]);
+      renderHistoryList([], "");
+    });
+  });
+}
+
+function refreshHistory() {
+  chrome.storage.local.get(["applicationHistory"], (result) => {
+    const history = Array.isArray(result.applicationHistory) ? result.applicationHistory : [];
+    // Sort newest first
+    _historyCache = history.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    renderHistoryStats(_historyCache);
+    const q = document.getElementById("hist-search")?.value || "";
+    renderHistoryList(_historyCache, q);
+  });
+}
+
+function renderHistoryStats(history) {
+  const total = history.length;
+  const now   = new Date();
+  const today = now.toDateString();
+  const weekAgo = new Date(now - 7 * 86400000);
+  const todayCount = history.filter(h => new Date(h.timestamp).toDateString() === today).length;
+  const weekCount  = history.filter(h => new Date(h.timestamp) >= weekAgo).length;
+
+  const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+  el("hist-total", total);
+  el("hist-today", todayCount);
+  el("hist-week",  weekCount);
+}
+
+function renderHistoryList(history, query) {
+  const list = document.getElementById("hist-list");
+  if (!list) return;
+
+  const q = (query || "").trim().toLowerCase();
+  const filtered = q
+    ? history.filter(h =>
+        (h.company  || "").toLowerCase().includes(q) ||
+        (h.jobTitle || "").toLowerCase().includes(q) ||
+        (h.ats      || "").toLowerCase().includes(q))
+    : history;
+
+  if (filtered.length === 0) {
+    list.innerHTML = `
+      <div class="history-empty">
+        <div class="history-empty-icon">${q ? "🔍" : "📋"}</div>
+        <p>${q ? "No matches for "" + query + """ : "No applications recorded yet."}</p>
+        ${!q ? '<p style="margin-top:4px;font-size:11px;">Applications are automatically tracked when AutoApply fills a form.</p>' : ""}
+      </div>`;
+    return;
+  }
+
+  const atsClass = (ats) => {
+    if (!ats) return "generic";
+    const a = ats.toLowerCase();
+    if (a.includes("workday"))    return "workday";
+    if (a.includes("greenhouse")) return "greenhouse";
+    if (a.includes("lever"))      return "lever";
+    if (a.includes("icims"))      return "icims";
+    return "generic";
+  };
+
+  const fmtDate = (iso) => {
+    try {
+      const d = new Date(iso);
+      const now = new Date();
+      const diffMs = now - d;
+      const diffMin = Math.floor(diffMs / 60000);
+      const diffH   = Math.floor(diffMin / 60);
+      const diffD   = Math.floor(diffH / 24);
+      if (diffMin < 1)  return "just now";
+      if (diffMin < 60) return `${diffMin}m ago`;
+      if (diffH < 24)   return `${diffH}h ago`;
+      if (diffD < 7)    return `${diffD}d ago`;
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch { return ""; }
+  };
+
+  list.innerHTML = filtered.slice(0, 100).map(h => {
+    const cls   = atsClass(h.ats);
+    const label = (h.ats || "").replace(/\.com$/, "").toLowerCase() || "generic";
+    const jobUrl = h.jobUrl ? `href="${h.jobUrl}" target="_blank"` : "";
+    return `
+      <div class="history-item">
+        <div class="history-item-top">
+          <span class="history-item-role" title="${h.jobTitle || ""}">${h.jobTitle || "Untitled"}</span>
+          <span class="history-item-date">${fmtDate(h.timestamp)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span class="history-item-company">${h.company || "Unknown Company"}</span>
+          <span class="history-badge ${cls}">${label}</span>
+          ${h.jobUrl ? `<a ${jobUrl} style="font-size:10px;color:#4F46E5;margin-left:auto;text-decoration:none;" title="Open job posting">↗</a>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function exportHistoryCSV(history) {
+  if (!history || history.length === 0) { alert("No history to export."); return; }
+  const cols  = ["date", "company", "jobTitle", "ats", "status", "jobUrl"];
+  const header = cols.join(",");
+  const rows   = history.map(h => cols.map(k => {
+    const v = (h[k === "date" ? "timestamp" : k] || "").toString().replace(/"/g, '""');
+    return `"${v}"`;
+  }).join(","));
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url;
+  a.download = `autoapply-history-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

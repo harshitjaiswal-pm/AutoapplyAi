@@ -250,6 +250,71 @@
       flex: 1; min-width: 0;
       padding: 7px 10px; font-size: 11px; margin-top: 0;
     }
+
+    /* ── History Tab ── */
+    .history { padding: 10px 14px; }
+
+    .history-stat-row {
+      display: flex; gap: 8px; margin-bottom: 12px;
+    }
+    .history-stat {
+      flex: 1; background: white; border: 1px solid #E5E7EB;
+      border-radius: 10px; padding: 9px 10px; text-align: center;
+    }
+    .history-stat-val { font-size: 20px; font-weight: 700; color: #4F46E5; }
+    .history-stat-lbl { font-size: 10px; color: #9CA3AF; margin-top: 2px; }
+
+    .history-search {
+      width: 100%; padding: 7px 10px;
+      font-size: 12px; border: 1px solid #D1D5DB;
+      border-radius: 6px; color: #111; font-family: inherit;
+      background: white; margin-bottom: 10px;
+      box-sizing: border-box;
+    }
+    .history-search:focus { outline: none; border-color: #4F46E5; }
+
+    .history-list { display: flex; flex-direction: column; gap: 0; }
+
+    .history-item {
+      padding: 9px 10px; border-bottom: 1px solid #F3F4F6;
+      cursor: default;
+    }
+    .history-item:last-child { border-bottom: none; }
+
+    .history-item-top {
+      display: flex; align-items: center; gap: 6px; margin-bottom: 2px;
+    }
+    .history-item-role {
+      font-size: 12px; font-weight: 600; color: #111; flex: 1;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .history-item-date {
+      font-size: 10px; color: #9CA3AF; white-space: nowrap;
+    }
+    .history-item-company {
+      font-size: 11px; color: #6B7280;
+    }
+    .history-badge {
+      display: inline-block; font-size: 9px; font-weight: 700;
+      padding: 1px 6px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: 0.3px;
+      margin-left: 4px;
+    }
+    .history-badge.workday  { background:#EEF2FF; color:#4F46E5; }
+    .history-badge.greenhouse { background:#F0FDF4; color:#059669; }
+    .history-badge.lever    { background:#FFF7ED; color:#D97706; }
+    .history-badge.icims    { background:#FFF1F2; color:#E11D48; }
+    .history-badge.generic  { background:#F3F4F6; color:#6B7280; }
+
+    .history-empty {
+      text-align: center; padding: 28px 16px;
+      font-size: 12px; color: #9CA3AF;
+    }
+    .history-empty-icon { font-size: 28px; margin-bottom: 8px; }
+
+    .history-actions { margin-top: 8px; display: flex; gap: 6px; }
+    .history-actions .btn,
+    .history-actions .btn-secondary { flex: 1; min-width: 0; padding: 7px 10px; font-size: 11px; margin-top: 0; }
   </style>
 </head>
 <body>
@@ -264,6 +329,7 @@
 
   <div class="tabs">
     <button class="tab-btn active" data-tab="dashboard">Overview</button>
+    <button class="tab-btn" data-tab="history">History</button>
     <button class="tab-btn" data-tab="profile">Profile</button>
     <button class="tab-btn" data-tab="logs">Activity</button>
     <button class="tab-btn" data-tab="chat">Chat ✦</button>
@@ -280,6 +346,10 @@
         <div class="stat-card-value" id="sent-count">0</div>
         <div class="stat-card-label">Sent to pipeline</div>
       </div>
+      <div class="stat-card" style="grid-column:1/-1;background:#F0FDF4;border-color:#BBF7D0;">
+        <div class="stat-card-value" id="applied-total" style="color:#059669;">0</div>
+        <div class="stat-card-label">Total applications submitted (all time)</div>
+      </div>
     </div>
 
     <p class="section-title">Quick actions</p>
@@ -291,6 +361,39 @@
       1. Go to any LinkedIn jobs search page<br>
       2. Click the <strong>AutoApply</strong> button (bottom-right)<br>
       3. Hit <strong>Scan Page</strong>, select jobs, and start applying
+    </div>
+  </div>
+
+  <!-- History Tab -->
+  <div id="history" class="tab-content history">
+    <div class="history-stat-row">
+      <div class="history-stat">
+        <div class="history-stat-val" id="hist-total">0</div>
+        <div class="history-stat-lbl">Total Applied</div>
+      </div>
+      <div class="history-stat">
+        <div class="history-stat-val" id="hist-today">0</div>
+        <div class="history-stat-lbl">Today</div>
+      </div>
+      <div class="history-stat">
+        <div class="history-stat-val" id="hist-week">0</div>
+        <div class="history-stat-lbl">This Week</div>
+      </div>
+    </div>
+
+    <input id="hist-search" class="history-search" type="text" placeholder="🔍 Search by company or role..." />
+
+    <div class="history-list" id="hist-list">
+      <div class="history-empty">
+        <div class="history-empty-icon">📋</div>
+        <p>No applications recorded yet.</p>
+        <p style="margin-top:4px;font-size:11px;">Applications are automatically tracked when AutoApply fills a form.</p>
+      </div>
+    </div>
+
+    <div class="history-actions">
+      <button class="btn btn-secondary" id="hist-export">Export CSV</button>
+      <button class="btn btn-danger" id="hist-clear">Clear History</button>
     </div>
   </div>
 
