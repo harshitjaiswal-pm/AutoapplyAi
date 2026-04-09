@@ -845,18 +845,52 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                 "color:#fff", "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
                 "padding:10px 18px 9px", "box-shadow:0 4px 20px rgba(0,0,0,0.2)",
               ].join(";");
+              b.style.position = "fixed";
               b.innerHTML = `
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button id="aa-fallback-collapse" style="
+                  all:initial;position:absolute;top:6px;right:8px;
+                  background:rgba(255,255,255,0.2);border:none;border-radius:4px;
+                  color:#fff;font-size:11px;font-weight:700;cursor:pointer;
+                  padding:2px 8px;line-height:1.6;
+                  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                  z-index:1;" title="Collapse banner">▲</button>
+                <div id="aa-fallback-inner" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-right:32px;">
                   <span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">⚠️ AUTOAPPLY AI</span>
                   <span style="font-size:13px;font-weight:500;">Login required or page changed — sign in then click Retry</span>
                   <button id="aa-retry-btn" style="margin-left:auto;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:#fff;border-radius:5px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">↩ Retry</button>
                 </div>`;
               (document.body || document.documentElement).prepend(b);
+              document.body.style.paddingTop = (b.offsetHeight || 44) + "px";
+
+              // Collapse / expand
+              let _collapsed = false;
+              document.getElementById("aa-fallback-collapse")?.addEventListener("click", () => {
+                _collapsed = !_collapsed;
+                const inner = document.getElementById("aa-fallback-inner");
+                const btn = document.getElementById("aa-fallback-collapse");
+                if (inner) inner.style.display = _collapsed ? "none" : "flex";
+                if (btn) { btn.textContent = _collapsed ? "▼" : "▲"; btn.title = _collapsed ? "Expand banner" : "Collapse banner"; }
+                document.body.style.paddingTop = _collapsed ? "28px" : (b.offsetHeight || 0) + "px";
+              });
+
+              // Retry — navigate directly to the stored apply URL instead of messaging
+              // the service worker (which may have gone idle in MV3).
               document.getElementById("aa-retry-btn")?.addEventListener("click", () => {
-                chrome.runtime.sendMessage({ type: "RETRY_INJECT" });
+                chrome.storage.local.get(["pendingApplication"], (stored) => {
+                  const applyUrl = stored.pendingApplication?.applyUrl || stored.pendingApplication?.jobUrl;
+                  if (applyUrl) {
+                    // Navigate back to the ATS apply page — extension will auto-inject on arrival
+                    window.location.href = applyUrl;
+                  } else {
+                    // No stored URL — fall back to reloading current page
+                    window.location.reload();
+                  }
+                });
               });
             },
           }).catch(() => {});
+          // Inject the persistent floating trigger alongside the login banner
+          injectFloatingTrigger(tabId);
         }
       });
     }
@@ -944,6 +978,52 @@ function injectInstantBanner(tabId) {
       document.body ? document.body.prepend(b) : document.documentElement.prepend(b);
     },
   }).catch(() => {}); // page may not be ready yet — silently ignore
+
+  // Also inject the persistent floating trigger button
+  injectFloatingTrigger(tabId);
+}
+
+/** Inject a persistent floating "🤖 AutoApply" button in the bottom-right.
+ *  Acts as a fallback trigger if the banner crashes or the form doesn't fill.
+ *  Safe to call multiple times — skips if already present. */
+function injectFloatingTrigger(tabId) {
+  chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (document.getElementById("aa-floating-trigger")) return;
+      const btn = document.createElement("button");
+      btn.id = "aa-floating-trigger";
+      btn.title = "Apply with AutoApply";
+      btn.innerHTML = "🤖 AutoApply";
+      btn.style.cssText = [
+        "all:initial",
+        "position:fixed", "bottom:20px", "right:20px", "z-index:2147483646",
+        "background:linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%)",
+        "color:#fff", "border:none", "border-radius:999px",
+        "padding:10px 18px", "font-size:13px", "font-weight:700",
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+        "cursor:pointer", "box-shadow:0 4px 20px rgba(79,70,229,0.5)",
+        "display:flex", "align-items:center", "gap:6px",
+        "transition:transform 0.15s,box-shadow 0.15s",
+      ].join(";");
+      btn.onmouseenter = () => { btn.style.transform = "scale(1.05)"; btn.style.boxShadow = "0 6px 28px rgba(79,70,229,0.65)"; };
+      btn.onmouseleave = () => { btn.style.transform = "scale(1)"; btn.style.boxShadow = "0 4px 20px rgba(79,70,229,0.5)"; };
+      btn.addEventListener("click", () => {
+        // Navigate to stored apply URL — extension auto-injects on arrival.
+        // Falls back to reloading current page.
+        chrome.storage.local.get(["pendingApplication"], (stored) => {
+          const url = stored.pendingApplication?.applyUrl || stored.pendingApplication?.jobUrl;
+          if (url && url !== window.location.href) {
+            window.location.href = url;
+          } else {
+            // Already on the apply page — force re-inject by reloading
+            window.location.reload();
+          }
+        });
+      });
+      (document.body || document.documentElement).appendChild(btn);
+    },
+  }).catch(() => {});
 }
 
 /**
