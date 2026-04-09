@@ -42,10 +42,56 @@
 
   /* ── Main init ── */
 
+  /**
+   * Scrape enough job info from the current Lever page to build a pendingApplication
+   * so the user can re-trigger tailoring + form-fill without going back to LinkedIn.
+   */
+  function scrapeJobInfoFromLeverPage() {
+    // Job title — Lever uses h2 with data-qa or a prominent heading
+    const titleEl = document.querySelector(
+      'h2[data-qa="posting-name"], .posting-headline h2, h1, h2'
+    );
+    const title = titleEl?.innerText?.trim() || document.title.replace(/ [\-–|].*$/, "").trim();
+
+    // Company — derive from domain (jobs.lever.co/company) or page content
+    const pathParts = location.pathname.split("/").filter(Boolean);
+    const companySlug = pathParts[0] || "";
+    const companyEl = document.querySelector('.main-header-logo img, .company-name, [class*="company"]');
+    const company = companyEl?.getAttribute("alt")
+      || companyEl?.innerText?.trim()
+      || (companySlug ? companySlug.charAt(0).toUpperCase() + companySlug.slice(1) : "");
+
+    const jobDescription = scrapeLeverJD();
+
+    if (!title) return null;
+    return {
+      jobTitle: title,
+      company: company || "Company",
+      jobDescription,
+      jobUrl: location.href,
+      source: "direct",
+      _queuedAt: Date.now(),
+    };
+  }
+
   async function init() {
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     if (!stored.pendingApplication) {
-      LOG("No pending application found");
+      LOG("No pending application — offering manual re-trigger");
+      // Scrape what we can from the page so the user can start from here
+      const scraped = scrapeJobInfoFromLeverPage();
+      showBanner(
+        scraped
+          ? `${scraped.jobTitle} — ready to apply`
+          : "No active application found.",
+        "user",
+        {
+          subtext: scraped
+            ? "AutoApply can fill and tailor this application for you."
+            : "Open a job from LinkedIn with AutoApply, or use the button below.",
+          applyNowJob: scraped,   // passed to showBanner so it can wire the button
+        }
+      );
       return;
     }
 
@@ -678,7 +724,12 @@
           ${pdfBtn}
         </div>`;
       } else if (type === "user") {
+        // "Apply with AutoApply" — shown when no pendingApplication but we scraped job info
+        const applyNowBtn = opts.applyNowJob
+          ? `<button id="aa-btn-apply-now" style="${btnStyle}background:#fff;color:#4F46E5;font-size:12px;">🤖 Apply with AutoApply</button>`
+          : "";
         actionRow = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          ${applyNowBtn}
           ${resumeBtn}
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
           <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
@@ -718,6 +769,17 @@
       }
 
       // Wire up action buttons
+      // "Apply with AutoApply" — re-trigger full tailor+fill from this page
+      document.getElementById("aa-btn-apply-now")?.addEventListener("click", () => {
+        const job = opts.applyNowJob;
+        if (!job) return;
+        removeBanner();
+        chrome.storage.local.set({ pendingApplication: job }, () => {
+          window.__autoapply_ats_injected = false;
+          setTimeout(() => init(), 300);
+        });
+      });
+
       document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
         removeBanner();
         window.__autoapply_ats_injected = false;

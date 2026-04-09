@@ -381,6 +381,16 @@
       "description": "Split the current 'Try Again' button into two separate buttons: (1) 'Try Again' \u2014 re-runs form filling only using the already-cached tailoredResult in storage, no API call, fast. (2) 'Reload Resume' \u2014 clears the cached tailoredResumePdf and tailoredResult and re-runs the full TAILOR_AND_FILL pipeline from scratch, only when user explicitly wants a fresh tailored resume. This prevents wasted API credits and saves 15-30s on every retry. Related to Issue #37.",
       "url": "https://all",
       "screenshot": ""
+    },
+    {
+      "id": 39,
+      "timestamp": "2026-04-08 15:17:13",
+      "ats": "Breezy HR",
+      "step": "Application Start",
+      "type": "Wrong Job Applied",
+      "description": "Pixieset (Breezy HR, breezy.hr) application opened and resume already attached even though user did not select Pixieset. Banner shows 'Job 1/24 | Loopio | Senior Product Manager' but the active tab is pixieset.breezy.hr. Two separate bugs: (1) Loopio's apply URL resolved to Pixieset's Breezy HR page \u2014 wrong URL mapped to Loopio in the queue. (2) AutoApply applied to an unselected job. Root cause likely in background.js tab-to-job mapping \u2014 when multiple tabs open in quick succession, the pendingApplication for job N gets assigned to the wrong tab.",
+      "url": "https://pixieset.breezy.hr/p/b44c1ea72426-senior-product-manager/apply",
+      "screenshot": ""
     }
   ]
 }

@@ -608,6 +608,54 @@
     return false;
   }
 
+  /**
+   * Scrape enough job info from the current ATS page to build a synthetic
+   * pendingApplication so the user can re-trigger tailoring + fill without
+   * returning to LinkedIn. Works for Ashby, Greenhouse, Lever, iCIMS, etc.
+   */
+  function scrapeJobInfoFromPage() {
+    // Title — try structured selectors first, fall back to h1/h2
+    const titleEl = document.querySelector(
+      'h1[class*="title" i], h1[class*="job" i], h2[class*="title" i], ' +
+      '[data-qa="posting-name"], [class*="posting-title"], [class*="job-title"], ' +
+      '[class*="jobTitle"], h1, h2'
+    );
+    const title = titleEl?.innerText?.trim().split("\n")[0] || document.title.replace(/[\-–|].*$/, "").trim();
+    if (!title || title.length < 3) return null;
+
+    // Company — try meta tags, page content, or domain
+    const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content");
+    const companyEl  = document.querySelector(
+      '[class*="company-name"], [class*="companyName"], [class*="employer"], ' +
+      '.posting-categories .sort-by-team, [class*="org-name"]'
+    );
+    const domainCompany = location.hostname
+      .replace(/^(jobs\.|careers\.|apply\.)/, "")
+      .replace(/\.(com|co|io|net|org|ca)$/, "")
+      .split(".")[0];
+    const company = ogSiteName
+      || companyEl?.innerText?.trim()
+      || (domainCompany ? domainCompany.charAt(0).toUpperCase() + domainCompany.slice(1) : "Company");
+
+    // JD — reuse scrapeGenericJD if available, else grab all paragraph text
+    const jd = (typeof scrapeGenericJD === "function" ? scrapeGenericJD() : "") ||
+      Array.from(document.querySelectorAll("p, li"))
+        .map(e => e.innerText?.trim())
+        .filter(t => t && t.length > 40)
+        .slice(0, 60)
+        .join("\n")
+        .slice(0, 6000);
+
+    return {
+      jobTitle: title,
+      company,
+      jobDescription: jd,
+      jobUrl: location.href,
+      source: "direct",
+      _queuedAt: Date.now(),
+    };
+  }
+
   async function init() {
     // ── Sign-in wall check FIRST — before anything else ──
     // Must run before the pendingApplication check so login pages always get
@@ -628,11 +676,20 @@
 
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     if (!stored.pendingApplication) {
-      console.log("AutoApply: No pending application found");
-      // If we can't determine the job context, show a gentle notice rather than nothing
-      showBanner("No active application found for this page.", "user", {
-        subtext: "If you started an application from LinkedIn, it may have already been processed.",
-      });
+      console.log("AutoApply: No pending application found — offering re-trigger");
+      // Try to scrape job info from the current ATS page so the user can
+      // re-trigger tailoring + form-fill without going back to LinkedIn.
+      const scraped = scrapeJobInfoFromPage();
+      showBanner(
+        scraped ? `${scraped.jobTitle} — ready to apply` : "No active application found.",
+        "user",
+        {
+          subtext: scraped
+            ? "AutoApply can fill and tailor this application for you."
+            : "Open a job from LinkedIn with AutoApply, or use the button below.",
+          applyNowJob: scraped,
+        }
+      );
       return;
     }
 
@@ -2306,7 +2363,12 @@
           ${pdfBtn || resumeLink}
         </div>`;
       } else if (type === "user") {
+        // "Apply with AutoApply" shown when no pendingApplication but page was scraped
+        const applyNowBtn = opts.applyNowJob
+          ? `<button id="aa-btn-apply-now" style="${btnStyle}background:#fff;color:#4F46E5;font-weight:700;">🤖 Apply with AutoApply</button>`
+          : "";
         actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+          ${applyNowBtn}
           <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">Try again</button>
           <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">Reload resume</button>
           <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.18);color:rgba(255,255,255,0.9);">Skip job</button>
@@ -2360,6 +2422,18 @@
       }
 
       // Wire up action buttons
+
+      // "Apply with AutoApply" — self-trigger from ATS page without LinkedIn
+      document.getElementById("aa-btn-apply-now")?.addEventListener("click", () => {
+        const job = opts.applyNowJob;
+        if (!job) return;
+        removeBanner();
+        chrome.storage.local.set({ pendingApplication: job }, () => {
+          window.__autoapply_ats_injected = false;
+          setTimeout(() => init(), 300);
+        });
+      });
+
       document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
         removeBanner();
         window.__autoapply_ats_injected = false;

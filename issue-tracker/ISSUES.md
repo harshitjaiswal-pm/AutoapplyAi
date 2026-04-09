@@ -426,3 +426,14 @@ Each issue includes context, steps to reproduce, and a screenshot.
 
 
 ---
+
+## Issue #39 — 2026-04-08 15:17:13
+
+- **ATS**: Breezy HR
+- **Step**: Application Start
+- **Type**: Wrong Job Applied
+- **URL**: `https://pixieset.breezy.hr/p/b44c1ea72426-senior-product-manager/apply`
+- **Description**: Pixieset (Breezy HR, breezy.hr) application opened and resume already attached even though user did not select Pixieset. Banner shows 'Job 1/24 | Loopio | Senior Product Manager' but the active tab is pixieset.breezy.hr. Two separate bugs: (1) Loopio's apply URL resolved to Pixieset's Breezy HR page — wrong URL mapped to Loopio in the queue. (2) AutoApply applied to an unselected job. Root cause likely in background.js tab-to-job mapping — when multiple tabs open in quick succession, the pendingApplication for job N gets assigned to the wrong tab.
+
+
+---
