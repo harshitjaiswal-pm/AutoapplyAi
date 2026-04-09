@@ -333,14 +333,13 @@
   /* ── Boot ─────────────────────────────────────────────────────────────── */
 
   function boot() {
-    // If the ATS banner or our button is already present, nothing to do
+    // If the action panel or ATS banner is already injected by background.js, nothing to do
     if (document.getElementById("autoapply-banner") ||
-        document.getElementById("aa-universal-btn")  ||
         document.getElementById("aa-floating-root")) return true;
-    // Always show the floating button — no page detection needed.
-    // The user may be on any step of a multi-page application flow.
-    LOG("Showing floating trigger →", window.location.href.substring(0, 80));
-    showFloatingButton();
+    // Ask background.js to inject the action panel (same UI as on ATS pages).
+    // This keeps one consistent panel everywhere instead of a separate scan panel.
+    LOG("Requesting floating trigger →", window.location.href.substring(0, 80));
+    chrome.runtime.sendMessage({ type: "INJECT_FLOATING_TRIGGER" });
     return true;
   }
 

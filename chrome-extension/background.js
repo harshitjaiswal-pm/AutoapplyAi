@@ -249,6 +249,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   /* ── From universal.js: Inject generic.js into the current tab ── */
+  if (message.type === "INJECT_FLOATING_TRIGGER") {
+    const tabId = sender.tab?.id;
+    if (tabId) injectFloatingTrigger(tabId);
+    sendResponse({ success: !!tabId });
+    return false;
+  }
+
   if (message.type === "INJECT_GENERIC_HERE") {
     const tabId = sender.tab?.id;
     if (tabId) {
