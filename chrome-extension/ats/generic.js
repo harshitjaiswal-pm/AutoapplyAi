@@ -675,25 +675,29 @@
     }
 
     const stored = await chrome.storage.local.get(["pendingApplication"]);
-    if (!stored.pendingApplication) {
-      console.log("AutoApply: No pending application found — offering re-trigger");
-      // Try to scrape job info from the current ATS page so the user can
-      // re-trigger tailoring + form-fill without going back to LinkedIn.
+    let pendingJob = stored.pendingApplication;
+
+    if (!pendingJob) {
+      // No job queued from LinkedIn — try scraping context from the current ATS page.
+      // This handles "Fill this form" being triggered directly on any career page.
       const scraped = scrapeJobInfoFromPage();
-      showBanner(
-        scraped ? `${scraped.jobTitle} — ready to apply` : "No active application found.",
-        "user",
-        {
-          subtext: scraped
-            ? "AutoApply can fill and tailor this application for you."
-            : "Open a job from LinkedIn with AutoApply, or use the button below.",
-          applyNowJob: scraped,
-        }
-      );
-      return;
+      if (scraped) {
+        console.log("AutoApply: No pending application — using scraped job:", scraped.jobTitle, "at", scraped.company);
+        pendingJob = scraped;
+        // Persist so ATS helpers (tailoring, upload, etc.) can reference it
+        await chrome.storage.local.set({ pendingApplication: pendingJob });
+        showBanner(`Filling application for ${scraped.jobTitle}…`, "ai", {
+          subtext: `${scraped.company} — tailoring resume in background…`,
+        });
+      } else {
+        console.log("AutoApply: No pending application and couldn't scrape job info");
+        showBanner("No active application found.", "user", {
+          subtext: "Open a job from LinkedIn with AutoApply, or use the button below.",
+        });
+        return;
+      }
     }
 
-    const pendingJob = stored.pendingApplication;
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
     showBanner("Opening application...", "ai");
 
