@@ -364,6 +364,37 @@ function initPopupChat() {
 
 function popupChatFocus() {
   setTimeout(() => document.getElementById("popup-chat-input")?.focus(), 50);
+  // Refresh context bar whenever the chat tab is opened
+  chrome.storage.local.get(["parsedResume", "pendingApplication", "_aa_batchProgress"], (r) => {
+    const pending = r.pendingApplication || {};
+    const bp      = r._aa_batchProgress  || {};
+    const resume  = r.parsedResume        || {};
+    const jobTitle = pending.jobTitle || bp.title   || "";
+    const company  = pending.company  || bp.company || "";
+    popupUpdateContextBar(jobTitle, company, !!(resume.name || resume.summary));
+  });
+}
+
+/** Update the amber context bar at the top of the chat tab. */
+function popupUpdateContextBar(jobTitle, company, hasResume) {
+  const bar      = document.getElementById("popup-chat-context-bar");
+  const textEl   = document.getElementById("popup-context-text");
+  const clearEl  = document.getElementById("popup-context-clear");
+  if (!bar || !textEl) return;
+
+  const parts = [];
+  if (jobTitle && company) parts.push(`📌 ${jobTitle} @ ${company}`);
+  else if (jobTitle)        parts.push(`📌 ${jobTitle}`);
+  if (hasResume)            parts.push("📄 Resume loaded");
+
+  if (parts.length === 0) {
+    bar.style.display = "none";
+  } else {
+    textEl.textContent = parts.join("  ·  ");
+    bar.style.display  = "flex";
+  }
+
+  clearEl?.addEventListener("click", () => { bar.style.display = "none"; }, { once: true });
 }
 
 async function popupSendMessage() {
@@ -413,6 +444,49 @@ async function popupSendMessage() {
     }
   } catch (_) {}
 
+  // ── Load resume + job context from storage (Issue #6 fix) ──────────────────
+  let systemContext = "";
+  try {
+    const stored = await new Promise(r =>
+      chrome.storage.local.get(["parsedResume", "pendingApplication", "_aa_batchProgress"], r)
+    );
+    const resume = stored.parsedResume || {};
+    // Pick the best available job context: active pending > batch progress
+    const pending = stored.pendingApplication || {};
+    const bp      = stored._aa_batchProgress  || {};
+    const jobTitle   = pending.jobTitle   || bp.title   || "";
+    const company    = pending.company    || bp.company  || "";
+    const jobDesc    = pending.jobDescription || "";
+
+    if (jobTitle && company) {
+      systemContext = `You are an AI assistant helping the user apply for the role of ${jobTitle} at ${company}. `;
+      if (jobDesc) {
+        systemContext += `Job description (excerpt): ${jobDesc.slice(0, 600)} `;
+      }
+    } else {
+      systemContext = "You are an AI assistant helping the user with their job search. ";
+    }
+
+    // Append resume context
+    if (resume.name || resume.summary) {
+      systemContext += `The user's resume: name: ${resume.name || ""}. `;
+      if (resume.summary) systemContext += `Summary: ${resume.summary.slice(0, 300)}. `;
+    }
+    if (Array.isArray(resume.workExperience) && resume.workExperience.length > 0) {
+      const topJobs = resume.workExperience.slice(0, 3)
+        .map(j => `${j.title || j.role || "Role"} at ${j.company || "Company"}`)
+        .join(", ");
+      systemContext += `Recent experience: ${topJobs}. `;
+    }
+    if (Array.isArray(resume.skills) && resume.skills.length > 0) {
+      systemContext += `Skills: ${resume.skills.slice(0, 15).join(", ")}. `;
+    }
+    systemContext += "Answer questions helpfully and concisely based on this context.";
+
+    // Update the context bar in the popup UI
+    popupUpdateContextBar(jobTitle, company, !!(resume.name || resume.summary));
+  } catch (_) { /* storage access failed — proceed without context */ }
+
   try {
     const apiMessages = popupChatMessages
       .filter(m => m.role === "user" || m.role === "assistant")
@@ -421,7 +495,7 @@ async function popupSendMessage() {
     const res = await fetch(CHAT_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: apiMessages, pageContext }),
+      body: JSON.stringify({ messages: apiMessages, pageContext, systemContext }),
     });
 
     const data = await res.json();
