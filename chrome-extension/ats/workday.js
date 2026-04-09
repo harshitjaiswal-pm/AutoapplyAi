@@ -1751,43 +1751,101 @@
   }
 
   /**
+   * Extract the visible text from a button, ignoring SVG icons and aria-hidden elements.
+   * Workday's Add buttons often contain "<svg>...</svg>Add" whose full textContent
+   * would be "\n  Add\n" or "Add" but some instances render "+ Add" or have icon spans
+   * that pollute textContent — this helper strips those before matching.
+   */
+  function buttonVisibleText(btn) {
+    const clone = btn.cloneNode(true);
+    clone.querySelectorAll('svg, [aria-hidden="true"], .icon, i').forEach(e => e.remove());
+    return clone.textContent.replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  /**
    * Find the "Add" or "Add Another" button for a named section (Work Experience / Education).
-   * Searches for a button near a heading that contains the section name.
+   * Significantly improved over previous version to handle Workday's SVG-icon buttons,
+   * aria-label patterns, and deeper DOM hierarchies.
    */
   function findSectionAddButton(sectionKeyword, preferAnother = false) {
-    // Find all section headings that mention the keyword
-    const headings = Array.from(document.querySelectorAll('h2, h3, h4, legend, p, span, div[class*="title"], div[class*="header"]'))
-      .filter(el => {
-        const t = (el.textContent || "").trim().toLowerCase();
-        return t === sectionKeyword.toLowerCase() || (t.startsWith(sectionKeyword.toLowerCase()) && t.length < sectionKeyword.length + 5);
-      });
+    const kwLower = sectionKeyword.toLowerCase();
+    const kwSlug = kwLower.replace(/\s+/g, ""); // "workexperience"
+
+    // ── Strategy 0: aria-label contains "add" + section keyword ──────────────
+    // Workday often uses aria-label="Add Work Experience" or "Add another Work Experience"
+    for (const btn of document.querySelectorAll("button[aria-label]")) {
+      const label = (btn.getAttribute("aria-label") || "").toLowerCase();
+      if (!label.includes("add")) continue;
+      const matchesSection = label.includes(kwLower) || label.includes(kwSlug) ||
+        kwLower.split(" ").every(w => label.includes(w));
+      if (!matchesSection) continue;
+      const isAnother = /another/i.test(label);
+      if (preferAnother && isAnother) return btn;
+      if (!preferAnother && !isAnother) return btn;
+    }
+
+    // ── Strategy 1: data-automation-id contains section slug + "add" ─────────
+    // e.g. data-automation-id="addWorkExperience" or "workExperienceAddButton"
+    for (const btn of document.querySelectorAll("button[data-automation-id]")) {
+      const autoId = (btn.getAttribute("data-automation-id") || "").toLowerCase();
+      if (autoId.includes("add") && (autoId.includes(kwSlug) || autoId.includes(kwLower.replace(/\s/g, "")))) {
+        return btn;
+      }
+    }
+
+    // ── Strategy 2: Heading-proximity scan (improved depth + button text) ────
+    const headings = Array.from(document.querySelectorAll(
+      'h2, h3, h4, legend, [data-automation-id$="Section"], [data-automation-id*="section" i], div, span'
+    )).filter(el => {
+      // Only look at elements whose own label text (stripped of children's text) matches.
+      // Use childNodes to get only direct text, falling back to full textContent for leaf nodes.
+      let ownText = "";
+      for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) ownText += node.textContent;
+      }
+      ownText = ownText.trim().toLowerCase();
+      if (!ownText) ownText = (el.textContent || "").trim().toLowerCase();
+      return (ownText === kwLower || ownText.startsWith(kwLower)) && ownText.length < kwLower.length + 10;
+    });
 
     for (const heading of headings) {
-      // Walk up to a section container, then find buttons within it
       let section = heading.parentElement;
-      for (let d = 0; d < 6 && section && section !== document.body; d++, section = section.parentElement) {
+      for (let d = 0; d < 10 && section && section !== document.body; d++, section = section.parentElement) {
         const buttons = Array.from(section.querySelectorAll("button"));
-        const addAnother = buttons.find(b => /add another/i.test(b.textContent));
-        const add = buttons.find(b => /^add$/i.test(b.textContent.trim()));
+        const addAnother = buttons.find(b => {
+          const t = buttonVisibleText(b);
+          const a = (b.getAttribute("aria-label") || "").toLowerCase();
+          return /add another/i.test(t) || /add another/i.test(a);
+        });
+        const add = buttons.find(b => {
+          const t = buttonVisibleText(b);
+          const a = (b.getAttribute("aria-label") || "").toLowerCase();
+          return /^add$/.test(t) || a === "add" || /^add a /i.test(a) || /^add row/i.test(a);
+        });
         if (preferAnother && addAnother) return addAnother;
         if (!preferAnother && add) return add;
         if (addAnother || add) return addAnother || add;
       }
     }
 
-    // Fallback: find any "Add" button next to a section that matches the keyword
+    // ── Strategy 3: Any Add/Add Another button whose ancestor mentions keyword ─
     for (const btn of document.querySelectorAll("button")) {
-      const btnText = btn.textContent.trim().toLowerCase();
-      if (btnText !== "add" && !btnText.startsWith("add another")) continue;
-      // Check if a nearby heading mentions our keyword
+      const t = buttonVisibleText(btn);
+      const a = (btn.getAttribute("aria-label") || "").toLowerCase();
+      const isAnother = /add another/i.test(t) || /add another/i.test(a);
+      const isAdd = /^add$/.test(t) || a === "add" || /^add a /i.test(a);
+      if (!isAnother && !isAdd) continue;
       let el = btn.parentElement;
-      for (let d = 0; d < 8 && el && el !== document.body; d++, el = el.parentElement) {
-        if ((el.textContent || "").toLowerCase().includes(sectionKeyword.toLowerCase())) {
-          if (preferAnother && /add another/i.test(btn.textContent)) return btn;
-          if (!preferAnother && /^add$/i.test(btn.textContent.trim())) return btn;
+      for (let d = 0; d < 10 && el && el !== document.body; d++, el = el.parentElement) {
+        const elText = (el.textContent || "").toLowerCase();
+        if (elText.includes(kwLower) || elText.includes(kwSlug)) {
+          if (preferAnother && isAnother) return btn;
+          if (!preferAnother && isAdd) return btn;
+          if (isAdd || isAnother) return btn; // last-resort match
         }
       }
     }
+
     return null;
   }
 
@@ -1797,6 +1855,20 @@
    * with Job Title, Company, Location, From, To, Role Description fields.
    * If the section starts empty (Airbus-style), clicks "Add" to create entries first.
    */
+  /**
+   * Wait until at least `minCount` work experience containers appear in the DOM,
+   * polling every 300ms up to `maxMs`. Returns the found containers.
+   */
+  async function waitForWEContainers(minCount, maxMs = 5000) {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      const c = findExperienceContainers("work");
+      if (c.length >= minCount) return c;
+      await sleep(300);
+    }
+    return findExperienceContainers("work");
+  }
+
   async function fillWorkExperienceEntries(workExp) {
     // Find work experience entry containers using multiple strategies
     let containers = findExperienceContainers("work");
@@ -1808,11 +1880,14 @@
       if (addBtn) {
         LOG("Clicking 'Add' to create first work experience entry");
         addBtn.click();
-        await sleep(1500);
-        containers = findExperienceContainers("work");
+        // Poll until the container appears (up to 5s) — more reliable than fixed sleep
+        containers = await waitForWEContainers(1, 5000);
         LOG(`After clicking Add: found ${containers.length} containers`);
       } else {
-        LOG("No 'Add' button found for Work Experience — skipping");
+        LOG("No 'Add' button found for Work Experience — skipping (will try direct field scan)");
+        // Last-ditch: maybe the form already has blank input rows not wrapped in containers
+        // Attempt to fill by scanning the entire page for job-title-like inputs
+        await fillWorkExperienceDirectScan(workExp);
         return;
       }
     }
@@ -1820,13 +1895,18 @@
     for (let i = 0; i < workExp.length; i++) {
       // For entries beyond the first, click "Add Another" to create a new block
       if (i > 0) {
+        const prevCount = containers.length;
         const addAnother = findSectionAddButton("work experience", true) ||
                            findSectionAddButton("work experience", false);
         if (addAnother) {
           LOG(`Clicking 'Add Another' for WE entry ${i + 1}`);
           addAnother.click();
-          await sleep(1500);
-          containers = findExperienceContainers("work");
+          // Wait for a new container to appear
+          containers = await waitForWEContainers(prevCount + 1, 5000);
+          if (containers.length <= prevCount) {
+            LOG(`Add Another click didn't produce new container — stopping at ${i} entries`);
+            break;
+          }
         } else {
           LOG(`No 'Add Another' button for WE entry ${i + 1} — stopping at ${i} entries`);
           break;
@@ -1841,11 +1921,24 @@
       const jobTitle = exp.role || exp.title || "";
       LOG(`Filling WE ${i + 1}: "${jobTitle}" at "${exp.company}"`);
 
-      // Job Title — this was previously missing, causing "Job Title required" errors
-      await fillLabeledFieldInBlock(container, ["job title", "title", "position", "role"], jobTitle);
+      // Job Title
+      const titleFilled = await fillLabeledFieldInBlock(container, ["job title", "title", "position", "role"], jobTitle);
+      if (!titleFilled) {
+        // Try direct data-automation-id scan within container
+        const titleInput = container.querySelector(
+          '[data-automation-id*="jobTitle" i] input, [data-automation-id*="title" i] input, [placeholder*="title" i]'
+        );
+        if (titleInput && !titleInput.value?.trim()) { setWorkdayValue(titleInput, jobTitle); await sleep(80); }
+      }
 
       // Company
-      await fillLabeledFieldInBlock(container, ["company", "employer", "organization"], exp.company);
+      const compFilled = await fillLabeledFieldInBlock(container, ["company", "employer", "organization"], exp.company);
+      if (!compFilled) {
+        const compInput = container.querySelector(
+          '[data-automation-id*="company" i] input, [data-automation-id*="employer" i] input, [placeholder*="company" i]'
+        );
+        if (compInput && !compInput.value?.trim()) { setWorkdayValue(compInput, exp.company); await sleep(80); }
+      }
 
       // Location
       if (exp.location) {
@@ -1878,15 +1971,55 @@
         }
       }
 
-      // Role Description
+      // Role Description — try textarea first, then contenteditable
       const textarea = container.querySelector("textarea");
       if (textarea && !textarea.value?.trim() && exp.description) {
         setWorkdayValue(textarea, exp.description);
         await sleep(100);
+      } else if (!textarea && exp.description) {
+        const ce = container.querySelector('[contenteditable="true"]');
+        if (ce && !ce.textContent?.trim()) {
+          ce.focus();
+          document.execCommand("insertText", false, exp.description);
+          await sleep(100);
+        }
       }
 
-      await sleep(300);
+      await sleep(400);
     }
+
+    LOG(`fillWorkExperienceEntries: completed ${Math.min(workExp.length, containers.length)} entries`);
+  }
+
+  /**
+   * Fallback: when no containers and no Add button found, try to fill work experience
+   * fields directly by scanning the page for any unfilled job-title inputs within
+   * a section that mentions "work experience".
+   */
+  async function fillWorkExperienceDirectScan(workExp) {
+    if (!workExp.length) return;
+    LOG("fillWorkExperienceDirectScan: attempting direct field scan");
+
+    // Find the work experience section by heading
+    let weSection = null;
+    for (const el of document.querySelectorAll('h2, h3, h4, legend, div, section')) {
+      const t = (el.textContent || "").trim().toLowerCase();
+      if (t.startsWith("work experience") && t.length < 25) {
+        let parent = el.parentElement;
+        for (let d = 0; d < 8 && parent && parent !== document.body; d++, parent = parent.parentElement) {
+          if (parent.querySelectorAll('input, textarea').length >= 2) { weSection = parent; break; }
+        }
+        if (weSection) break;
+      }
+    }
+    if (!weSection) { LOG("fillWorkExperienceDirectScan: no section found"); return; }
+
+    const exp = workExp[0];
+    const jobTitle = exp.role || exp.title || "";
+    const inputs = Array.from(weSection.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"])'));
+    if (inputs[0] && !inputs[0].value?.trim()) { setWorkdayValue(inputs[0], jobTitle); await sleep(80); }
+    if (inputs[1] && !inputs[1].value?.trim()) { setWorkdayValue(inputs[1], exp.company || ""); await sleep(80); }
+    LOG(`fillWorkExperienceDirectScan: filled ${inputs.length} inputs`);
   }
 
   /**
@@ -2951,6 +3084,14 @@
 
   /* ═══════════════════ UI BANNER ═══════════════════ */
 
+  // Module-level timer state — avoids closure-capture race when showBanner is
+  // called multiple times before the first async chrome.storage callback fires.
+  // Previously timerStart was captured per-call inside the async closure, causing
+  // multiple intervals to run when rapid showBanner calls overlapped.
+  let aaTimerStart = null;
+  let aaTimerIntervalId = null;
+  let aaPdfPollIntervalId = null; // polls for tailoredResumePdf until it arrives
+
   /**
    * showBanner(message, type, opts)
    *
@@ -2972,21 +3113,23 @@
       document.body.appendChild(banner);
     }
 
-    // ── Timer management ──
-    // "ai" banners share a running elapsed clock across consecutive calls.
-    // The clock starts on the first ai banner and keeps ticking through each
-    // subsequent ai banner (tailoring → filling → uploading → etc.).
-    // It resets when a non-ai type is shown.
-    if (banner._timerInterval) { clearInterval(banner._timerInterval); banner._timerInterval = null; }
-    if (banner._dismissTimer)  { clearTimeout(banner._dismissTimer);  banner._dismissTimer  = null; }
+    // ── Timer management (Issue #4 fix) ──
+    // Clear synchronously BEFORE entering the async callback so that rapid
+    // back-to-back showBanner calls cannot leave orphaned intervals running.
+    if (aaTimerIntervalId)    { clearInterval(aaTimerIntervalId);    aaTimerIntervalId    = null; }
+    if (banner._dismissTimer) { clearTimeout(banner._dismissTimer);  banner._dismissTimer = null; }
+    // Stop any in-flight PDF-poll from the previous banner state.
+    if (aaPdfPollIntervalId)  { clearInterval(aaPdfPollIntervalId);  aaPdfPollIntervalId  = null; }
 
     const isAi = (type === "ai" || type === "info");
     if (isAi) {
-      if (!banner._timerStart) banner._timerStart = Date.now(); // preserve across consecutive ai calls
+      if (!aaTimerStart) aaTimerStart = Date.now(); // preserve across consecutive ai calls
     } else {
-      banner._timerStart = null; // reset when handing off to user / done / error
+      aaTimerStart = null; // reset when handing off to user / done / error
     }
-    const timerStart = banner._timerStart;
+    // Capture synchronously — NOT inside the async callback — so every call
+    // that runs concurrently shares the same stable value.
+    const timerStart = aaTimerStart;
 
     banner.style.cssText = `
       position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
@@ -3044,6 +3187,41 @@
       const pdfBtn = hasPdf
         ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
         : "";
+
+      // (Issue #3 fix) — if PDF isn't ready yet, start polling so the button
+      // appears as soon as tailoring finishes (without requiring a new showBanner call).
+      // We only poll when the current banner type warrants a PDF button at all.
+      const shouldPollForPdf = !hasPdf && (isAi || type === "user");
+      if (shouldPollForPdf) {
+        let pdfPollAttempts = 0;
+        aaPdfPollIntervalId = setInterval(() => {
+          pdfPollAttempts++;
+          if (pdfPollAttempts > 45) { clearInterval(aaPdfPollIntervalId); aaPdfPollIntervalId = null; return; } // ~90s max
+          chrome.storage.local.get(["tailoredResumePdf"], (rPdf) => {
+            if (!rPdf.tailoredResumePdf) return;
+            clearInterval(aaPdfPollIntervalId); aaPdfPollIntervalId = null;
+            if (document.getElementById("aa-btn-download-resume")) return; // already present
+            const actionDivs = document.querySelectorAll("#autoapply-banner div[style*='display:flex']");
+            const actionDiv = actionDivs[actionDivs.length - 1]; // last flex row = action buttons
+            if (!actionDiv) return;
+            const newBtn = document.createElement("button");
+            newBtn.id = "aa-btn-download-resume";
+            newBtn.style.cssText = pdfBtnStyle;
+            newBtn.textContent = "⬇️ Resume";
+            actionDiv.appendChild(newBtn);
+            newBtn.addEventListener("click", () => {
+              chrome.storage.local.get(["_aa_batchProgress"], (rBp) => {
+                const bpData = rBp._aa_batchProgress;
+                chrome.runtime.sendMessage({
+                  type: "DOWNLOAD_RESUME",
+                  job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
+                });
+                newBtn.textContent = "⬇️ Download again"; newBtn.disabled = false;
+              });
+            });
+          });
+        }, 2000);
+      }
 
       // ── Action buttons
       const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
@@ -3148,12 +3326,14 @@
         showBanner("Resuming...", "ai", { subtext: "Picking up where we left off." });
       });
 
-      // Start ticking after DOM is updated
+      // Start ticking after DOM is updated (Issue #4 fix: assign to module-level
+      // aaTimerIntervalId so rapid re-calls can clearInterval synchronously before
+      // their own async callback fires — no orphaned intervals).
       if (isAi && timerStart) {
-        banner._timerInterval = setInterval(() => {
+        aaTimerIntervalId = setInterval(() => {
           const el = document.getElementById("aa-elapsed-timer");
           if (!el) return;
-          const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+          const elapsed = Math.floor((Date.now() - aaTimerStart) / 1000);
           const m = Math.floor(elapsed / 60);
           const s = elapsed % 60;
           el.textContent = `${m}:${s.toString().padStart(2, "0")}`;
@@ -3200,6 +3380,11 @@
         }
       }
     });
+
+    // Clean up module-level timer/poll state
+    if (aaTimerIntervalId)   { clearInterval(aaTimerIntervalId);   aaTimerIntervalId   = null; }
+    if (aaPdfPollIntervalId) { clearInterval(aaPdfPollIntervalId); aaPdfPollIntervalId = null; }
+    aaTimerStart = null;
 
     // Remove banner and restore padding
     b.remove();
