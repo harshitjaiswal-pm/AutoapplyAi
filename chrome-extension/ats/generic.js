@@ -1534,9 +1534,14 @@
    */
   function setEditableValue(element, value) {
     element.focus();
-    // Clear and set via execCommand (works across most frameworks)
-    document.execCommand("selectAll", false, null);
-    document.execCommand("insertText", false, value);
+    // [AutoQA fix 2026-04-09] Use element.ownerDocument.execCommand() instead of
+    // the top-level document.execCommand(). When element lives inside a same-origin
+    // iframe (returned by getAccessibleDocuments()), document refers to the main
+    // frame's document — execCommand("selectAll") selects the wrong document and
+    // execCommand("insertText") inserts there instead of in the focused iframe element.
+    const ownerDoc = element.ownerDocument || document;
+    ownerDoc.execCommand("selectAll", false, null);
+    ownerDoc.execCommand("insertText", false, value);
     // Also set textContent as fallback and fire events
     if (!element.textContent.trim()) {
       element.textContent = value;
@@ -1914,7 +1919,12 @@
       if (questionText.length < 8 || questionText.length > 400) continue;
 
       // Find matching rule
+      // [Fix 2026-04-08] Track matchedRule separately — `rule` is block-scoped to the
+      // for…of loop and is undefined after the loop exits (even after a `break`). Accessing
+      // rule.answerFallback outside the loop was the source of 8 "rule is not defined"
+      // ReferenceErrors observed during QA.
       let matchedAnswer = null;
+      let matchedRule = null;
       for (const rule of rules) {
         let matched = false;
         if (rule.useRegex) {
@@ -1922,7 +1932,7 @@
         } else {
           matched = rule.keywords.some(kw => questionText.includes(kw));
         }
-        if (matched) { matchedAnswer = rule.answer; break; }
+        if (matched) { matchedAnswer = rule.answer; matchedRule = rule; break; }
       }
       if (!matchedAnswer) continue;
 
@@ -1932,7 +1942,7 @@
 
       // The target answer text(s) to look for — supports specific text (e.g. "canada") or yes/no
       const targetAnswers = [matchedAnswer];
-      if (rule.answerFallback) targetAnswers.push(rule.answerFallback);
+      if (matchedRule?.answerFallback) targetAnswers.push(matchedRule.answerFallback);
 
       function answerMatches(rawText, targets) {
         const t = rawText.trim().toLowerCase();

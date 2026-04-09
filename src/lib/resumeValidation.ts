@@ -17,14 +17,23 @@ export interface ResumeValidationResult {
 
 function parseDate(dateStr: string): Date | null {
   if (!dateStr) return null;
-  // Strip em-dash / en-dash / hyphen ranges — take only the first segment if it's a range
-  // e.g. "Jan 2018 – Present" → "Jan 2018"
-  const stripped = dateStr.split(/\s*[–—-]\s*/)[0].trim();
-  const lower = stripped.toLowerCase().trim();
 
-  if (lower === "present" || lower === "current" || lower === "now" || lower === "today") {
+  // [AutoQA fix 2026-04-09] Check for "Present"/"Current" in ANY segment of the range
+  // BEFORE stripping. Previously, the code split and took [0] first, which meant that
+  // an endDate like "Jan 2018 – Present" or "2018 – Present" would parse as Jan 2018
+  // instead of the current date, silently under-counting experience years.
+  // Checking all parts first ensures range strings with a "Present" endpoint always
+  // return the current date, matching the caller's intent for endDate fields.
+  const presentWords = new Set(["present", "current", "now", "today"]);
+  const rangeParts = dateStr.split(/\s*[–—-]\s*/);
+  if (rangeParts.some((p) => presentWords.has(p.trim().toLowerCase()))) {
     return new Date();
   }
+
+  // Strip em-dash / en-dash / hyphen ranges — take only the first segment if it's a range
+  // e.g. "Jan 2018 – Dec 2020" → "Jan 2018"
+  const stripped = rangeParts[0].trim();
+  const lower = stripped.toLowerCase().trim();
 
   // "Month. Year" — abbreviated with trailing period e.g. "Jan. 2020", "Feb. 2018"
   // Also handles "Month Year", "Month, Year"

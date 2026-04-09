@@ -120,8 +120,13 @@
       });
       // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
       const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+      // [AutoQA fix 2026-04-09] Added company check to isSameJob — title-only match
+      // could cause a wrong cache hit when two different jobs share the same title
+      // (e.g. two "Senior Product Manager" roles at different companies). Lever.js
+      // already required both title AND company; greenhouse.js was inconsistent.
       const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
-        || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+        || (cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle
+            && cacheData.lastTailoredJob?.company === pendingJob.company);
 
       const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
         ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })
