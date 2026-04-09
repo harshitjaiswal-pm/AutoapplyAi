@@ -54,7 +54,7 @@ interface Message {
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, pageContext } = await request.json() as {
+    const { messages, pageContext, systemContext } = await request.json() as {
       messages: Message[];
       pageContext?: {
         url?: string;
@@ -62,6 +62,7 @@ export async function POST(request: NextRequest) {
         text?: string;
         selectedElement?: string;
       };
+      systemContext?: string;
     };
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -105,10 +106,16 @@ export async function POST(request: NextRequest) {
       return m;
     });
 
+    // Use the client-supplied systemContext (includes user profile + job context)
+    // if provided; otherwise fall back to the default system prompt.
+    const systemPrompt = systemContext && systemContext.trim().length > 0
+      ? systemContext
+      : CHAT_SYSTEM;
+
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
-      system: CHAT_SYSTEM,
+      system: systemPrompt,
       messages: apiMessages,
     });
 
