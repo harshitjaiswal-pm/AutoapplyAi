@@ -956,11 +956,11 @@
             overflow-y: auto; background: #FAFAFA; border-radius: 8px; padding: 12px;
             border: 1px solid #E5E5E5;
           ">Loading job description...</div>
-          <div id="confirm-match-score" style="
-            margin-top: 8px; display: flex; align-items: center; gap: 12px;
-          ">
-            <span style="font-size: 11px; color: #666;">Match Score:</span>
-            <span id="confirm-score-value" style="font-size: 14px; font-weight: 700; color: #4F46E5;">—</span>
+          <div style="margin-top: 8px; display: flex; align-items: center; gap: 12px;">
+            <div id="confirm-match-score" style="display:none; align-items: center; gap: 6px;">
+              <span style="font-size: 11px; color: #666;">Match Score:</span>
+              <span id="confirm-score-value" style="font-size: 14px; font-weight: 700; color: #4F46E5;">—</span>
+            </div>
             <span id="confirm-jd-chars" style="font-size: 10px; color: #9CA3AF; margin-left: auto;">— chars sent to AI</span>
           </div>
         </div>
@@ -1028,12 +1028,14 @@
         jdCharsEl.style.color = jdText.length < 200 ? "#DC2626" : "#9CA3AF"; // red if suspiciously short
       }
 
-      // Show match score from tailoring result (JD preview is already set above)
+      // Show match score from tailoring result — hidden when not yet computed
+      const matchScoreRow = document.getElementById("confirm-match-score");
       if (tailoredResult) {
         scoreEl.textContent = (tailoredResult.matchScore || 0) + "%";
         scoreEl.style.color = tailoredResult.matchScore >= 70 ? "#059669" : tailoredResult.matchScore >= 50 ? "#D97706" : "#DC2626";
+        if (matchScoreRow) matchScoreRow.style.display = "flex";
       } else {
-        scoreEl.textContent = "—";
+        if (matchScoreRow) matchScoreRow.style.display = "none"; // hidden until tailoring is done
       }
 
       const cleanup = () => {
