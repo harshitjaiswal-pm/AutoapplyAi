@@ -2049,7 +2049,7 @@
             <button id="autoapply-stop" style="
               display:none; width:100%; background:#EF4444; color:white; border:none;
               border-radius:10px; padding:11px; font-size:13px; font-weight:600; cursor:pointer;
-            ">⏹ Stop applying</button>
+            ">Stop applying</button>
 
             <!-- Hidden URL field — auto-populated from storage, not shown unless empty -->
             <input id="autoapply-url" type="hidden" value="https://autoapply-ai-delta.vercel.app" />
@@ -2271,13 +2271,17 @@
   function updateStartButton() {
     const start = document.getElementById("autoapply-start");
     const count = document.getElementById("autoapply-count");
+    const selectAll = document.getElementById("autoapply-select-all");
     if (start) {
       const n = selectedJobIds.size;
-      start.textContent = n === 0 ? "Select jobs to start applying" : `Start applying to ${n} job${n === 1 ? "" : "s"} →`;
+      start.textContent = n === 0 ? "Select jobs above to begin" : `Apply to ${n} job${n === 1 ? "" : "s"} →`;
       start.disabled = n === 0;
       start.style.opacity = n === 0 ? "0.38" : "1";
       start.style.pointerEvents = n === 0 ? "none" : "auto";
       start.style.cursor = n === 0 ? "default" : "pointer";
+    }
+    if (selectAll && scrapedJobs.length > 0) {
+      selectAll.textContent = selectedJobIds.size === scrapedJobs.length ? "Deselect All" : "Select All";
     }
     if (count) count.textContent = `${scrapedJobs.length}`;
   }
