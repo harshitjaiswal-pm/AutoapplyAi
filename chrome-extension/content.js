@@ -195,7 +195,7 @@
         continue;
       }
       if (!location) {
-        location = line;
+        location = line.replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\uFE0F\u200D]+\s*/u, "").trim();
         break;
       }
     }
