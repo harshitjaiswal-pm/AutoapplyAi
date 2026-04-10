@@ -51,21 +51,19 @@ export async function POST(request: NextRequest) {
     const NAME_SZ  = 32;   // 16pt
     const HEADING_SZ = 24; // 12pt
 
-    function bodyPara(text: string, spacingBefore = 0, spacingAfter = 160): Paragraph {
-      return new Paragraph({
+    const bodyPara = (text: string, spacingBefore = 0, spacingAfter = 160): Paragraph =>
+      new Paragraph({
         spacing: { before: spacingBefore, after: spacingAfter },
         children: [
           new TextRun({ text, font: FONT, size: BODY_SZ }),
         ],
       });
-    }
 
-    function blankLine(): Paragraph {
-      return new Paragraph({
+    const blankLine = (): Paragraph =>
+      new Paragraph({
         spacing: { before: 0, after: 0 },
         children: [new TextRun({ text: "", font: FONT, size: BODY_SZ })],
       });
-    }
 
     // ── Document sections ────────────────────────────────────────────────
     const children: Paragraph[] = [
