@@ -1000,6 +1000,11 @@
       const modal = createConfirmationModal();
       modal.style.display = "flex";
 
+      // Always reset match score row to hidden at the start of each confirmation.
+      // The modal is reused across jobs, so stale display:flex from a prior run must be cleared.
+      const _matchReset = document.getElementById("confirm-match-score");
+      if (_matchReset) _matchReset.style.display = "none";
+
       // [Fix 2026-04-08] Guard against null getElementById — these elements are created in
       // createConfirmationModal() but could be absent if the DOM was modified externally
       // (e.g., host page removes injected elements). Optional-chain assignment prevents
