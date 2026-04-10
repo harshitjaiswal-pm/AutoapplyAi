@@ -3,10 +3,12 @@ import "./globals.css";
 import Link from "next/link";
 import { Providers } from "./providers";
 import { NavAuth } from "@/components/NavAuth";
+import { NavLinks } from "@/components/NavLinks";
 
 export const metadata: Metadata = {
-  title: "AutoApply AI",
-  description: "Tailor your resume for every job in seconds.",
+  title: "AutoApply — Apply to more jobs, in less time",
+  description:
+    "AutoApply scans LinkedIn, tailors your resume for each role, and fills every application form — automatically. Works on Greenhouse, Workday, Lever, Ashby, and Easy Apply.",
 };
 
 export default function RootLayout({
@@ -30,10 +32,7 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              <div className="flex items-center gap-0.5">
-                <NavLink href="/dashboard">Dashboard</NavLink>
-                <NavLink href="/tailor">Tailor resume</NavLink>
-              </div>
+              <NavLinks />
 
               <NavAuth />
             </div>
@@ -49,19 +48,3 @@ export default function RootLayout({
   );
 }
 
-function NavLink({
-  href,
-  children,
-}: {
-  href: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className="px-3 py-1.5 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 rounded-lg hover:bg-neutral-100/70 transition-colors"
-    >
-      {children}
-    </Link>
-  );
-}
