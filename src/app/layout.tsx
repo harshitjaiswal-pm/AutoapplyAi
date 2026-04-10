@@ -19,21 +19,20 @@ export default function RootLayout({
       <body className="min-h-screen bg-white">
         <Providers>
           {/* Nav */}
-          <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-xl border-b border-neutral-100">
+          <nav className="fixed top-0 w-full z-50 bg-white/85 backdrop-blur-xl border-b border-neutral-100/80">
             <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
-              <Link href="/" className="flex items-center gap-2">
-                <div className="w-6 h-6 bg-indigo-600 rounded-md flex items-center justify-center">
-                  <span className="text-white text-xs font-bold">A</span>
+              <Link href="/" className="flex items-center gap-2 group">
+                <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center shadow-sm shadow-indigo-200 group-hover:bg-indigo-500 transition-colors">
+                  <span className="text-white text-xs font-bold tracking-tight">A</span>
                 </div>
                 <span className="text-sm font-semibold text-neutral-900 tracking-tight">
                   AutoApply
                 </span>
               </Link>
 
-              <div className="flex items-center gap-1">
-                <NavLink href="/">Home</NavLink>
-                <NavLink href="/tailor">Tailor</NavLink>
+              <div className="flex items-center gap-0.5">
                 <NavLink href="/dashboard">Dashboard</NavLink>
+                <NavLink href="/tailor">Tailor resume</NavLink>
               </div>
 
               <NavAuth />
@@ -60,7 +59,7 @@ function NavLink({
   return (
     <Link
       href={href}
-      className="px-3 py-1.5 text-[13px] text-neutral-500 hover:text-neutral-900 rounded-md hover:bg-neutral-50 transition-colors"
+      className="px-3 py-1.5 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 rounded-lg hover:bg-neutral-100/70 transition-colors"
     >
       {children}
     </Link>

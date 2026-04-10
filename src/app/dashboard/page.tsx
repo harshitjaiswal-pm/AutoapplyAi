@@ -28,6 +28,16 @@ interface TrackableJob {
   defects?: ResumeDefect[];
 }
 
+interface ResumeMapEntry {
+  key: string;
+  jobTitle: string;
+  company: string;
+  filename: string;
+  matchScore: number;
+  jobUrl: string;
+  createdAt: number;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Helpers                                                                     */
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -128,6 +138,9 @@ function DashboardPage() {
   /* ── funnel stats (synced from extension via pipeline-bridge) ──────────── */
   interface FunnelStats { opened: number; formFilled: number; resumeTailored: number; completed: number; }
   const [funnelStats, setFunnelStats] = useState<FunnelStats>({ opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 });
+
+  /* ── recent tailored resumes (synced from extension via pipeline-bridge) ── */
+  const [recentResumes, setRecentResumes] = useState<ResumeMapEntry[]>([]);
   const isRunning =
     pipelineJobs.some((j) => j.status === "analyzing" || j.status === "tailoring") &&
     currentBatch?.isRunning === true;
@@ -181,6 +194,19 @@ function DashboardPage() {
     }
     window.addEventListener("autoapply-funnel-sync", onFunnelSync as EventListener);
     return () => window.removeEventListener("autoapply-funnel-sync", onFunnelSync as EventListener);
+  }, []);
+
+  /* ── sync recent tailored resumes from extension ─────────────────────── */
+  useEffect(() => {
+    function loadResumes() {
+      try {
+        const raw = localStorage.getItem("autoapply-resume-map");
+        if (raw) setRecentResumes(JSON.parse(raw).slice(0, 12));
+      } catch {}
+    }
+    loadResumes();
+    window.addEventListener("autoapply-resume-map-sync", loadResumes as EventListener);
+    return () => window.removeEventListener("autoapply-resume-map-sync", loadResumes as EventListener);
   }, []);
 
   /* ── sync completed apps from extension ──────────────────────────────── */
@@ -365,17 +391,17 @@ function DashboardPage() {
           {/* KPI Strip */}
           <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mt-7">
             {[
-              { label: "Total Applied", value: totalApplied || "—", sub: "all time", accent: "text-white" },
-              { label: "Applied Today", value: appliedToday || "—", sub: today, accent: appliedToday > 0 ? "text-emerald-300" : "text-white" },
-              { label: "In Pipeline", value: openJobs || "—", sub: `${pipelineQueued} queued · ${pipelineReady} ready`, accent: "text-white" },
-              { label: "Avg Match Score", value: avgScore > 0 ? `${avgScore}` : "—", sub: "out of 100", accent: avgScore >= 75 ? "text-emerald-300" : avgScore >= 55 ? "text-amber-300" : "text-white" },
-              { label: "Response Rate", value: responseRate > 0 ? `${responseRate}%` : "—", sub: `${totalInterviewing} interview${totalInterviewing !== 1 ? "s" : ""}`, accent: responseRate > 20 ? "text-emerald-300" : "text-white" },
-              { label: "Offers", value: totalOffers || "—", sub: `${totalInterviewing} interviewing`, accent: totalOffers > 0 ? "text-emerald-300" : "text-white" },
+              { label: "Applied", value: totalApplied > 0 ? totalApplied : "0", sub: "all time", accent: "text-white", highlight: totalApplied > 0 },
+              { label: "Today", value: appliedToday > 0 ? appliedToday : "0", sub: "applications", accent: appliedToday > 0 ? "text-emerald-300" : "text-indigo-200", highlight: appliedToday > 0 },
+              { label: "Pipeline", value: openJobs > 0 ? openJobs : "0", sub: `${pipelineQueued} queued`, accent: "text-white", highlight: openJobs > 0 },
+              { label: "Match score", value: avgScore > 0 ? `${avgScore}` : "—", sub: "avg · out of 100", accent: avgScore >= 75 ? "text-emerald-300" : avgScore >= 55 ? "text-amber-300" : "text-indigo-200", highlight: avgScore > 0 },
+              { label: "Response rate", value: responseRate > 0 ? `${responseRate}%` : "—", sub: `${totalInterviewing} interview${totalInterviewing !== 1 ? "s" : ""}`, accent: responseRate > 20 ? "text-emerald-300" : "text-indigo-200", highlight: responseRate > 0 },
+              { label: "Offers", value: totalOffers > 0 ? totalOffers : "—", sub: `${totalInterviewing} interviewing`, accent: totalOffers > 0 ? "text-emerald-300" : "text-indigo-200", highlight: totalOffers > 0 },
             ].map((kpi) => (
-              <div key={kpi.label} className="bg-white/10 backdrop-blur rounded-xl p-3.5">
-                <p className="text-[11px] text-indigo-300 font-medium uppercase tracking-wider">{kpi.label}</p>
-                <p className={`text-2xl font-bold mt-1 ${kpi.accent}`}>{kpi.value}</p>
-                <p className="text-[11px] text-indigo-400 mt-0.5 truncate">{kpi.sub}</p>
+              <div key={kpi.label} className={`rounded-xl p-3.5 transition-colors ${kpi.highlight ? "bg-white/15 backdrop-blur" : "bg-white/8 backdrop-blur"}`}>
+                <p className="text-[10px] text-indigo-300 font-semibold uppercase tracking-wider">{kpi.label}</p>
+                <p className={`text-2xl font-bold mt-1 tabular-nums ${kpi.accent}`}>{kpi.value}</p>
+                <p className="text-[10px] text-indigo-400 mt-0.5 truncate">{kpi.sub}</p>
               </div>
             ))}
           </div>
@@ -479,14 +505,22 @@ function DashboardPage() {
             </div>
 
             {filteredJobs.length === 0 ? (
-              <div className="py-12 text-center text-neutral-400 text-sm">
+              <div className="py-14 text-center">
                 {trackableJobs.length === 0 ? (
-                  <div>
-                    <p className="text-2xl mb-2">📋</p>
-                    <p className="font-medium text-neutral-500">No applications yet</p>
-                    <p className="text-xs mt-1">Add jobs to your pipeline or use the extension on LinkedIn</p>
+                  <div className="space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M12 12v4M10 14h4" stroke="#6366F1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-[14px] font-semibold text-neutral-700">No applications yet</p>
+                      <p className="text-[13px] text-neutral-400 mt-1">Open LinkedIn Jobs and use the AutoApply extension to start applying.</p>
+                    </div>
                   </div>
-                ) : "No matching applications"}
+                ) : (
+                  <p className="text-[13px] text-neutral-400">No matching applications</p>
+                )}
               </div>
             ) : (
               <div className="divide-y divide-neutral-50">
@@ -523,7 +557,7 @@ function DashboardPage() {
                     </p>
                   </div>
                 </div>
-                <Link href="/onboarding" className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium">
+                <Link href={parsedResumeSummary ? "/onboarding?edit=resume" : "/onboarding"} className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium">
                   {parsedResumeSummary ? "Change" : "Upload →"}
                 </Link>
               </div>
@@ -707,6 +741,46 @@ function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Recent Tailored Resumes */}
+          {recentResumes.length > 0 && (
+            <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+              <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-3">
+                Recent Tailored Resumes
+              </h2>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {recentResumes.map((r) => (
+                  <div key={r.key} className="flex items-center gap-2 group py-1.5 border-b border-neutral-50 last:border-0">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-neutral-800 truncate leading-tight">{r.jobTitle}</p>
+                      <p className="text-[10px] text-neutral-400 truncate mt-0.5">{r.company}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {r.matchScore > 0 && (
+                        <span className={`text-[10px] font-bold ${
+                          r.matchScore >= 80 ? "text-emerald-600" :
+                          r.matchScore >= 60 ? "text-amber-500" : "text-neutral-400"
+                        }`}>{r.matchScore}</span>
+                      )}
+                      <button
+                        onClick={() => {
+                          window.dispatchEvent(new CustomEvent("autoapply-download-resume", {
+                            detail: { key: r.key, job: { jobTitle: r.jobTitle, company: r.company, jobUrl: r.jobUrl } }
+                          }));
+                        }}
+                        className="text-[10px] bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-2 py-0.5 rounded font-medium transition-colors whitespace-nowrap"
+                      >
+                        ⬇ PDF
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-neutral-400 mt-2 text-center">
+                {recentResumes.length} resume{recentResumes.length !== 1 ? "s" : ""} · stored locally in extension
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

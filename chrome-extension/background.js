@@ -188,11 +188,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         s.completed = (s.completed || 0) + 1;
         // Also record in applicationHistory for the dashboard table
         if (job) {
+          // [AutoQA fix 2026-04-10] ats was hardcoded to "greenhouse" for ALL completions
+          // regardless of which ATS actually completed the application. This caused every
+          // history entry to show ats="greenhouse" even for Lever, Workday, Ashby, etc.
+          // Now reads from message.ats (sent by each ATS script's FUNNEL_STAGE message)
+          // and falls back to "unknown" if omitted (e.g. legacy scripts that don't send it).
           recordApplication({
             jobTitle: job.jobTitle || "",
             company: job.company || "",
             jobUrl: job.jobUrl || "",
-            ats: "greenhouse",
+            ats: message.ats || "unknown",
             resumeFilename: "",
           });
         }
@@ -356,7 +361,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const _t0 = Date.now();
     try { AALog && AALog.api("bg.tailorAndFill.start", { company: message.job?.company, jobTitle: message.job?.jobTitle }); } catch(_){}
     startKeepAlive(); // Keep service worker alive during long API calls
-    handleTailorAndFill(message.job)
+    // Pass the actual tab URL so background can store the resume under BOTH keys:
+    // the job's applyUrl (which might be a LinkedIn URL) AND the live page URL.
+    const tabUrl = sender.tab?.url || "";
+    const jobWithTabUrl = { ...message.job, _tabUrl: tabUrl };
+    handleTailorAndFill(jobWithTabUrl)
       .then((result) => {
         try { AALog && AALog.api("bg.tailorAndFill.done", { ms: Date.now() - _t0, hasResult: !!result?.tailoredResult, error: result?.error || null }); } catch(_){}
         stopKeepAlive(); sendResponse(result);
@@ -419,6 +428,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "DOWNLOAD_RESUME") {
     handleDownloadResume(message.job);
     sendResponse({ success: true });
+    return true;
+  }
+
+  /* ── Download a specific resume by map key (triggered from dashboard) ── */
+  if (message.type === "DOWNLOAD_RESUME_BY_KEY") {
+    (async () => {
+      const stored = await chrome.storage.local.get(["tailoredResumeMap"]);
+      const map    = stored.tailoredResumeMap || {};
+      const entry  = map[message.key];
+      if (!entry?.pdf) {
+        console.warn("AutoApply BG: No PDF for key:", message.key);
+        sendResponse({ success: false, error: "not found" });
+        return;
+      }
+      const safeFilename = (entry.filename || `${entry.company}_${entry.jobTitle}_Resume.pdf`).replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+      chrome.downloads.download({ url: `data:application/pdf;base64,${entry.pdf}`, filename: safeFilename, saveAs: false });
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
+  /* ── Return the correct PDF for a specific job (keyed lookup) ── */
+  if (message.type === "GET_RESUME_PDF") {
+    (async () => {
+      const key = makeResumeKey(message.job);
+      const stored = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename"]);
+      const map = stored.tailoredResumeMap || {};
+      const entry = map[key];
+      sendResponse({
+        pdf:      entry?.pdf      || stored.tailoredResumePdf      || null,
+        filename: entry?.filename || stored.tailoredResumeFilename || null,
+        fromKey:  !!entry?.pdf,
+      });
+    })();
+    return true;
+  }
+
+  /* ── Generate a cover letter and download as .docx ── */
+  if (message.type === "GENERATE_COVER_LETTER") {
+    startKeepAlive();
+    (async () => {
+      try {
+        const result = await handleGenerateCoverLetter(message.job);
+        // Download .docx immediately
+        chrome.downloads.download({
+          url:      `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${result.docxBase64}`,
+          filename: result.filename,
+          saveAs:   false,
+        });
+        sendResponse({ success: true, coverLetter: result.coverLetter, filename: result.filename });
+      } catch(err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
     return true;
   }
 
@@ -771,6 +834,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Step 2: Clear dedup guards so the inject isn't blocked
       injectedTabIds.delete(tabId);
       ownedByJob.delete(tabId);
+
+      // Step 2b: Signal greenhouse.js to self-scrape the current page.
+      // This flag takes priority over any stale pendingApplication that may have been
+      // restored above (e.g. Career17 when we're actually on Mercury's page).
+      await new Promise(r => chrome.storage.local.set({ _aa_scrapeAndTailor: true }, r));
+      console.log("AutoApply BG: Set _aa_scrapeAndTailor flag for FILL_CURRENT_PAGE on", url);
+
+      // Step 2c: Clear the in-page injection guard so greenhouse.js actually re-runs.
+      // Without this, chrome.scripting.executeScript fires but the script hits
+      // `if (window.__autoapply_ats_injected) return;` and exits immediately.
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => { window.__autoapply_ats_injected = false; },
+        });
+        console.log("AutoApply BG: Cleared __autoapply_ats_injected guard for tab", tabId);
+      } catch (e) {
+        console.warn("AutoApply BG: Could not clear injection guard:", e.message);
+      }
 
       // Step 3: Re-inject the banner + ATS script (same as normal flow)
       injectInstantBanner(tabId);
@@ -1138,13 +1220,13 @@ function injectInstantBanner(tabId) {
         "position:fixed", "top:0", "left:0", "right:0", "z-index:2147483647",
         "background:linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%)",
         "color:#fff", "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
-        "padding:10px 18px 9px", "box-shadow:0 4px 20px rgba(0,0,0,0.2)",
+        "padding:10px 18px 9px", "box-shadow:0 2px 16px rgba(0,0,0,0.18),0 1px 4px rgba(0,0,0,0.1)",
+        "transition:background 0.35s ease,opacity 0.2s ease",
       ].join(";");
       b.innerHTML = `
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">🤖 AUTOAPPLY AI</span>
-          <span style="font-size:13px;font-weight:500;">Opening application — please wait…</span>
-          <span style="font-size:12px;opacity:0.7;margin-left:auto;">Loading form filler…</span>
+          <span style="font-size:11px;font-weight:600;background:rgba(255,255,255,0.18);border-radius:5px;padding:2px 8px;letter-spacing:0.2px;white-space:nowrap;">✦ AutoApply</span>
+          <span style="font-size:13px;font-weight:500;">Opening your application…</span>
         </div>`;
       document.body ? document.body.prepend(b) : document.documentElement.prepend(b);
     },
@@ -1178,20 +1260,21 @@ function injectFloatingTrigger(tabId) {
       panel.id = "aa-floating-panel";
       panel.style.cssText = [
         "all:initial", "display:none",
-        "background:#fff", "border-radius:14px",
-        "box-shadow:0 8px 40px rgba(0,0,0,0.18),0 2px 8px rgba(79,70,229,0.15)",
-        "border:1px solid rgba(79,70,229,0.12)",
-        "width:220px", "overflow:hidden",
+        "background:#fff", "border-radius:16px",
+        "box-shadow:0 8px 40px rgba(0,0,0,0.16),0 2px 12px rgba(79,70,229,0.12)",
+        "border:1px solid rgba(79,70,229,0.1)",
+        "width:252px", "overflow:hidden",
         "font-family:" + FONT,
-        "animation:aa-slide-in 0.18s ease",
+        "transform:translateY(6px)", "opacity:0",
+        "transition:opacity 0.15s ease, transform 0.15s ease",
       ].join(";");
 
       /* ── Panel header ── */
       const header = document.createElement("div");
-      header.style.cssText = "background:" + GRAD + ";padding:10px 14px;display:flex;align-items:center;justify-content:space-between;";
+      header.style.cssText = "background:" + GRAD + ";padding:11px 14px;display:flex;align-items:center;justify-content:space-between;";
       header.innerHTML = `
-        <span style="color:#fff;font-size:12px;font-weight:700;font-family:${FONT};letter-spacing:0.3px;">🤖 AutoApply Actions</span>
-        <span id="aa-panel-status" style="color:rgba(255,255,255,0.7);font-size:10px;font-family:${FONT};"></span>
+        <span style="color:#fff;font-size:12px;font-weight:700;font-family:${FONT};letter-spacing:0.2px;">AutoApply</span>
+        <span id="aa-panel-status" style="color:rgba(255,255,255,0.65);font-size:10px;font-family:${FONT};"></span>
       `;
       panel.appendChild(header);
 
@@ -1229,34 +1312,38 @@ function injectFloatingTrigger(tabId) {
         return d;
       }
 
+      /* ── Inline makeResumeKey (mirrors background.js — must stay in sync) ── */
+      function makeResumeKey(job) {
+        if (!job) return "default";
+        const url = job.applyUrl || job.jobUrl || "";
+        if (url) {
+          try {
+            const u = new URL(url);
+            return (u.hostname + u.pathname).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 80);
+          } catch(_) {}
+        }
+        const co = (job.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+        const ti = (job.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+        return (co + "_" + ti) || "default";
+      }
+
       /* ── Populate panel based on storage state ── */
       function buildPanel() {
         actions.innerHTML = "";
-        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumePdf", "tailoredResumeFilename", "lastTailoredJob", "parsedResume", "userProfile"], (stored) => {
+        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumeMap", "parsedResume", "userProfile"], (stored) => {
           const hasResume = !!stored.parsedResume;
           const lastJob   = stored.lastFilledJob;
           const pending   = stored.pendingApplication;
           const jobInfo   = pending || lastJob;  // prefer current pending over stale lastFilledJob
 
-          // Only offer "Download" if the stored PDF is for the current page/job.
-          // Compare by URL first, then by company+title similarity.
-          // If it's for a different job, show "Generate" instead so the user
-          // gets a fresh tailored resume for this role.
-          const tailoredJob = stored.lastTailoredJob;
-          const currentUrl  = window.location.href;
-          let pdfMatchesCurrent = false;
-          if (stored.tailoredResumePdf && tailoredJob) {
-            const sameUrl     = tailoredJob.applyUrl === currentUrl || tailoredJob.jobUrl === currentUrl;
-            const sameCompany = tailoredJob.company && jobInfo?.company &&
-              tailoredJob.company.toLowerCase().includes(jobInfo.company.toLowerCase().slice(0, 6));
-            const sameTitle   = tailoredJob.jobTitle && jobInfo?.jobTitle &&
-              tailoredJob.jobTitle.toLowerCase().slice(0, 20) === jobInfo.jobTitle.toLowerCase().slice(0, 20);
-            pdfMatchesCurrent = sameUrl || (sameCompany && sameTitle);
-          }
-          const hasPdf = pdfMatchesCurrent;
+          // Use keyed map lookup for hasPdf — eliminates the wrong-resume display bug
+          const resumeMap = stored.tailoredResumeMap || {};
+          const resumeKey = makeResumeKey(jobInfo);
+          const mapEntry  = resumeMap[resumeKey];
+          const hasPdf    = !!(mapEntry?.pdf);
 
           // ① Fill this form
-          const fillBtn = makeBtn("✏️", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""} — ${jobInfo.company || ""}`.slice(0, 32) : "Re-run AutoApply on this page", "#4F46E5", () => {
+          const fillBtn = makeBtn("✏️", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""}${jobInfo.company ? " · " + jobInfo.company : ""}`.slice(0, 34) : "Re-run AutoApply on this page", "#4F46E5", () => {
             setStatus("Filling form…");
             chrome.runtime.sendMessage({ type: "FILL_CURRENT_PAGE" }, (r) => {
               setStatus(r?.success ? "Filling… check the page!" : "Error — try reload");
@@ -1411,30 +1498,111 @@ function injectFloatingTrigger(tabId) {
 
           // ── Render the right button ───────────────────────────────────────
           if (hasPdf) {
-            const dlBtn = makeBtn("📄", "Download tailored resume", "Your AI-customised resume PDF", "#059669", () => {
+            const dlBtn = makeBtn("📄", "Download resume", "Your tailored PDF for this role", "#059669", () => {
               startDownloadCountdown(dlBtn);
             });
             actions.appendChild(dlBtn);
           } else if (hasResume) {
-            const tailorBtn = makeBtn("✨", "Generate tailored resume", "Creates resume PDF for this role", "#D97706", () => {
+            const tailorBtn = makeBtn("✨", "Tailor resume", "Generate a tailored PDF for this role", "#D97706", () => {
               startGenerateProgress(tailorBtn);
             });
             actions.appendChild(tailorBtn);
           }
 
-          actions.appendChild(makeDivider());
+          // ── ③ Generate cover letter → download as .docx ─────────────────
+          function generateCoverLetter(btn) {
+            if (btn.dataset.loading) return;
+            btn.dataset.loading = "1";
+            btn.style.opacity = "0.7";
+            btn.style.pointerEvents = "none";
+            const sublabelEl = getSublabel(btn);
 
-          // ③ Open application page (only when we have a different URL stored)
-          const applyUrl = pending?.applyUrl || pending?.jobUrl || lastJob?.jobUrl;
-          if (applyUrl && applyUrl !== window.location.href) {
-            const navBtn = makeBtn("🔗", "Go to application page", applyUrl.replace(/^https?:\/\//, "").slice(0, 40), "#6B7280", () => {
-              window.location.href = applyUrl;
+            // Animated phase labels so user knows it's working (takes ~25-45s)
+            const phases = [
+              { after: 0,  label: "Reading job description…" },
+              { after: 6,  label: "Analysing your resume…"   },
+              { after: 14, label: "Writing tailored letter…" },
+              { after: 24, label: "Formatting Word doc…"     },
+            ];
+            let elapsed = 0;
+            if (sublabelEl) sublabelEl.innerHTML = `
+              <div style="margin-top:3px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                  <span id="aa-cl-phase" style="font-size:10px;color:#7C3AED;font-family:${FONT};">Reading job description…</span>
+                  <span id="aa-cl-time" style="font-size:10px;color:#9CA3AF;font-family:${FONT};">0s</span>
+                </div>
+                <div style="height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;">
+                  <div id="aa-cl-bar" style="height:100%;width:2%;background:#7C3AED;border-radius:2px;transition:width 1s ease-out;"></div>
+                </div>
+              </div>`;
+
+            const phaseEl = sublabelEl?.querySelector("#aa-cl-phase");
+            const timeEl  = sublabelEl?.querySelector("#aa-cl-time");
+            const barEl   = sublabelEl?.querySelector("#aa-cl-bar");
+            setStatus("Generating cover letter…");
+
+            const tick = setInterval(() => {
+              elapsed++;
+              const pct = Math.round(85 * (1 - Math.exp(-elapsed / 25)));
+              if (timeEl) timeEl.textContent = elapsed + "s";
+              if (barEl)  barEl.style.width  = pct + "%";
+              const phase = [...phases].reverse().find(p => elapsed >= p.after);
+              if (phaseEl && phase) phaseEl.textContent = phase.label;
+            }, 1000);
+
+            chrome.runtime.sendMessage({ type: "GENERATE_COVER_LETTER", job: jobInfo || {} }, (resp) => {
+              clearInterval(tick);
+              btn.style.opacity = "";
+              btn.style.pointerEvents = "";
+              delete btn.dataset.loading;
+
+              if (resp?.success) {
+                // Snap bar to 100%
+                if (barEl) { barEl.style.transition = "width 0.3s ease-out"; barEl.style.width = "100%"; }
+                setTimeout(() => {
+                  if (sublabelEl) sublabelEl.innerHTML = `
+                    <div style="margin-top:3px;display:flex;align-items:center;gap:6px;">
+                      <span style="font-size:10px;color:#059669;font-family:${FONT};font-weight:600;">✅ Saved to Downloads</span>
+                      <span id="aa-cl-copy-inline" style="font-size:10px;color:#7C3AED;cursor:pointer;font-family:${FONT};text-decoration:underline;">copy text</span>
+                    </div>`;
+                  const copyInline = sublabelEl?.querySelector("#aa-cl-copy-inline");
+                  if (copyInline) {
+                    copyInline.addEventListener("click", (e) => {
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(resp.coverLetter || "").catch(() => {});
+                      copyInline.textContent = "copied!";
+                      setTimeout(() => { if(copyInline) copyInline.textContent = "copy text"; }, 2000);
+                    });
+                  }
+                }, 350);
+                setStatus(`✅ ${resp.filename || "Cover_Letter.docx"}`);
+                setTimeout(() => setStatus(""), 5000);
+              } else {
+                if (sublabelEl) sublabelEl.textContent = resp?.error || "Failed — try again";
+                setStatus("");
+                setTimeout(() => { if (sublabelEl) sublabelEl.textContent = "Tailored Word doc for this role"; }, 4000);
+              }
             });
-            actions.appendChild(navBtn);
           }
 
-          // ④ Force-reload this page (re-injects ATS script on page load)
-          const reloadBtn = makeBtn("🔄", "Reload + re-inject", "Reloads page, re-runs AutoApply", "#6B7280", () => {
+          const clBtn = makeBtn("📝", "Generate cover letter", "Tailored cover letter (.docx)", "#7C3AED", () => {
+            generateCoverLetter(clBtn);
+          });
+          actions.appendChild(clBtn);
+
+          actions.appendChild(makeDivider());
+
+          // ④ Open job posting in new tab
+          const jobPostingUrl = jobInfo?.jobUrl || jobInfo?.applyUrl || jobInfo?.linkedinUrl;
+          if (jobPostingUrl) {
+            const openBtn = makeBtn("🔗", "Open job posting", jobPostingUrl.replace(/^https?:\/\//, "").slice(0, 35), "#6B7280", () => {
+              window.open(jobPostingUrl, "_blank");
+            });
+            actions.appendChild(openBtn);
+          }
+
+          // ⑤ Force-reload this page (re-injects ATS script on page load)
+          const reloadBtn = makeBtn("↺", "Restart AutoApply", "Reloads page and re-runs AutoApply", "#6B7280", () => {
             window.location.reload();
           });
           actions.appendChild(reloadBtn);
@@ -1449,42 +1617,52 @@ function injectFloatingTrigger(tabId) {
       /* ── Main toggle button ── */
       const pill = document.createElement("button");
       pill.id = "aa-floating-trigger";
-      pill.innerHTML = "🤖 AutoApply";
+      pill.innerHTML = "✦ AutoApply";
       pill.style.cssText = [
         "all:initial",
         "background:" + GRAD,
         "color:#fff", "border:none", "border-radius:999px",
-        "padding:10px 18px", "font-size:13px", "font-weight:700",
+        "padding:10px 20px", "font-size:13px", "font-weight:700",
         "font-family:" + FONT,
-        "cursor:pointer", "box-shadow:0 4px 20px rgba(79,70,229,0.5)",
-        "display:flex", "align-items:center", "gap:6px",
-        "transition:transform 0.15s,box-shadow 0.15s",
-        "white-space:nowrap",
+        "cursor:pointer", "box-shadow:0 4px 20px rgba(79,70,229,0.45)",
+        "display:flex", "align-items:center", "gap:5px",
+        "transition:transform 0.15s,box-shadow 0.15s,background 0.2s",
+        "white-space:nowrap", "letter-spacing:0.1px",
       ].join(";");
-      pill.onmouseenter = () => { pill.style.transform = "scale(1.05)"; pill.style.boxShadow = "0 6px 28px rgba(79,70,229,0.65)"; };
-      pill.onmouseleave = () => { pill.style.transform = "scale(1)"; pill.style.boxShadow = "0 4px 20px rgba(79,70,229,0.5)"; };
+      pill.onmouseenter = () => { pill.style.transform = "scale(1.04)"; pill.style.boxShadow = "0 6px 28px rgba(79,70,229,0.6)"; };
+      pill.onmouseleave = () => { pill.style.transform = "scale(1)"; pill.style.boxShadow = "0 4px 20px rgba(79,70,229,0.45)"; };
+
+      function openPanel() {
+        buildPanel();
+        panel.style.display = "block";
+        // Allow display:block to paint, then animate in
+        requestAnimationFrame(() => {
+          panel.style.opacity = "1";
+          panel.style.transform = "translateY(0)";
+        });
+        pill.innerHTML = "✕ Close";
+        pill.style.background = "linear-gradient(135deg,#3730A3 0%,#5B21B6 100%)";
+        open = true;
+      }
+
+      function closePanel() {
+        panel.style.opacity = "0";
+        panel.style.transform = "translateY(6px)";
+        setTimeout(() => { panel.style.display = "none"; }, 150);
+        pill.innerHTML = "✦ AutoApply";
+        pill.style.background = GRAD;
+        open = false;
+      }
 
       let open = false;
       pill.addEventListener("click", (e) => {
         e.stopPropagation();
-        open = !open;
-        if (open) {
-          buildPanel(); // refresh state every open
-          panel.style.display = "block";
-          pill.innerHTML = "✕ Close";
-        } else {
-          panel.style.display = "none";
-          pill.innerHTML = "🤖 AutoApply";
-        }
+        if (open) closePanel(); else openPanel();
       });
 
       // Close panel when clicking outside
       document.addEventListener("click", (e) => {
-        if (open && !root.contains(e.target)) {
-          open = false;
-          panel.style.display = "none";
-          pill.innerHTML = "🤖 AutoApply";
-        }
+        if (open && !root.contains(e.target)) closePanel();
       });
 
       root.appendChild(panel);
@@ -1726,12 +1904,43 @@ async function handleTailorAndFill(job) {
       const rawFilename = `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume`;
       const truncatedFilename = rawFilename.length > 60 ? rawFilename.substring(0, 60) : rawFilename;
       const filename = `${truncatedFilename}.pdf`;
+
+      // ── Keyed resume map: each job gets its own slot (fixes wrong-resume bug) ──
+      const resumeKey    = makeResumeKey(job);
+      // Also key by the live tab URL (_tabUrl injected at message handler).
+      // This handles the case where applyUrl was a LinkedIn URL but the form
+      // is on Greenhouse — so the download button on the Greenhouse page finds it.
+      const tabKey       = job._tabUrl ? makeResumeKey({ applyUrl: job._tabUrl }) : null;
+      const mapData      = await chrome.storage.local.get(["tailoredResumeMap"]);
+      const resumeMap    = mapData.tailoredResumeMap || {};
+      const entryPayload = {
+        pdf:        base64,
+        filename,
+        jobTitle:   job.jobTitle   || "",
+        company:    job.company    || "",
+        jobUrl:     job.applyUrl   || job.jobUrl || "",
+        coverLetter: tailoredResult.coverLetter || "",
+        matchScore: tailoredResult.matchScore   || 0,
+        createdAt:  Date.now(),
+      };
+      resumeMap[resumeKey] = entryPayload;
+      // Store under live page URL too (if different) so _downloadResumeForPage() always hits
+      if (tabKey && tabKey !== resumeKey) {
+        resumeMap[tabKey] = entryPayload;
+        console.log("AutoApply BG: Also stored under tab URL key:", tabKey);
+      }
+      // Trim to last 20 resumes by recency
+      const mapEntries   = Object.entries(resumeMap).sort((a, b) => b[1].createdAt - a[1].createdAt);
+      const trimmedMap   = Object.fromEntries(mapEntries.slice(0, 20));
+
       await chrome.storage.local.set({
-        tailoredResumePdf: base64,
-        tailoredResumeFilename: filename,
+        tailoredResumePdf:      base64,    // backward compat for ATS scripts
+        tailoredResumeFilename: filename,  // backward compat for ATS scripts
+        tailoredResumeMap:      trimmedMap,
+        lastResumeKey:          resumeKey,
       });
-      console.log("AutoApply BG: Step 3 done. PDF generated.");
-      try { AALog && AALog.api("bg.api.exportResume.done", { filename, sizeBytes: arrayBuffer.byteLength }); } catch(_){}
+      console.log("AutoApply BG: Step 3 done. PDF stored in map key:", resumeKey);
+      try { AALog && AALog.api("bg.api.exportResume.done", { filename, sizeBytes: arrayBuffer.byteLength, resumeKey }); } catch(_){}
     } else {
       const errBody = await pdfRes.text().catch(() => "");
       console.warn(`AutoApply BG: PDF export failed: ${pdfRes.status} — ${errBody.substring(0, 200)}`);
@@ -1866,27 +2075,156 @@ async function handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, c
 }
 
 /**
+ * Generate a deterministic storage key for a job.
+ * URL-based when possible (most reliable); falls back to company+title.
+ */
+function makeResumeKey(job) {
+  if (!job) return "default";
+  const url = job.applyUrl || job.jobUrl || "";
+  if (url) {
+    try {
+      const u = new URL(url);
+      return (u.hostname + u.pathname).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 80);
+    } catch(_) {}
+  }
+  const co = (job.company   || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+  const ti = (job.jobTitle  || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+  return (co + "_" + ti) || "default";
+}
+
+/**
  * Download the tailored resume PDF to the user's Downloads folder.
+ * Uses keyed lookup so batch jobs always download the correct resume.
  */
 async function handleDownloadResume(job) {
-  const stored = await chrome.storage.local.get(["tailoredResumePdf", "tailoredResumeFilename"]);
+  const resumeKey = makeResumeKey(job);
+  const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename"]);
+  const map       = stored.tailoredResumeMap || {};
+  const entry     = map[resumeKey];
 
-  if (!stored.tailoredResumePdf) {
-    console.warn("AutoApply BG: No PDF to download");
+  // DEBUG — log full picture so we can trace wrong-resume issues
+  console.log("AutoApply BG [handleDownloadResume] job received:", JSON.stringify(job));
+  console.log("AutoApply BG [handleDownloadResume] resumeKey:", resumeKey);
+  console.log("AutoApply BG [handleDownloadResume] mapKeys:", Object.keys(map));
+  console.log("AutoApply BG [handleDownloadResume] entry found:", !!entry, "entry filename:", entry?.filename);
+  console.log("AutoApply BG [handleDownloadResume] globalPdf:", !!stored.tailoredResumePdf, "globalFilename:", stored.tailoredResumeFilename);
+
+  // Prefer the keyed entry; fall back to global slot for backward compat
+  const base64   = entry?.pdf      || stored.tailoredResumePdf;
+  const filename = entry?.filename || stored.tailoredResumeFilename ||
+    `${job?.company || "Company"}_${job?.jobTitle || "Resume"}_Tailored.pdf`;
+
+  if (!base64) {
+    console.warn("AutoApply BG: No PDF to download (key:", resumeKey, ")");
     return;
   }
 
-  // Use data URL directly — URL.createObjectURL is not available in MV3 service workers
-  const url = `data:application/pdf;base64,${stored.tailoredResumePdf}`;
-
-  const filename = stored.tailoredResumeFilename ||
-    `${job?.company || "Company"}_${job?.jobTitle || "Resume"}_Tailored.pdf`;
-
+  console.log("AutoApply BG: Downloading resume — key:", resumeKey, "fromMap:", !!entry?.pdf, "filename:", filename);
   chrome.downloads.download({
-    url: url,
+    url:      `data:application/pdf;base64,${base64}`,
     filename: filename.replace(/[^a-zA-Z0-9_\-\.]/g, "_"),
-    saveAs: false,
+    saveAs:   false,
   });
+}
+
+/**
+ * Generate a tailored cover letter for a job and export it as a .docx file.
+ * Returns { paragraphs, docxBase64, filename, coverLetter (plain text) }.
+ */
+async function handleGenerateCoverLetter(job) {
+  const resumeKey = makeResumeKey(job);
+  const stored    = await chrome.storage.local.get(["tailoredResumeMap", "parsedResume", "userProfile", "autoapplyUrl"]);
+  const map       = stored.tailoredResumeMap || {};
+  const entry     = map[resumeKey];
+
+  const apiUrl   = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+  const profile  = stored.userProfile  || {};
+  const resumeText = stored.parsedResume?.rawText || stored.parsedResume?.text || "";
+
+  const fullName  = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Applicant";
+  const firstName = profile.firstName || fullName.split(" ")[0] || "I";
+
+  let paragraphs = entry?.coverLetterParagraphs || null;
+
+  // ── Step 1: Generate AI paragraphs (or use cache) ──────────────────────
+  if (!paragraphs) {
+    const prompt = `You are writing a professional cover letter body for ${firstName} applying for ${job.jobTitle || "this position"} at ${job.company || "this company"}.
+
+RESUME HIGHLIGHTS (use specific metrics and achievements from here):
+${resumeText.substring(0, 2000)}
+
+JOB DESCRIPTION (tailor to these requirements):
+${(job.jobDescription || "").substring(0, 1200)}
+
+Write EXACTLY 3 paragraphs separated by a blank line:
+1. Opening — genuine enthusiasm for THIS specific company/role + one sentence on why you are a strong fit
+2. Achievements — 2–3 specific, quantified accomplishments from the resume that directly address the job requirements (use numbers: %, $, time saved, users, etc.)
+3. Closing — forward-looking statement, express desire to discuss further, professional sign-off sentence
+
+Rules:
+- First person, confident but not arrogant
+- 250–320 words total
+- NO salutation, NO sign-off, NO "Dear...", NO "Sincerely" — just the 3 paragraphs
+- NO markdown, NO bullet points, NO headers`;
+
+    const aiRes = await fetch(`${apiUrl}/api/chat`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        message:       prompt,
+        systemContext: "You are an expert cover letter writer who tailors each letter precisely to the job and resume. Output ONLY the 3 paragraph body. No headers, no salutation, no sign-off, no markdown.",
+      }),
+    });
+
+    if (!aiRes.ok) throw new Error(`Cover letter AI failed (${aiRes.status})`);
+    const aiData   = await aiRes.json();
+    const rawText  = aiData.response || aiData.content || aiData.text || aiData.message || "";
+    if (!rawText) throw new Error("Empty AI response");
+
+    // Split on blank lines to get individual paragraphs
+    paragraphs = rawText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+    if (paragraphs.length === 0) paragraphs = [rawText.trim()];
+
+    // Cache
+    if (entry) {
+      entry.coverLetterParagraphs = paragraphs;
+      entry.coverLetter = paragraphs.join("\n\n");
+      await chrome.storage.local.set({ tailoredResumeMap: map });
+    }
+  }
+
+  // ── Step 2: Export to .docx via API ────────────────────────────────────
+  const exportRes = await fetch(`${apiUrl}/api/export-cover-letter`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      paragraphs,
+      name:     fullName,
+      email:    profile.email    || "",
+      phone:    profile.phone    || "",
+      city:     profile.city     || "",
+      province: profile.province || "",
+      linkedin: profile.linkedin || "",
+      jobTitle: job.jobTitle || "",
+      company:  job.company  || "",
+    }),
+  });
+
+  if (!exportRes.ok) throw new Error(`Cover letter export failed (${exportRes.status})`);
+
+  const arrayBuffer = await exportRes.arrayBuffer();
+  const base64      = arrayBufferToBase64(arrayBuffer);
+
+  // Build filename
+  const co  = (job.company  || "Company").replace(/[^a-zA-Z0-9 ]/g, "").trim().slice(0, 25);
+  const ti  = (job.jobTitle || "Role").replace(/[^a-zA-Z0-9 ]/g, "").trim().slice(0, 25);
+  const filename = `Cover_Letter_${co}_${ti}.docx`.replace(/\s+/g, "_");
+
+  return {
+    docxBase64: base64,
+    filename,
+    coverLetter: paragraphs.join("\n\n"),  // plain text for clipboard fallback
+  };
 }
 
 function arrayBufferToBase64(buffer) {

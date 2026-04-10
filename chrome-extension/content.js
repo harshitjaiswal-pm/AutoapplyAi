@@ -2136,12 +2136,23 @@
 
   function getStatusIcon(status) {
     switch (status) {
-      case "applying": return '<span style="color: #F59E0B;">●</span>';
-      case "opened": return '<span style="color: #3B82F6;">↗</span>';
-      case "applied": return '<span style="color: #10B981;">✓</span>';
-      case "skipped": return '<span style="color: #9CA3AF;">○</span>';
-      case "failed": return '<span style="color: #EF4444;">✗</span>';
-      default: return '<span style="color: #D1D5DB;">·</span>';
+      case "applying": return '<span style="color:#F59E0B;font-size:12px;">●</span>';
+      case "opened":   return '<span style="color:#3B82F6;font-size:12px;">↗</span>';
+      case "applied":  return '<span style="color:#10B981;font-size:12px;">✓</span>';
+      case "skipped":  return '<span style="color:#9CA3AF;font-size:12px;">–</span>';
+      case "failed":   return '<span style="color:#EF4444;font-size:12px;">✗</span>';
+      default:         return '<span style="color:#D1D5DB;font-size:12px;">·</span>';
+    }
+  }
+
+  function getStatusLabel(status) {
+    switch (status) {
+      case "applying": return "Filling…";
+      case "opened":   return "Opened";
+      case "applied":  return "Applied";
+      case "skipped":  return "Skipped";
+      case "failed":   return "Failed";
+      default:         return "";
     }
   }
 
@@ -2149,10 +2160,10 @@
     const list = document.getElementById("autoapply-jobs-list");
     if (scrapedJobs.length === 0) {
       list.innerHTML = `
-        <div style="text-align:center;padding:28px 16px;">
-          <div style="font-size:28px;margin-bottom:8px;">🔍</div>
-          <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#374151;">No jobs scanned yet</p>
-          <p style="margin:0;font-size:12px;color:#9CA3AF;">Hit <b>Scan Page</b> above to find jobs on this page.</p>
+        <div style="text-align:center;padding:32px 16px;">
+          <div style="width:40px;height:40px;background:#EEF2FF;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:18px;">🔍</div>
+          <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#374151;">No jobs found yet</p>
+          <p style="margin:0;font-size:12px;color:#9CA3AF;line-height:1.5;">Click <b style="color:#4F46E5">Scan Page</b> to find jobs<br>on this LinkedIn page.</p>
         </div>
       `;
       return;
@@ -2210,13 +2221,13 @@
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;">
           ${job.status !== "pending" ? `<span style="
-            font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
+            font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 5px; white-space:nowrap;
             ${job.status === "opened" ? "background: #DBEAFE; color: #1E40AF;" : ""}
             ${job.status === "applied" ? "background: #D1FAE5; color: #065F46;" : ""}
             ${job.status === "applying" ? "background: #FEF3C7; color: #92400E;" : ""}
             ${job.status === "failed" ? "background: #FEE2E2; color: #991B1B;" : ""}
             ${job.status === "skipped" ? "background: #F3F4F6; color: #6B7280;" : ""}
-          ">${job.status}</span>` : ""}
+          ">${getStatusLabel(job.status)}</span>` : ""}
           ${job.status === "applying" ? `<span id="job-timer-${job.id}" style="font-size:10px;font-weight:700;color:#92400E;font-variant-numeric:tabular-nums;">0:00</span>` : ""}
           ${job.status === "opened" && job.atsTabId ? `<button class="aa-continue-btn" data-tab-id="${job.atsTabId}" style="
             font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;
@@ -2262,7 +2273,7 @@
     const count = document.getElementById("autoapply-count");
     if (start) {
       const n = selectedJobIds.size;
-      start.textContent = n === 0 ? "Select jobs above to begin" : `Apply to ${n} job${n === 1 ? "" : "s"} →`;
+      start.textContent = n === 0 ? "Select jobs to start applying" : `Start applying to ${n} job${n === 1 ? "" : "s"} →`;
       start.disabled = n === 0;
       start.style.opacity = n === 0 ? "0.38" : "1";
       start.style.pointerEvents = n === 0 ? "none" : "auto";

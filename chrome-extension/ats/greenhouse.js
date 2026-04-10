@@ -14,6 +14,57 @@
   window.__autoapply_ats_injected = true;
 
   console.log("AutoApply: Greenhouse ATS script loaded on", window.location.href);
+  const LOG = (msg, ...args) => console.log(`AutoApply GH: ${msg}`, ...args);
+
+  /**
+   * Download the tailored resume for the CURRENT page.
+   * Uses window.location.href as the primary key — the resume was always
+   * tailored on this exact page, so its URL is guaranteed to match the stored key.
+   * Falls back to pendingApplication / lastTailoredJob for edge cases.
+   */
+  function _downloadResumeForPage() {
+    chrome.storage.local.get(["tailoredResumeMap"], (r) => {
+      const map = r.tailoredResumeMap || {};
+      function _mk(job) {
+        if (!job) return "default";
+        const url = job.applyUrl || job.jobUrl || "";
+        if (url) { try { const u = new URL(url); return (u.hostname + u.pathname).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 80); } catch(_){} }
+        const co = (job.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+        const ti = (job.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+        return (co + "_" + ti) || "default";
+      }
+
+      // Priority 1: exact page URL key match (jobs applied to directly on Greenhouse)
+      const pageKey = _mk({ applyUrl: window.location.href });
+      if (map[pageKey]) {
+        LOG("Downloading by exact page key:", pageKey);
+        chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: window.location.href } });
+        return;
+      }
+
+      // Priority 2: scan map entries for a company name match against the current page.
+      // Handles the common case where the job was queued from LinkedIn (so the map key is
+      // a LinkedIn URL), but we're now on the Greenhouse ATS page.
+      // Each entry has { company, jobTitle, jobUrl } — jobUrl is the original applyUrl.
+      const urlLower   = window.location.href.toLowerCase();
+      const titleLower = (document.title || "").toLowerCase();
+      const matched = Object.values(map).find(entry => {
+        if (!entry.company) return false;
+        const co = entry.company.toLowerCase().replace(/\s+/g, "");
+        return urlLower.includes(co) || titleLower.includes(co);
+      });
+      if (matched) {
+        LOG("Found resume by company match:", matched.company, "filename:", matched.filename);
+        // Send the stored jobUrl so handleDownloadResume can look up the correct keyed entry
+        chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: matched.jobUrl || window.location.href } });
+        return;
+      }
+
+      // Priority 3: global fallback — most recently tailored resume
+      LOG("No company match found — using global tailoredResumePdf fallback");
+      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: window.location.href } });
+    });
+  }
 
   // ── Cross-origin iframe detection ──
   // When boards.greenhouse.io is embedded as an iframe in a company career page
@@ -63,7 +114,7 @@
     return; // don't run main init() flow
   }
 
-  showBanner("AutoApply is starting...", "ai", { subtext: "Waiting for page to finish loading..." });
+  showBanner("Opening your application…", "ai", { subtext: "Preparing to fill your form" });
   setTimeout(() => init(), 1500);
 
   async function init() {
@@ -103,12 +154,50 @@
           },
         }).catch(() => {});
         // Update banner to show success
-        showBanner("✅ Application completed and logged to your dashboard!", "success");
+        showBanner("Application submitted — logged to your dashboard.", "success");
       }
       return; // Don't try to fill a confirmation page
     }
 
-    const stored = await chrome.storage.local.get(["pendingApplication"]);
+    const stored = await chrome.storage.local.get(["pendingApplication", "_aa_scrapeAndTailor"]);
+
+    // ── Self-scrape path: triggered by "Fill this form" in the AutoApply panel ──
+    // This check runs BEFORE the pendingApplication check so it can override any stale
+    // pendingApplication that was restored from a different job (e.g. Career17 while
+    // we're on Mercury's page). The flag is always set by FILL_CURRENT_PAGE in bg.
+    if (stored._aa_scrapeAndTailor) {
+      await chrome.storage.local.remove(["_aa_scrapeAndTailor"]);
+      const jobTitle = document.querySelector("h1")?.innerText?.trim()
+        || document.title.replace(/^Job Application for\s*/i, "").split(" at ")[0].trim();
+      // Extract company from URL slug: job-boards.greenhouse.io/{company}/jobs/{id}
+      const urlParts = window.location.pathname.split("/").filter(Boolean);
+      const companySlug = urlParts[0] || "";
+      // Try to get a prettier company name from the title "... at CompanyName"
+      const titleMatch = document.title.match(/ at ([^-|]+)$/i);
+      const company = titleMatch ? titleMatch[1].trim() : companySlug;
+      const jobDescription = scrapeGreenhouseJD();
+      LOG("Self-scraping job from page:", jobTitle, "@", company);
+      if (jobTitle || jobDescription) {
+        const syntheticJob = {
+          jobTitle,
+          company,
+          jobDescription,
+          applyUrl: window.location.href,
+          jobUrl:   window.location.href,
+          _queuedAt: Date.now(),
+          _scrapedFromPage: true,
+        };
+        // Clear any stale pendingApplication (may be for a different job) then set ours
+        await chrome.storage.local.set({ pendingApplication: syntheticJob });
+        window.__autoapply_ats_injected = false;
+        LOG("Bootstrapped pendingApplication, re-running init");
+        setTimeout(() => init(), 200);
+        return;
+      }
+      // Couldn't scrape enough data — fall through to normal flow
+      LOG("Self-scrape: no job title or JD found, continuing with existing pendingApplication");
+    }
+
     if (!stored.pendingApplication) {
       console.log("AutoApply: No pending application found");
       return;
@@ -118,7 +207,7 @@
     // Remove pendingApplication immediately so any re-injection (SW restart) exits early
     chrome.storage.local.remove(["pendingApplication"]);
     console.log("AutoApply: Processing Greenhouse application for", pendingJob.jobTitle);
-    showBanner("Preparing your application...", "ai");
+    showBanner("Preparing your application…", "ai");
 
     // ── Step 0: Navigate to the application form if we're on the posting page ──
     // job-boards.greenhouse.io/{co}/jobs/{id} shows the JD only — the actual
@@ -126,7 +215,7 @@
     // content script re-runs on the form page (still with pendingApplication set).
     if (!isOnGreenhouseApplicationForm()) {
       console.log("AutoApply: On Greenhouse posting page — navigating to application form");
-      showBanner("Opening application form...", "ai", { subtext: "Navigating to the application..." });
+      showBanner("Opening your application…", "ai", { subtext: "Navigating to the form" });
       // Re-store pendingApplication before navigating so the destination page can read it.
       // (It was removed above to guard against SW-restart double-injection on the SAME page,
       //  but cross-page navigation creates a fresh window context, so we need it again.)
@@ -134,7 +223,7 @@
       const navigated = await clickGreenhouseApplyButton();
       if (!navigated) {
         showBanner(
-          "⚠️ Couldn't find the Apply button — please click it manually.",
+          "Couldn't find the Apply button — click it to continue.",
           "user",
           { subtext: "Once on the application form, AutoApply will fill it automatically." }
         );
@@ -152,14 +241,14 @@
       storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
 
       // ── STEP 1: Fill basic fields IMMEDIATELY — don't leave form empty ──
-      showBanner("Filling your details...", "ai", { subtext: "Tailoring resume in background..." });
+      showBanner("Filling in your details…", "ai", { subtext: "Tailoring your resume in the background" });
       await fillBasicFieldsOnly();
 
       // ── STEP 2: Show YOUR TURN immediately — no waiting ──
       // User can start reviewing the form right away.
       // Tailoring + resume upload continue silently in the background.
-      showBanner("YOUR TURN — Basic info filled. Review and submit when ready.", "user", {
-        subtext: "✨ Tailoring resume in background — cover letter & extra fields will fill automatically...",
+      showBanner("Your turn — review and submit when ready.", "user", {
+        subtext: "Tailoring your resume in the background — extra fields will fill shortly…",
       });
       chrome.storage.local.remove(["pendingApplication"]);
 
@@ -224,13 +313,13 @@
             // Try programmatic resume upload first
             const uploaded = await attemptResumeUpload();
             if (uploaded) {
-              showBanner("YOUR TURN — Resume uploaded ✓, all fields filled. Review and submit.", "user", {
-                subtext: "AutoApply stops here — you stay in control of the final submit.",
+              showBanner("Your turn — everything's filled in.", "user", {
+                subtext: "Resume attached · Review each field and hit Submit.",
               });
             } else {
               // Show a download button in the banner — no forced wait, user grabs it when ready
-              showBanner("YOUR TURN — Fields filled. Get your tailored resume below.", "user", {
-                subtext: "Download your tailored PDF and drag it into the resume upload field.",
+              showBanner("Your turn — download your tailored resume below.", "user", {
+                subtext: "Drag it into the resume field, then review and submit.",
               });
               chrome.runtime.sendMessage({
                 type: "DOWNLOAD_RESUME",
@@ -260,9 +349,9 @@
 
     } catch (err) {
       console.error("AutoApply: Greenhouse error", err);
-      showBanner("Error filling form — filling basic info as fallback.", "error", { subtext: err.message });
+      showBanner("Something went wrong — filling in basic info.", "error", { subtext: err.message || "Partial fill completed." });
       await fillBasicFieldsOnly();
-      showBanner("Basic info filled — review remaining fields and submit.", "user", { subtext: "Some fields may need manual input." });
+      showBanner("Basic info filled — check the remaining fields.", "user", { subtext: "Some fields may need your input before submitting." });
 
       // Still watch for submission even in fallback path
       watchSubmit({
@@ -965,8 +1054,13 @@
 
   async function attemptResumeUpload() {
     try {
-      const stored = await chrome.storage.local.get(["tailoredResumePdf"]);
-      if (!stored.tailoredResumePdf) {
+      // Use keyed lookup so batch jobs always upload the correct resume
+      const pendingData = await chrome.storage.local.get(["pendingApplication", "lastTailoredJob"]);
+      const job = pendingData.pendingApplication || pendingData.lastTailoredJob;
+      const pdfResult = await new Promise(resolve =>
+        chrome.runtime.sendMessage({ type: "GET_RESUME_PDF", job: job || {} }, resolve)
+      );
+      if (!pdfResult?.pdf) {
         console.log("AutoApply: No tailored resume PDF — skipping programmatic upload");
         return;
       }
@@ -999,10 +1093,10 @@
         return;
       }
 
-      console.log("AutoApply: Attempting programmatic resume file upload on visible input...");
+      console.log("AutoApply: Attempting programmatic resume file upload on visible input... (key:", pdfResult.fromKey ? "matched" : "fallback", ")");
 
       // Build the File object from stored base64
-      const base64Data = stored.tailoredResumePdf;
+      const base64Data = pdfResult.pdf;
       const binaryString = atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
@@ -1231,22 +1325,35 @@
     banner.style.cssText = `
       position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      box-shadow: 0 2px 16px rgba(0,0,0,0.18), 0 1px 4px rgba(0,0,0,0.1);
+      transition: background 0.35s ease, opacity 0.2s ease;
     `;
 
     const typeConfig = {
-      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
-      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "🤖", actor: "AutoApply AI" },
-      user:    { bg: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", icon: "👆", actor: "Your turn" },
-      success: { bg: "linear-gradient(135deg, #047857 0%, #059669 100%)", icon: "✅", actor: "Done" },
-      error:   { bg: "linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)", icon: "⚠️", actor: "Issue" },
+      ai:      { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "✦", actor: "AutoApply" },
+      info:    { bg: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)", icon: "✦", actor: "AutoApply" },
+      user:    { bg: "linear-gradient(135deg, #92400E 0%, #B45309 100%)", icon: "→", actor: "Your turn" },
+      success: { bg: "linear-gradient(135deg, #065F46 0%, #047857 100%)", icon: "✓", actor: "Done" },
+      error:   { bg: "linear-gradient(135deg, #991B1B 0%, #B91C1C 100%)", icon: "!", actor: "Attention" },
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
-    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumePdf"], (result) => {
+    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumeMap", "pendingApplication", "lastTailoredJob"], (result) => {
       const bp = result._aa_batchProgress;
       const hasBatch = bp && bp.total > 0;
-      const hasPdf = !!result.tailoredResumePdf;
+      // Check keyed map first — falls back to global slot for backward compat
+      const currentJob = result.pendingApplication || result.lastTailoredJob;
+      const resumeMap  = result.tailoredResumeMap || {};
+      function _makeKey(job) {
+        if (!job) return "default";
+        const url = job.applyUrl || job.jobUrl || "";
+        if (url) { try { const u = new URL(url); return (u.hostname + u.pathname).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 80); } catch(_) {} }
+        const co = (job.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+        const ti = (job.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+        return (co + "_" + ti) || "default";
+      }
+      const resumeKey = _makeKey(currentJob);
+      const hasPdf = !!(resumeMap[resumeKey]?.pdf) || !!(Object.keys(resumeMap).length > 0);
 
       const batchTag = hasBatch
         ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`
@@ -1265,8 +1372,8 @@
           <div style="height:100%;width:${pct}%;background:rgba(255,255,255,0.7);border-radius:2px;transition:width 0.4s;"></div>
         </div>` : "";
 
-      const actorBadge = `<span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">${cfg.icon} ${cfg.actor.toUpperCase()}</span>`;
-      const statusMsg  = `<span style="font-size:13px;font-weight:500;">${message}</span>`;
+      const actorBadge = `<span style="font-size:11px;font-weight:600;background:rgba(255,255,255,0.18);border-radius:5px;padding:2px 8px;letter-spacing:0.2px;white-space:nowrap;">${cfg.icon} ${cfg.actor}</span>`;
+      const statusMsg  = `<span style="font-size:13px;font-weight:500;opacity:0.95;">${message}</span>`;
       const timerEl    = isAi
         ? `<span id="aa-elapsed-timer" style="font-size:14px;font-weight:700;opacity:0.9;margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:1px;background:rgba(0,0,0,0.18);border-radius:5px;padding:1px 8px;">0:00</span>`
         : "";
@@ -1276,35 +1383,35 @@
         : "";
 
       // Resume download button — always shown when PDF is ready
-      const pdfBtnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;`;
+      const pdfBtnStyle = `border:none;border-radius:6px;padding:5px 13px;font-size:11px;font-weight:600;cursor:pointer;background:rgba(255,255,255,0.95);color:#4F46E5;letter-spacing:0.1px;`;
       const pdfBtn = hasPdf
-        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">⬇️ Resume</button>`
+        ? `<button id="aa-btn-download-resume" style="${pdfBtnStyle}">↓ Resume</button>`
         : "";
 
-      const btnStyle = `border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;`;
+      const btnStyle = `border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:0.1px;`;
       const pauseBtn = isAi
-        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.2);color:#fff;">⏸ Pause</button>`
+        ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;">Pause</button>`
         : "";
       const resumeBtn = opts.showResume
-        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.9);color:#B45309;">▶ Resume</button>`
+        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.9);color:#92400E;">Resume</button>`
         : "";
       let actionRow = "";
       if (type === "error") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Retry</button>
-          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
-          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+        actionRow = `<div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.2);color:#fff;">Try again</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.85);border:1px solid rgba(255,255,255,0.25);">Reload resume</button>
+          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.12);color:rgba(255,255,255,0.75);">Skip</button>
           ${pdfBtn}
         </div>`;
       } else if (type === "user") {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.25);color:#fff;">🔄 Try Again</button>
-          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);">↺ Reload Resume</button>
-          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.85);">⏭ Skip Job</button>
+        actionRow = `<div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button id="aa-btn-retry" style="${btnStyle}background:rgba(255,255,255,0.2);color:#fff;">Fill again</button>
+          <button id="aa-btn-reload-resume" style="${btnStyle}background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.85);border:1px solid rgba(255,255,255,0.25);">Reload resume</button>
+          <button id="aa-btn-skip"  style="${btnStyle}background:rgba(0,0,0,0.12);color:rgba(255,255,255,0.75);">Skip</button>
           ${pdfBtn}
         </div>`;
       } else if (isAi || resumeBtn || pdfBtn) {
-        actionRow = `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${pauseBtn}${resumeBtn}${pdfBtn}</div>`;
+        actionRow = `<div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${pauseBtn}${resumeBtn}${pdfBtn}</div>`;
       }
 
       banner.style.background = cfg.bg;
@@ -1358,23 +1465,17 @@
         showBanner("Job skipped. You can close this tab.", "success");
       });
       document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
-        chrome.storage.local.get(["_aa_batchProgress"], (r) => {
-          const bpData = r._aa_batchProgress;
-          chrome.runtime.sendMessage({
-            type: "DOWNLOAD_RESUME",
-            job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
-          });
-          const btn = document.getElementById("aa-btn-download-resume");
-          if (btn) { btn.textContent = "⬇️ Download again"; btn.disabled = false; btn.style.opacity = "1"; }
-        });
+        _downloadResumeForPage();
+        const btn = document.getElementById("aa-btn-download-resume");
+        if (btn) { btn.textContent = "⬇️ Download again"; btn.disabled = false; btn.style.opacity = "1"; }
       });
       document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
         chrome.storage.local.set({ _aa_paused: true });
-        showBanner("⏸ Paused — click Resume when ready.", "user", { showResume: true });
+        showBanner("Paused — click Resume when you're ready.", "user", { showResume: true });
       });
       document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
         chrome.storage.local.set({ _aa_paused: false });
-        showBanner("Resuming...", "ai", { subtext: "Picking up where we left off..." });
+        showBanner("Resuming…", "ai", { subtext: "Picking up where we left off" });
       });
     });
 
@@ -1388,8 +1489,9 @@
     if (!b) return;
 
     // Check if tailored PDF exists — if so, preserve the download button as a standalone element
-    chrome.storage.local.get(["tailoredResumePdf"], (result) => {
-      if (result.tailoredResumePdf) {
+    chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "pendingApplication", "lastTailoredJob"], (result) => {
+      const hasAnyPdf = !!(result.tailoredResumePdf) || !!(Object.keys(result.tailoredResumeMap || {}).length > 0);
+      if (hasAnyPdf) {
         const existingBtn = document.getElementById("aa-btn-download-resume");
         if (existingBtn && existingBtn.parentNode) {
           // Detach button before banner removal so it persists
@@ -1404,15 +1506,9 @@
           clonedBtn.addEventListener("mouseenter", (e) => e.target.style.transform = "scale(1.05)");
           clonedBtn.addEventListener("mouseleave", (e) => e.target.style.transform = "scale(1)");
           clonedBtn.addEventListener("click", () => {
-            chrome.storage.local.get(["_aa_batchProgress"], (r) => {
-              const bpData = r._aa_batchProgress;
-              chrome.runtime.sendMessage({
-                type: "DOWNLOAD_RESUME",
-                job: { company: bpData?.company || "Company", jobTitle: bpData?.title || "Resume" },
-              });
-              clonedBtn.textContent = "⬇️ Download again";
-              clonedBtn.disabled = false;
-            });
+            _downloadResumeForPage();
+            clonedBtn.textContent = "⬇️ Download again";
+            clonedBtn.disabled = false;
           });
         }
       }
@@ -1433,21 +1529,18 @@
     if (document.getElementById("aa-btn-download-resume")) return;
     const banner = document.getElementById("autoapply-banner");
     if (!banner) return;
-    chrome.storage.local.get(["tailoredResumePdf", "_aa_batchProgress"], (result) => {
-      if (!result.tailoredResumePdf) return;
+    chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "pendingApplication", "lastTailoredJob", "_aa_batchProgress"], (result) => {
+      const hasAnyPdf = !!(result.tailoredResumePdf) || !!(Object.keys(result.tailoredResumeMap || {}).length > 0);
+      if (!hasAnyPdf) return;
       if (document.getElementById("aa-btn-download-resume")) return;
       const wrapper = banner.querySelector("div");
       if (!wrapper) return;
-      const bp = result._aa_batchProgress;
       const btn = document.createElement("button");
       btn.id = "aa-btn-download-resume";
       btn.style.cssText = "border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;margin-top:6px;";
       btn.textContent = "⬇️ Resume";
       btn.addEventListener("click", () => {
-        chrome.runtime.sendMessage({
-          type: "DOWNLOAD_RESUME",
-          job: { company: bp?.company || "Company", jobTitle: bp?.title || "Resume" },
-        });
+        _downloadResumeForPage();
         btn.textContent = "⬇️ Download again";
         btn.disabled = false;
       });
@@ -1456,11 +1549,12 @@
     });
   }
 
-  // Proactively show the download button the moment tailoredResumePdf is ready —
-  // survives across showBanner calls since showBanner re-checks storage each time.
+  // Proactively show the download button the moment resume is ready —
+  // fires on either tailoredResumePdf (legacy) or tailoredResumeMap (new keyed map).
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !changes.tailoredResumePdf?.newValue) return;
-    LOG("tailoredResumePdf ready — injecting persistent download button");
+    if (area !== "local") return;
+    if (!changes.tailoredResumePdf?.newValue && !changes.tailoredResumeMap?.newValue) return;
+    LOG("Resume data ready — injecting persistent download button");
     injectOrRefreshDownloadButton();
   });
 

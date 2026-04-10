@@ -21,8 +21,9 @@ function OnboardingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isEditMode = searchParams.get("edit") === "profile";
+  const isResumeEditMode = searchParams.get("edit") === "resume";
 
-  const [step, setStep] = useState(isEditMode ? 4 : 1);
+  const [step, setStep] = useState(isEditMode ? 4 : isResumeEditMode ? 3 : 1);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -198,48 +199,46 @@ function OnboardingContent() {
   };
 
   if (!session) {
-    return <div className="py-20 text-center">Loading...</div>;
+    return <div className="py-20 text-center text-neutral-400">Loading…</div>;
   }
+
+  const STEPS = ["Welcome", "Install", "Resume", "Profile"];
 
   return (
     <div className="min-h-screen bg-white py-10">
-      <div className="max-w-2xl mx-auto px-6">
-        {/* Progress bar */}
-        {!isEditMode && (
-          <div className="mb-12">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <p className="text-sm font-semibold text-neutral-900">
-                  Step {step} of 4
-                </p>
-                <p className="text-[13px] text-neutral-500 mt-1">
-                  {step === 1
-                    ? "Welcome"
-                    : step === 2
-                    ? "Install Extension"
-                    : step === 3
-                    ? "Upload Resume"
-                    : "Complete Profile"}
-                </p>
-              </div>
-            </div>
-            <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
-              <div
-                className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${(step / 4) * 100}%` }}
-              />
-            </div>
-
-            {/* Progress dots */}
-            <div className="flex gap-2 mt-6">
-              {[1, 2, 3, 4].map((i) => (
-                <div
-                  key={i}
-                  className={`h-2 w-2 rounded-full transition-all ${
-                    i <= step ? "bg-indigo-600" : "bg-neutral-200"
-                  }`}
-                />
-              ))}
+      <div className="max-w-xl mx-auto px-6">
+        {/* Progress indicator */}
+        {!isEditMode && !isResumeEditMode && (
+          <div className="mb-10">
+            <div className="flex items-center gap-0">
+              {STEPS.map((label, idx) => {
+                const i = idx + 1;
+                const done = i < step;
+                const active = i === step;
+                return (
+                  <div key={label} className="flex items-center flex-1 last:flex-none">
+                    <div className="flex flex-col items-center">
+                      <div
+                        className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                          done
+                            ? "bg-indigo-600 text-white"
+                            : active
+                            ? "bg-indigo-600 text-white ring-4 ring-indigo-100"
+                            : "bg-neutral-100 text-neutral-400"
+                        }`}
+                      >
+                        {done ? "✓" : i}
+                      </div>
+                      <span className={`mt-1.5 text-[10px] font-medium whitespace-nowrap ${active ? "text-indigo-700" : "text-neutral-400"}`}>
+                        {label}
+                      </span>
+                    </div>
+                    {idx < STEPS.length - 1 && (
+                      <div className={`flex-1 h-0.5 mx-1 mb-4 transition-all ${i < step ? "bg-indigo-600" : "bg-neutral-100"}`} />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -247,39 +246,26 @@ function OnboardingContent() {
         {/* Step 1: Welcome */}
         {step === 1 && (
           <div className="space-y-8 animate-fade-in">
-            <div className="text-center space-y-4">
-              <h1 className="text-3xl md:text-4xl font-bold text-neutral-900">
-                Welcome to AutoApply AI
+            <div className="space-y-3">
+              <h1 className="text-[32px] font-bold text-neutral-900 tracking-tight">
+                You're almost ready.
               </h1>
-              <p className="text-neutral-500 max-w-md mx-auto">
-                Get ready to transform your job search with AI-powered
-                automation.
+              <p className="text-[16px] text-neutral-500 leading-relaxed">
+                Let's get AutoApply set up in 3 quick steps — takes about 2 minutes.
               </p>
             </div>
 
-            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-8 space-y-4">
-              <FeatureItem
-                emoji="🔗"
-                title="Scan LinkedIn Job Listings Instantly"
-                desc="Find and extract job opportunities from LinkedIn with a single click."
-              />
-              <FeatureItem
-                emoji="✨"
-                title="AI Tailors Your Resume"
-                desc="Our AI customizes your resume for each role with relevant keywords and experience."
-              />
-              <FeatureItem
-                emoji="📝"
-                title="Forms Fill Automatically"
-                desc="Application forms populate with your information — just review and submit."
-              />
+            <div className="space-y-3">
+              <SetupStep num="1" title="Install the Chrome extension" desc="Works on LinkedIn and every major job application site." />
+              <SetupStep num="2" title="Upload your resume" desc="AutoApply reads it once and uses it for every application." />
+              <SetupStep num="3" title="Fill in your details" desc="Name, contact info, and preferences — so forms fill themselves." />
             </div>
 
             <button
               onClick={() => setStep(2)}
-              className="w-full bg-indigo-600 text-white font-medium py-3 rounded-lg hover:bg-indigo-700 transition-colors"
+              className="w-full bg-indigo-600 text-white font-semibold py-3.5 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-colors"
             >
-              Let's get you set up →
+              Get started →
             </button>
           </div>
         )}
@@ -288,12 +274,11 @@ function OnboardingContent() {
         {step === 2 && (
           <div className="space-y-8 animate-fade-in">
             <div className="space-y-2">
-              <h1 className="text-3xl font-bold text-neutral-900">
-                Install the Chrome Extension
+              <h1 className="text-[32px] font-bold text-neutral-900 tracking-tight">
+                Add AutoApply to Chrome
               </h1>
-              <p className="text-neutral-500">
-                AutoApply AI works through a Chrome extension on LinkedIn and
-                job application pages.
+              <p className="text-[15px] text-neutral-500">
+                The extension runs on LinkedIn and every job application page — it's what does the work.
               </p>
             </div>
 
@@ -301,52 +286,33 @@ function OnboardingContent() {
               href="https://chrome.google.com/webstore/detail/autoapply-ai-automated-jo/menddlokdcmfeagbmejmogijhigcplgc"
               target="_blank"
               rel="noopener noreferrer"
-              className="block w-full bg-indigo-600 text-white text-center font-medium py-4 rounded-xl hover:bg-indigo-700 transition-colors"
+              className="flex items-center justify-center gap-2.5 w-full bg-indigo-600 text-white text-[15px] font-semibold py-4 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-colors shadow-lg shadow-indigo-200"
             >
-              Add to Chrome →
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="1.5" opacity="0.4"/>
+                <path d="M12 8v8M8 12l4 4 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Add to Chrome — it's free
             </a>
 
-            <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-6 space-y-3">
-              <p className="text-sm font-semibold text-neutral-900">
-                Step-by-step installation:
-              </p>
-              <ol className="space-y-3 text-[13px] text-neutral-600">
-                <li className="flex gap-3">
-                  <span className="font-semibold text-neutral-900 min-w-fit">
-                    1.
-                  </span>
-                  <span>Click "Add to Chrome" above</span>
-                </li>
-                <li className="flex gap-3">
-                  <span className="font-semibold text-neutral-900 min-w-fit">
-                    2.
-                  </span>
-                  <span>Click "Add Extension" in the popup</span>
-                </li>
-                <li className="flex gap-3">
-                  <span className="font-semibold text-neutral-900 min-w-fit">
-                    3.
-                  </span>
-                  <span>
-                    Pin it to your toolbar (click the puzzle piece icon → pin
-                    AutoApply)
-                  </span>
-                </li>
-              </ol>
+            <div className="rounded-xl border border-neutral-100 divide-y divide-neutral-100">
+              <InstallStep num="1" text='Click "Add to Chrome" above, then "Add Extension" in the popup.' />
+              <InstallStep num="2" text='After it installs, click the puzzle piece 🧩 in your toolbar and pin AutoApply.' />
+              <InstallStep num="3" text="You're done. Come back here and click the button below." />
             </div>
 
             <div className="flex gap-3">
               <button
                 onClick={() => setStep(1)}
-                className="flex-1 text-indigo-600 font-medium py-3 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                className="px-5 text-neutral-500 font-medium py-3.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 transition-colors"
               >
                 ← Back
               </button>
               <button
                 onClick={() => setStep(3)}
-                className="flex-1 bg-indigo-600 text-white font-medium py-3 rounded-lg hover:bg-indigo-700 transition-colors"
+                className="flex-1 bg-indigo-600 text-white font-semibold py-3.5 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-colors"
               >
-                I've Installed It →
+                I've installed it →
               </button>
             </div>
           </div>
@@ -356,13 +322,26 @@ function OnboardingContent() {
         {step === 3 && (
           <div className="space-y-8 animate-fade-in">
             <div className="space-y-2">
-              <h1 className="text-3xl font-bold text-neutral-900">
-                Upload Your Resume
-              </h1>
-              <p className="text-neutral-500">
-                We'll read it to auto-fill your work history on every
-                application
-              </p>
+              {isResumeEditMode ? (
+                <>
+                  <h1 className="text-3xl font-bold text-neutral-900">
+                    Change Your Resume
+                  </h1>
+                  <p className="text-neutral-500">
+                    Upload a new PDF — it replaces your current resume immediately
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h1 className="text-3xl font-bold text-neutral-900">
+                    Upload Your Resume
+                  </h1>
+                  <p className="text-neutral-500">
+                    We'll read it to auto-fill your work history on every
+                    application
+                  </p>
+                </>
+              )}
             </div>
 
             {error && (
@@ -371,12 +350,13 @@ function OnboardingContent() {
               </div>
             )}
 
-            {!parsedResumeSummary ? (
+            {/* In resume-edit mode: always show drop zone first, then success once uploaded */}
+            {(!parsedResumeSummary || isResumeEditMode) && !resumeFile ? (
               <ResumeDropZone
                 onFile={handleResumeUpload}
                 isLoading={resumeLoading}
               />
-            ) : (
+            ) : parsedResumeSummary ? (
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-6 space-y-4">
                 <div className="flex items-start gap-3">
                   <span className="text-xl">✅</span>
@@ -417,21 +397,36 @@ function OnboardingContent() {
                   Upload different resume
                 </button>
               </div>
-            )}
+            ) : null}
 
             <div className="flex gap-3">
+              {isResumeEditMode ? (
+                <button
+                  onClick={() => router.push("/dashboard")}
+                  className="flex-1 text-indigo-600 font-medium py-3 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                >
+                  ← Back to Dashboard
+                </button>
+              ) : (
+                <button
+                  onClick={() => setStep(2)}
+                  className="flex-1 text-indigo-600 font-medium py-3 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                >
+                  ← Back
+                </button>
+              )}
               <button
-                onClick={() => setStep(2)}
-                className="flex-1 text-indigo-600 font-medium py-3 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors"
-              >
-                ← Back
-              </button>
-              <button
-                onClick={() => setStep(4)}
+                onClick={() => {
+                  if (isResumeEditMode) {
+                    router.push("/dashboard");
+                  } else {
+                    setStep(4);
+                  }
+                }}
                 disabled={!parsedResumeSummary}
                 className="flex-1 bg-indigo-600 text-white font-medium py-3 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Looks Good →
+                {isResumeEditMode ? "Save & Back to Dashboard →" : "Looks Good →"}
               </button>
             </div>
           </div>
@@ -439,196 +434,107 @@ function OnboardingContent() {
 
         {/* Step 4: Profile */}
         {step === 4 && (
-          <div className="space-y-8 animate-fade-in">
+          <div className="space-y-7 animate-fade-in">
             <div className="space-y-2">
-              <h1 className="text-3xl font-bold text-neutral-900">
-                Complete Your Profile
+              <h1 className="text-[32px] font-bold text-neutral-900 tracking-tight">
+                {isEditMode ? "Edit your profile" : "Your details"}
               </h1>
-              <p className="text-neutral-500">
-                This fills in your contact details on every application
-                automatically
+              <p className="text-[15px] text-neutral-500">
+                These fill in automatically on every application form.
               </p>
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-[13px] text-red-800">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-[13px] text-red-700">
                 {error}
               </div>
             )}
 
-            <div className="space-y-5 bg-neutral-50 border border-neutral-200 rounded-xl p-6">
-              {/* Row 1 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input
-                  type="text"
-                  placeholder="First name*"
-                  value={formData.firstName}
-                  onChange={(e) =>
-                    setFormData({ ...formData, firstName: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-                <input
-                  type="text"
-                  placeholder="Last name*"
-                  value={formData.lastName}
-                  onChange={(e) =>
-                    setFormData({ ...formData, lastName: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-              </div>
-
-              {/* Row 2 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input
-                  type="email"
-                  placeholder="Email*"
-                  value={formData.email}
-                  onChange={(e) =>
-                    setFormData({ ...formData, email: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-                <input
-                  type="tel"
-                  placeholder="Phone*"
-                  value={formData.phone}
-                  onChange={(e) =>
-                    setFormData({ ...formData, phone: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-              </div>
-
-              {/* Row 3 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input
-                  type="text"
-                  placeholder="City"
-                  value={formData.city}
-                  onChange={(e) =>
-                    setFormData({ ...formData, city: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-                <input
-                  type="text"
-                  placeholder="Province / State"
-                  value={formData.province}
-                  onChange={(e) =>
-                    setFormData({ ...formData, province: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-              </div>
-
-              {/* Row 4 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input
-                  type="text"
-                  placeholder="LinkedIn URL"
-                  value={formData.linkedin}
-                  onChange={(e) =>
-                    setFormData({ ...formData, linkedin: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-                <input
-                  type="text"
-                  placeholder="GitHub URL"
-                  value={formData.github}
-                  onChange={(e) =>
-                    setFormData({ ...formData, github: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-              </div>
-
-              {/* Row 5 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input
-                  type="text"
-                  placeholder="Portfolio / Website"
-                  value={formData.portfolio}
-                  onChange={(e) =>
-                    setFormData({ ...formData, portfolio: e.target.value })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-                <input
-                  type="text"
-                  placeholder="Current job title"
-                  value={formData.currentCompany}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      currentCompany: e.target.value,
-                    })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-              </div>
-
-              {/* Row 6 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <select
-                  value={formData.requireSponsorship}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      requireSponsorship: e.target.value,
-                    })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                >
-                  <option value="no">Canadian Citizen</option>
-                  <option value="no">Permanent Resident</option>
-                  <option value="no">Open Work Permit</option>
-                  <option value="yes">Require Sponsorship</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="Salary expectation (optional)"
-                  value={formData.salaryExpectation}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      salaryExpectation: e.target.value,
-                    })
-                  }
-                  className="px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                />
-              </div>
-
-              {/* Row 7 */}
+            <div className="space-y-6">
+              {/* Contact */}
               <div>
-                <select
-                  value={formData.pronouns}
-                  onChange={(e) =>
-                    setFormData({ ...formData, pronouns: e.target.value })
-                  }
-                  className="w-full px-4 py-3 border border-neutral-300 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-                >
-                  <option value="">Pronouns (optional)</option>
-                  <option value="">None</option>
-                  <option value="He/Him">He/Him</option>
-                  <option value="She/Her">She/Her</option>
-                  <option value="They/Them">They/Them</option>
-                  <option value="Other">Other</option>
-                </select>
+                <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">Contact</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="First name" required>
+                    <input type="text" value={formData.firstName} onChange={(e) => setFormData({ ...formData, firstName: e.target.value })} placeholder="Harshit" className={inputCls} />
+                  </Field>
+                  <Field label="Last name" required>
+                    <input type="text" value={formData.lastName} onChange={(e) => setFormData({ ...formData, lastName: e.target.value })} placeholder="Singh" className={inputCls} />
+                  </Field>
+                  <Field label="Email" required>
+                    <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="you@example.com" className={inputCls} />
+                  </Field>
+                  <Field label="Phone" required>
+                    <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="+1 416 555 0100" className={inputCls} />
+                  </Field>
+                </div>
               </div>
 
-              <p className="text-[11px] text-neutral-500">
-                * = Required fields
-              </p>
+              {/* Location */}
+              <div>
+                <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">Location</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="City">
+                    <input type="text" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} placeholder="Toronto" className={inputCls} />
+                  </Field>
+                  <Field label="Province / State">
+                    <input type="text" value={formData.province} onChange={(e) => setFormData({ ...formData, province: e.target.value })} placeholder="Ontario" className={inputCls} />
+                  </Field>
+                </div>
+              </div>
+
+              {/* Online presence */}
+              <div>
+                <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">Online</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="LinkedIn">
+                    <input type="text" value={formData.linkedin} onChange={(e) => setFormData({ ...formData, linkedin: e.target.value })} placeholder="linkedin.com/in/you" className={inputCls} />
+                  </Field>
+                  <Field label="GitHub">
+                    <input type="text" value={formData.github} onChange={(e) => setFormData({ ...formData, github: e.target.value })} placeholder="github.com/you" className={inputCls} />
+                  </Field>
+                  <Field label="Portfolio / Website">
+                    <input type="text" value={formData.portfolio} onChange={(e) => setFormData({ ...formData, portfolio: e.target.value })} placeholder="yoursite.com" className={inputCls} />
+                  </Field>
+                  <Field label="Current job title">
+                    <input type="text" value={formData.currentCompany} onChange={(e) => setFormData({ ...formData, currentCompany: e.target.value })} placeholder="Product Manager" className={inputCls} />
+                  </Field>
+                </div>
+              </div>
+
+              {/* Application preferences */}
+              <div>
+                <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">Preferences</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Work authorization">
+                    <select value={formData.requireSponsorship} onChange={(e) => setFormData({ ...formData, requireSponsorship: e.target.value })} className={inputCls}>
+                      <option value="no">Canadian Citizen</option>
+                      <option value="no">Permanent Resident</option>
+                      <option value="no">Open Work Permit</option>
+                      <option value="yes">Require Sponsorship</option>
+                    </select>
+                  </Field>
+                  <Field label="Salary expectation">
+                    <input type="text" value={formData.salaryExpectation} onChange={(e) => setFormData({ ...formData, salaryExpectation: e.target.value })} placeholder="e.g. $120,000" className={inputCls} />
+                  </Field>
+                  <Field label="Pronouns">
+                    <select value={formData.pronouns} onChange={(e) => setFormData({ ...formData, pronouns: e.target.value })} className={inputCls}>
+                      <option value="">Prefer not to say</option>
+                      <option value="He/Him">He/Him</option>
+                      <option value="She/Her">She/Her</option>
+                      <option value="They/Them">They/Them</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </Field>
+                </div>
+              </div>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 pt-2">
               {!isEditMode && (
                 <button
                   onClick={() => setStep(3)}
-                  className="flex-1 text-indigo-600 font-medium py-3 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                  className="px-5 text-neutral-500 font-medium py-3.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 transition-colors"
                 >
                   ← Back
                 </button>
@@ -636,9 +542,9 @@ function OnboardingContent() {
               <button
                 onClick={handleSaveProfile}
                 disabled={isLoading}
-                className="flex-1 bg-indigo-600 text-white font-medium py-3 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 bg-indigo-600 text-white font-semibold py-3.5 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {isLoading ? "Saving..." : "Save & Continue →"}
+                {isLoading ? "Saving…" : isEditMode ? "Save changes →" : "Save & finish →"}
               </button>
             </div>
           </div>
@@ -653,6 +559,52 @@ export default function OnboardingPage() {
     <Suspense fallback={<div className="min-h-screen bg-white py-10" />}>
       <OnboardingContent />
     </Suspense>
+  );
+}
+
+const inputCls =
+  "w-full px-3.5 py-2.5 border border-neutral-200 rounded-lg text-[14px] text-neutral-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-colors placeholder:text-neutral-300 bg-white";
+
+function Field({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="block text-[12px] font-medium text-neutral-600">
+        {label}
+        {required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function SetupStep({ num, title, desc }: { num: string; title: string; desc: string }) {
+  return (
+    <div className="flex gap-4 p-4 rounded-xl border border-neutral-100 bg-neutral-50/50">
+      <div className="w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+        {num}
+      </div>
+      <div>
+        <p className="text-[14px] font-semibold text-neutral-900">{title}</p>
+        <p className="text-[13px] text-neutral-500 mt-0.5">{desc}</p>
+      </div>
+    </div>
+  );
+}
+
+function InstallStep({ num, text }: { num: string; text: string }) {
+  return (
+    <div className="flex gap-4 px-5 py-4">
+      <span className="text-[12px] font-bold text-indigo-400 mt-0.5 shrink-0">{num}</span>
+      <p className="text-[14px] text-neutral-600 leading-relaxed">{text}</p>
+    </div>
   );
 }
 
@@ -730,18 +682,29 @@ function ResumeDropZone({
       />
 
       {isLoading ? (
-        <div className="space-y-2">
-          <div className="w-12 h-12 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-[13px] text-neutral-600 font-medium">
-            Reading your resume...
+        <div className="flex flex-col items-center gap-3 py-4">
+          <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-[14px] font-medium text-neutral-700">
+            Reading your resume…
           </p>
+          <p className="text-[12px] text-neutral-400">This takes a few seconds</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          <p className="text-[13px] font-medium text-neutral-900">
-            Drop your PDF here, or click to browse
-          </p>
-          <p className="text-[12px] text-neutral-500">PDF only, 10MB max</p>
+        <div className="flex flex-col items-center gap-3 py-4">
+          <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="#6366F1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M14 2v6h6M12 12v6M9 15l3-3 3 3" stroke="#6366F1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          <div className="space-y-1 text-center">
+            <p className="text-[14px] font-semibold text-neutral-800">
+              Drop your resume here
+            </p>
+            <p className="text-[13px] text-neutral-400">
+              or <span className="text-indigo-600 font-medium">click to browse</span> — PDF only
+            </p>
+          </div>
         </div>
       )}
     </div>
