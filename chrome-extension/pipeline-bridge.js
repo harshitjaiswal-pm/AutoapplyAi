@@ -115,12 +115,45 @@
 
   syncFunnelStats();
 
-  // Re-sync whenever funnelStats changes in chrome.storage (real-time updates)
+  /* ── Resume Map Sync: Extension → React App ── */
+  // Sync metadata-only (no PDFs) so the dashboard can show Recent Resumes
+  function syncResumeMap() {
+    chrome.storage.local.get(["tailoredResumeMap"], (result) => {
+      const map = result.tailoredResumeMap || {};
+      const metadata = Object.entries(map).map(([key, entry]) => ({
+        key,
+        jobTitle:   entry.jobTitle   || "",
+        company:    entry.company    || "",
+        filename:   entry.filename   || "",
+        matchScore: entry.matchScore || 0,
+        jobUrl:     entry.jobUrl     || "",
+        createdAt:  entry.createdAt  || 0,
+      }));
+      metadata.sort((a, b) => b.createdAt - a.createdAt);
+      localStorage.setItem("autoapply-resume-map", JSON.stringify(metadata));
+      window.dispatchEvent(new CustomEvent("autoapply-resume-map-sync", { detail: metadata }));
+      console.log(`AutoApply Bridge: Synced ${metadata.length} resume entries to dashboard`);
+    });
+  }
+
+  syncResumeMap();
+
+  /* ── Download resume from dashboard: React → Extension ── */
+  window.addEventListener("autoapply-download-resume", (e) => {
+    const { key, job } = e.detail || {};
+    if (!key) return;
+    chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME_BY_KEY", key, job: job || {} }, () => {});
+  });
+
+  // Re-sync resume map whenever it changes (e.g. after a batch run completes)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.funnelStats) {
       const stats = changes.funnelStats.newValue || { opened: 0, formFilled: 0, resumeTailored: 0, completed: 0 };
       localStorage.setItem("autoapply-funnel-stats", JSON.stringify(stats));
       window.dispatchEvent(new CustomEvent("autoapply-funnel-sync", { detail: stats }));
+    }
+    if (area === "local" && changes.tailoredResumeMap) {
+      syncResumeMap();
     }
   });
 })();

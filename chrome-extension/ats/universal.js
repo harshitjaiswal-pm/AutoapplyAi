@@ -21,8 +21,14 @@
 
   const LOG = (...a) => console.log("AutoApply Universal:", ...a);
 
-  // Don't interfere on pages where a dedicated ATS script is already running
-  if (window.__autoapply_ats_injected) return;
+  // Don't run scan panel on pages where a dedicated ATS script is already running,
+  // but still inject the floating pill so the user always has access to it.
+  if (window.__autoapply_ats_injected) {
+    if (!document.getElementById("aa-floating-root")) {
+      chrome.runtime.sendMessage({ type: "INJECT_FLOATING_TRIGGER" });
+    }
+    return;
+  }
 
   /* ── Job Page Detection ────────────────────────────────────────────────── */
 
@@ -333,11 +339,10 @@
   /* ── Boot ─────────────────────────────────────────────────────────────── */
 
   function boot() {
-    // If the action panel or ATS banner is already injected by background.js, nothing to do
-    if (document.getElementById("autoapply-banner") ||
-        document.getElementById("aa-floating-root")) return true;
-    // Ask background.js to inject the action panel (same UI as on ATS pages).
-    // This keeps one consistent panel everywhere instead of a separate scan panel.
+    // Pill already injected — nothing to do
+    if (document.getElementById("aa-floating-root")) return true;
+    // Ask background.js to inject the floating action panel.
+    // This runs even when the ATS banner is already visible — the pill is always wanted.
     LOG("Requesting floating trigger →", window.location.href.substring(0, 80));
     chrome.runtime.sendMessage({ type: "INJECT_FLOATING_TRIGGER" });
     return true;

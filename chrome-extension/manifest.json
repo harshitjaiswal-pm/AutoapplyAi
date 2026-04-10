@@ -75,13 +75,6 @@
       "run_at": "document_idle",
       "exclude_matches": [
         "https://www.linkedin.com/*",
-        "https://*.myworkdayjobs.com/*",
-        "https://boards.greenhouse.io/*",
-        "https://job-boards.greenhouse.io/*",
-        "https://jobs.lever.co/*",
-        "https://*.ashbyhq.com/*",
-        "https://*.icims.com/*",
-        "https://jobs.smartrecruiters.com/*",
         "https://*.vercel.app/*",
         "http://localhost:3000/*"
       ]
