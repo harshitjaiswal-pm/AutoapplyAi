@@ -1108,7 +1108,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
                   z-index:1;" title="Collapse banner">▲</button>
                 <div id="aa-fallback-inner" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-right:32px;">
-                  <span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;letter-spacing:0.3px;">⚠️ AUTOAPPLY AI</span>
+                  <span style="font-size:11px;font-weight:600;background:rgba(255,255,255,0.18);border-radius:5px;padding:2px 8px;letter-spacing:0.2px;white-space:nowrap;">! AutoApply</span>
                   <span style="font-size:13px;font-weight:500;">Login required or page changed — sign in then click Retry</span>
                   <button id="aa-retry-btn" style="margin-left:auto;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:#fff;border-radius:5px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">↩ Retry</button>
                 </div>`;
@@ -1343,7 +1343,7 @@ function injectFloatingTrigger(tabId) {
           const hasPdf    = !!(mapEntry?.pdf);
 
           // ① Fill this form
-          const fillBtn = makeBtn("✏️", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""}${jobInfo.company ? " · " + jobInfo.company : ""}`.slice(0, 34) : "Re-run AutoApply on this page", "#4F46E5", () => {
+          const fillBtn = makeBtn("→", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""}${jobInfo.company ? " · " + jobInfo.company : ""}`.slice(0, 34) : "Re-run AutoApply on this page", "#4F46E5", () => {
             setStatus("Filling form…");
             chrome.runtime.sendMessage({ type: "FILL_CURRENT_PAGE" }, (r) => {
               setStatus(r?.success ? "Filling… check the page!" : "Error — try reload");
@@ -1414,7 +1414,7 @@ function injectFloatingTrigger(tabId) {
                 if (!cancelled) {
                   setStatus("Downloading…");
                   chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
-                    setStatus("✅ Check your downloads!");
+                    setStatus("Check your downloads!");
                     restore();
                     setTimeout(() => setStatus(""), 3500);
                   });
@@ -1471,9 +1471,9 @@ function injectFloatingTrigger(tabId) {
               clearInterval(tickInterval);
               // Snap bar to 100% then finish
               if (barEl) { barEl.style.transition = "width 0.4s ease-out"; barEl.style.width = "100%"; }
-              if (phaseEl) phaseEl.textContent = "✅ Downloading!";
+              if (phaseEl) phaseEl.textContent = "Downloading!";
               if (timeEl) timeEl.textContent = elapsed + "s";
-              setStatus(`✅ Done in ${elapsed}s — check downloads!`);
+              setStatus(`Done in ${elapsed}s — check downloads!`);
               btn.style.opacity = "";
               btn.style.pointerEvents = "";
               delete btn.dataset.counting;
@@ -1498,12 +1498,12 @@ function injectFloatingTrigger(tabId) {
 
           // ── Render the right button ───────────────────────────────────────
           if (hasPdf) {
-            const dlBtn = makeBtn("📄", "Download resume", "Your tailored PDF for this role", "#059669", () => {
+            const dlBtn = makeBtn("↓", "Download resume", "Your tailored PDF for this role", "#059669", () => {
               startDownloadCountdown(dlBtn);
             });
             actions.appendChild(dlBtn);
           } else if (hasResume) {
-            const tailorBtn = makeBtn("✨", "Tailor resume", "Generate a tailored PDF for this role", "#D97706", () => {
+            const tailorBtn = makeBtn("✦", "Tailor resume", "Generate a tailored PDF for this role", "#D97706", () => {
               startGenerateProgress(tailorBtn);
             });
             actions.appendChild(tailorBtn);
@@ -1562,7 +1562,7 @@ function injectFloatingTrigger(tabId) {
                 setTimeout(() => {
                   if (sublabelEl) sublabelEl.innerHTML = `
                     <div style="margin-top:3px;display:flex;align-items:center;gap:6px;">
-                      <span style="font-size:10px;color:#059669;font-family:${FONT};font-weight:600;">✅ Saved to Downloads</span>
+                      <span style="font-size:10px;color:#059669;font-family:${FONT};font-weight:600;">✓ Saved to Downloads</span>
                       <span id="aa-cl-copy-inline" style="font-size:10px;color:#7C3AED;cursor:pointer;font-family:${FONT};text-decoration:underline;">copy text</span>
                     </div>`;
                   const copyInline = sublabelEl?.querySelector("#aa-cl-copy-inline");
@@ -1575,7 +1575,7 @@ function injectFloatingTrigger(tabId) {
                     });
                   }
                 }, 350);
-                setStatus(`✅ ${resp.filename || "Cover_Letter.docx"}`);
+                setStatus(`✓ ${resp.filename || "Cover_Letter.docx"}`);
                 setTimeout(() => setStatus(""), 5000);
               } else {
                 if (sublabelEl) sublabelEl.textContent = resp?.error || "Failed — try again";
@@ -1585,7 +1585,7 @@ function injectFloatingTrigger(tabId) {
             });
           }
 
-          const clBtn = makeBtn("📝", "Generate cover letter", "Tailored cover letter (.docx)", "#7C3AED", () => {
+          const clBtn = makeBtn("✦", "Generate cover letter", "Tailored cover letter (.docx)", "#7C3AED", () => {
             generateCoverLetter(clBtn);
           });
           actions.appendChild(clBtn);

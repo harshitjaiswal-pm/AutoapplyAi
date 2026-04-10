@@ -1467,7 +1467,7 @@
       document.getElementById("aa-btn-download-resume")?.addEventListener("click", () => {
         _downloadResumeForPage();
         const btn = document.getElementById("aa-btn-download-resume");
-        if (btn) { btn.textContent = "⬇️ Download again"; btn.disabled = false; btn.style.opacity = "1"; }
+        if (btn) { btn.textContent = "↓ Download again"; btn.disabled = false; btn.style.opacity = "1"; }
       });
       document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
         chrome.storage.local.set({ _aa_paused: true });
@@ -1507,7 +1507,7 @@
           clonedBtn.addEventListener("mouseleave", (e) => e.target.style.transform = "scale(1)");
           clonedBtn.addEventListener("click", () => {
             _downloadResumeForPage();
-            clonedBtn.textContent = "⬇️ Download again";
+            clonedBtn.textContent = "↓ Download again";
             clonedBtn.disabled = false;
           });
         }
@@ -1520,7 +1520,7 @@
   }
 
   /**
-   * Inject the "⬇️ Resume" download button into the live banner immediately
+   * Inject the "↓ Resume" download button into the live banner immediately
    * when tailoredResumePdf becomes available — without waiting for the next
    * showBanner call. Idempotent: does nothing if button is already present.
    * Subsequent showBanner calls will include it naturally via the hasPdf check.
@@ -1538,10 +1538,10 @@
       const btn = document.createElement("button");
       btn.id = "aa-btn-download-resume";
       btn.style.cssText = "border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#4F46E5;margin-top:6px;";
-      btn.textContent = "⬇️ Resume";
+      btn.textContent = "↓ Resume";
       btn.addEventListener("click", () => {
         _downloadResumeForPage();
-        btn.textContent = "⬇️ Download again";
+        btn.textContent = "↓ Download again";
         btn.disabled = false;
       });
       wrapper.appendChild(btn);

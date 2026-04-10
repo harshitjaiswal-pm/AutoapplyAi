@@ -888,7 +888,7 @@
         const result = await handleEasyApply(job, jobData);
         if (result.success) {
           appliedCount++;
-          updateStatus(`✅ Easy Apply submitted: ${job.title}`);
+          updateStatus(`Easy Apply submitted: ${job.title}`);
           return { success: true, type: "easy_apply" };
         }
         return { success: false, reason: "Easy Apply did not complete" };
@@ -1272,7 +1272,7 @@
         const eaResult = await handleEasyApply(job, jobData);
         if (eaResult.success) {
           appliedCount++;
-          updateStatus(`✅ Easy Apply submitted: ${job.title}`);
+          updateStatus(`Easy Apply submitted: ${job.title}`);
         }
       } else if (applyType === "already_applied") {
         updateJobStatus(job.id, "skipped");
@@ -1792,7 +1792,7 @@
         <button id="aa-action-rescan" style="
           flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
           padding:6px 10px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
-        ">🔍 Re-Scan Page</button>` : "";
+        ">Re-Scan Page</button>` : "";
       const rescanBtn = document.getElementById("aa-action-rescan");
       if (rescanBtn) rescanBtn.addEventListener("click", requestReScan);
       return;
@@ -1812,7 +1812,7 @@
       <button id="aa-action-rescan" style="
         flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
         padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
-      ">🔍 Re-Scan</button>
+      ">Re-Scan</button>
     `;
 
     document.getElementById("aa-action-skip")?.addEventListener("click", () => {
@@ -2026,7 +2026,7 @@
             <div style="
               text-align:center; padding:28px 20px; color:#9CA3AF;
             ">
-              <div style="font-size:28px;margin-bottom:8px;opacity:0.4;">🔍</div>
+              <div style="margin-bottom:10px;opacity:0.3;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="display:inline-block;"><circle cx="11" cy="11" r="7" stroke="#6B7280" stroke-width="1.5"/><path d="M16.5 16.5L21 21" stroke="#6B7280" stroke-width="1.5" stroke-linecap="round"/></svg></div>
               <p style="font-size:12px;font-weight:500;margin:0 0 4px;color:#6B7280;">No jobs loaded yet</p>
               <p style="font-size:11px;margin:0;color:#9CA3AF;">On a LinkedIn jobs page? Hit <strong style="color:#4F46E5">Scan Page</strong> above.</p>
             </div>
@@ -2161,7 +2161,7 @@
     if (scrapedJobs.length === 0) {
       list.innerHTML = `
         <div style="text-align:center;padding:32px 16px;">
-          <div style="width:40px;height:40px;background:#EEF2FF;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:18px;">🔍</div>
+          <div style="width:40px;height:40px;background:#EEF2FF;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="#6366F1" stroke-width="1.5"/><path d="M16.5 16.5L21 21" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/></svg></div>
           <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#374151;">No jobs found yet</p>
           <p style="margin:0;font-size:12px;color:#9CA3AF;line-height:1.5;">Click <b style="color:#4F46E5">Scan Page</b> to find jobs<br>on this LinkedIn page.</p>
         </div>

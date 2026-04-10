@@ -363,7 +363,7 @@
         // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
         // Stop here and prompt the user to sign in, then click Retry.
         showBanner(
-          "⚠️ Login required — create an account or sign in, then click Retry.",
+          "Login required — create an account or sign in, then click Retry.",
           "user",
           { subtext: "Workday requires an account for this employer. AutoApply will resume after you sign in." }
         );

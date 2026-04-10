@@ -297,7 +297,7 @@ function OnboardingContent() {
 
             <div className="rounded-xl border border-neutral-100 divide-y divide-neutral-100">
               <InstallStep num="1" text='Click "Add to Chrome" above, then "Add Extension" in the popup.' />
-              <InstallStep num="2" text='After it installs, click the puzzle piece 🧩 in your toolbar and pin AutoApply.' />
+              <InstallStep num="2" text='After it installs, click the extensions icon in your toolbar (looks like a puzzle piece) and pin AutoApply.' />
               <InstallStep num="3" text="You're done. Come back here and click the button below." />
             </div>
 

@@ -703,7 +703,7 @@
       console.warn("AutoApply: Sign-in wall detected at", location.href);
       try { AALog && AALog.state("ats.signinWall.detected", { url: location.href }); } catch(_){}
       showBanner(
-        "⚠️ Login required — AutoApply can't apply here automatically.",
+        "Login required — AutoApply can't apply here automatically.",
         "user",
         {
           subtext: "This job site requires you to log in or create an account. Apply manually or skip this job.",
@@ -2433,7 +2433,7 @@
       } else if (type === "user") {
         // "Apply with AutoApply" shown when no pendingApplication but page was scraped
         const applyNowBtn = opts.applyNowJob
-          ? `<button id="aa-btn-apply-now" style="${btnStyle}background:#fff;color:#4F46E5;font-weight:700;">🤖 Apply with AutoApply</button>`
+          ? `<button id="aa-btn-apply-now" style="${btnStyle}background:#fff;color:#4F46E5;font-weight:700;">Apply with AutoApply</button>`
           : "";
         actionRow = `<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
           ${applyNowBtn}

@@ -214,7 +214,7 @@
     panel.innerHTML = `
       <div style="background:linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%);color:#fff;padding:14px 16px 12px;display:flex;align-items:center;justify-content:space-between;">
         <div>
-          <div style="font-size:14px;font-weight:700;">🤖 AutoApply AI</div>
+          <div style="font-size:14px;font-weight:700;">AutoApply</div>
           <div style="font-size:11px;opacity:0.8;margin-top:1px;">Job detected on this page</div>
         </div>
         <button id="aa-panel-close" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:2px 6px;opacity:0.8;">&times;</button>
@@ -237,11 +237,11 @@
           <button id="aa-panel-apply" style="
             flex:1;background:#4F46E5;color:#fff;border:none;border-radius:8px;
             padding:10px;font-size:13px;font-weight:600;cursor:pointer;
-          ">🚀 Apply to this Job</button>
+          ">Apply to this Job</button>
           <button id="aa-panel-rescan" style="
             background:#F5F5F5;border:1px solid #E5E5E5;border-radius:8px;
             padding:10px 12px;font-size:12px;font-weight:500;cursor:pointer;color:#333;
-          ">🔄 Re-scan</button>
+          ">Re-scan</button>
         </div>
         <div id="aa-panel-status" style="margin-top:8px;font-size:11px;color:#6B7280;text-align:center;"></div>
       </div>
@@ -264,7 +264,7 @@
     const statusEl = panel.querySelector("#aa-panel-status");
     const applyBtn = panel.querySelector("#aa-panel-apply");
     applyBtn.disabled = true;
-    applyBtn.textContent = "⏳ Starting…";
+    applyBtn.textContent = "Starting…";
     if (statusEl) statusEl.textContent = "Storing job details…";
 
     const pendingJob = {
@@ -297,7 +297,7 @@
 
     if (isJobDescPage) {
       if (statusEl) statusEl.textContent = "Opening application form…";
-      applyBtn.textContent = "🚀 Opening…";
+      applyBtn.textContent = "Opening…";
       setTimeout(() => {
         panel.remove();
         document.getElementById("aa-universal-btn")?.remove();
@@ -306,7 +306,7 @@
     } else if (isFormPage) {
       // We're on the form already — show the AutoApply banner and let the user know
       if (statusEl) statusEl.textContent = "Form detected — AutoApply is filling it now…";
-      applyBtn.textContent = "✅ Filling…";
+      applyBtn.textContent = "Filling…";
       panel.remove();
       // Show the ATS banner and trigger generic fill
       showBannerOnPage("AutoApply is filling this form…", "ai");
@@ -315,7 +315,7 @@
       setTimeout(() => document.getElementById("aa-universal-btn")?.remove(), 500);
     } else {
       if (statusEl) statusEl.textContent = "Ready — scroll to the Apply button and click it.";
-      applyBtn.textContent = "✅ Stored";
+      applyBtn.textContent = "Stored";
     }
   }
 
@@ -333,7 +333,7 @@
               : type === "user"  ? "linear-gradient(135deg,#B45309,#D97706)"
               : "linear-gradient(135deg,#4F46E5,#7C3AED)";
     banner.style.background = bg;
-    banner.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:11px;font-weight:700;background:rgba(255,255,255,0.2);border-radius:4px;padding:1px 7px;">🤖 AUTOAPPLY AI</span><span style="font-size:13px;font-weight:500;">${message}</span></div>`;
+    banner.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:11px;font-weight:600;background:rgba(255,255,255,0.18);border-radius:5px;padding:2px 8px;letter-spacing:0.2px;white-space:nowrap;">✦ AutoApply</span><span style="font-size:13px;font-weight:500;">${message}</span></div>`;
   }
 
   /* ── Boot ─────────────────────────────────────────────────────────────── */
