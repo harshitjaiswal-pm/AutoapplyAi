@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
     const filename     = `Cover_Letter_${safeCompany}_${safeTitle}.docx`
       .replace(/\s+/g, "_");
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Content-Type":        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
