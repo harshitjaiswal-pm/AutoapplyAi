@@ -359,7 +359,11 @@ function OnboardingContent() {
             ) : parsedResumeSummary ? (
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-6 space-y-4">
                 <div className="flex items-start gap-3">
-                  <span className="text-xl">✅</span>
+                  <div className="w-7 h-7 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 mt-0.5">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                      <path d="M2.5 7l3 3 6-6" stroke="white" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
                   <div className="flex-1">
                     <p className="font-semibold text-neutral-900">
                       {resumeFile?.name || "resume.pdf"}
@@ -465,7 +469,7 @@ function OnboardingContent() {
                     <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="you@example.com" className={inputCls} />
                   </Field>
                   <Field label="Phone" required>
-                    <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="+1 416 555 0100" className={inputCls} />
+                    <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="+1 (555) 000-0000" className={inputCls} />
                   </Field>
                 </div>
               </div>
@@ -496,8 +500,8 @@ function OnboardingContent() {
                   <Field label="Portfolio / Website">
                     <input type="text" value={formData.portfolio} onChange={(e) => setFormData({ ...formData, portfolio: e.target.value })} placeholder="yoursite.com" className={inputCls} />
                   </Field>
-                  <Field label="Current job title">
-                    <input type="text" value={formData.currentCompany} onChange={(e) => setFormData({ ...formData, currentCompany: e.target.value })} placeholder="Product Manager" className={inputCls} />
+                  <Field label="Most recent employer">
+                    <input type="text" value={formData.currentCompany} onChange={(e) => setFormData({ ...formData, currentCompany: e.target.value })} placeholder="Acme Corp" className={inputCls} />
                   </Field>
                 </div>
               </div>
@@ -508,10 +512,8 @@ function OnboardingContent() {
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Work authorization">
                     <select value={formData.requireSponsorship} onChange={(e) => setFormData({ ...formData, requireSponsorship: e.target.value })} className={inputCls}>
-                      <option value="no">Canadian Citizen</option>
-                      <option value="no">Permanent Resident</option>
-                      <option value="no">Open Work Permit</option>
-                      <option value="yes">Require Sponsorship</option>
+                      <option value="no">Authorized — no sponsorship needed</option>
+                      <option value="yes">Need work visa / sponsorship</option>
                     </select>
                   </Field>
                   <Field label="Salary expectation">

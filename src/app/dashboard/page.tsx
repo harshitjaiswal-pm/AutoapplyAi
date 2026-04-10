@@ -362,7 +362,7 @@ function DashboardPage() {
             <div>
               <p className="text-indigo-300 text-sm font-medium">{fmtDate(new Date())}</p>
               <h1 className="text-2xl font-bold mt-0.5">
-                {greeting()}{profileName ? `, ${profileName.split(" ")[0]}` : ""} 👋
+                {greeting()}{profileName ? `, ${profileName.split(" ")[0]}` : ""}
               </h1>
               <p className="text-indigo-300 text-sm mt-1">
                 {totalApplied === 0
@@ -443,9 +443,6 @@ function DashboardPage() {
                       {day.count} job{day.count !== 1 ? "s" : ""}
                     </div>
                   </div>
-                  <span className="text-[9px] text-neutral-400 rotate-45 origin-left ml-1 truncate w-6">
-                    {day.label.split(" ")[1]}
-                  </span>
                 </div>
               ))}
             </div>
@@ -553,7 +550,11 @@ function DashboardPage() {
                       {parsedResumeSummary ? parsedResumeSummary.name : "Resume"}
                     </p>
                     <p className="text-[11px] text-neutral-400">
-                      {parsedResumeSummary ? `${parsedResumeSummary.jobCount} experiences` : "Not uploaded"}
+                      {parsedResumeSummary
+                        ? parsedResumeSummary.jobCount > 0
+                          ? `${parsedResumeSummary.jobCount} role${parsedResumeSummary.jobCount !== 1 ? "s" : ""} found`
+                          : "Resume ready"
+                        : "Not uploaded"}
                     </p>
                   </div>
                 </div>
@@ -638,7 +639,7 @@ function DashboardPage() {
                       : "bg-white text-neutral-500 border-neutral-200 hover:border-indigo-300"
                   }`}
                 >
-                  {m === "fast" ? "⚡ Fast" : "🎯 Pro"}
+                  {m === "fast" ? "Fast" : "Pro"}
                 </button>
               ))}
             </div>
@@ -683,10 +684,10 @@ function DashboardPage() {
             <p className="text-[10px] text-neutral-400 mb-4">Tracked automatically by the extension</p>
             <div className="space-y-3">
               {[
-                { label: "Opened from LinkedIn", value: funnelStats.opened,         color: "bg-indigo-400",  emoji: "🔍" },
-                { label: "Filled Application",   value: funnelStats.formFilled,     color: "bg-violet-500",  emoji: "✏️" },
-                { label: "Resume Tailored",       value: funnelStats.resumeTailored, color: "bg-amber-500",   emoji: "✨" },
-                { label: "Application Completed", value: funnelStats.completed,      color: "bg-emerald-500", emoji: "✅" },
+                { label: "Opened from LinkedIn", value: funnelStats.opened,         color: "bg-indigo-400",  emoji: "→" },
+                { label: "Form filled",          value: funnelStats.formFilled,     color: "bg-violet-500",  emoji: "→" },
+                { label: "Resume tailored",      value: funnelStats.resumeTailored, color: "bg-amber-500",   emoji: "→" },
+                { label: "Application sent",     value: funnelStats.completed,      color: "bg-emerald-500", emoji: "✓" },
               ].map((row, i, arr) => {
                 const maxVal = Math.max(funnelStats.opened, 1);
                 const pct = Math.round((row.value / maxVal) * 100);
@@ -770,7 +771,7 @@ function DashboardPage() {
                         }}
                         className="text-[10px] bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-2 py-0.5 rounded font-medium transition-colors whitespace-nowrap"
                       >
-                        ⬇ PDF
+                        ↓ PDF
                       </button>
                     </div>
                   </div>
@@ -904,7 +905,7 @@ function JobRow({ job, onStatusChange }: { job: TrackableJob; onStatusChange: (i
           <span className={`text-xs font-bold ${scoreColor}`}>{job.score}</span>
         )}
         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusColors[job.status] ?? "bg-neutral-100 text-neutral-500"}`}>
-          {job.status}
+          {job.status === "matched" ? "Ready" : job.status.charAt(0).toUpperCase() + job.status.slice(1)}
         </span>
         {job.source === "manual" && (
           <select

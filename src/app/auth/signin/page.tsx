@@ -18,10 +18,10 @@ function SignInContent() {
             <span className="text-white text-2xl font-bold tracking-tight">A</span>
           </div>
           <h1 className="text-[26px] font-bold text-neutral-900 tracking-tight text-center">
-            Welcome back
+            Sign in to AutoApply
           </h1>
           <p className="mt-2 text-[14px] text-neutral-500 text-center">
-            Sign in to continue to AutoApply
+            Your AI-powered job application assistant
           </p>
         </div>
 
