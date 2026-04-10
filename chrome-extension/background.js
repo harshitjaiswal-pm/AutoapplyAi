@@ -1595,7 +1595,7 @@ function injectFloatingTrigger(tabId) {
           // ④ Open job posting in new tab
           const jobPostingUrl = jobInfo?.jobUrl || jobInfo?.applyUrl || jobInfo?.linkedinUrl;
           if (jobPostingUrl) {
-            const openBtn = makeBtn("🔗", "Open job posting", jobPostingUrl.replace(/^https?:\/\//, "").slice(0, 35), "#6B7280", () => {
+            const openBtn = makeBtn("↗", "Open job posting", jobPostingUrl.replace(/^https?:\/\//, "").slice(0, 35), "#6B7280", () => {
               window.open(jobPostingUrl, "_blank");
             });
             actions.appendChild(openBtn);

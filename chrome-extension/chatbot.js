@@ -308,17 +308,17 @@
       <div class="aa-chips" id="aa-chips" style="display:none;"></div>
 
       <div class="aa-context-bar" id="aa-context-bar" style="display:none;">
-        <span>📌</span>
+        <span>·</span>
         <span class="aa-context-bar-text" id="aa-context-text"></span>
         <span class="aa-context-bar-clear" id="aa-context-clear" title="Clear context">✕</span>
       </div>
 
       <div class="aa-toolbar">
         <button class="aa-toolbar-btn" id="aa-btn-inspect" title="Click any element on the page to add it as context">
-          🎯 Point at element
+          → Point at element
         </button>
         <button class="aa-toolbar-btn" id="aa-btn-clear" title="Clear conversation">
-          🗑 Clear
+          × Clear
         </button>
       </div>
 
@@ -441,7 +441,7 @@
   function enterInspectMode() {
     inspectMode = true;
     const btn = document.getElementById("aa-btn-inspect");
-    if (btn) { btn.classList.add("active"); btn.textContent = "🎯 Click an element..."; }
+    if (btn) { btn.classList.add("active"); btn.textContent = "→ Click an element..."; }
 
     // Highlight hovered elements
     document.addEventListener("mouseover", onInspectHover);
@@ -452,7 +452,7 @@
   function exitInspectMode() {
     inspectMode = false;
     const btn = document.getElementById("aa-btn-inspect");
-    if (btn) { btn.classList.remove("active"); btn.textContent = "🎯 Point at element"; }
+    if (btn) { btn.classList.remove("active"); btn.textContent = "→ Point at element"; }
 
     if (hoverTarget) {
       hoverTarget.classList.remove("aa-inspect-highlight");
@@ -675,7 +675,7 @@ When asked for profile details (email, LinkedIn, phone, etc.), respond with the 
     if (messages.length === 0) {
       container.innerHTML = `
         <div class="aa-empty-state">
-          <div class="aa-empty-icon">💬</div>
+          <div class="aa-empty-icon">✦</div>
           <div class="aa-empty-title">Ask me anything</div>
           <div class="aa-empty-sub">I can read this page and help you with your application.</div>
         </div>`;
