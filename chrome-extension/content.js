@@ -1134,6 +1134,33 @@
         await new Promise((r) => setTimeout(r, 800));
         jobDescription = scrapeJobDescription();
         fetchedApplyUrl = null; // Panel scrape: must use clickApplyButton() instead
+
+        // Guard against stale-panel race condition: if the scraped content doesn't
+        // mention the expected job title or company, the panel is still showing the
+        // previous job. Wait up to 4 more seconds for the panel to update.
+        const jdLower = (jobDescription || "").toLowerCase();
+        const titleSlug = (job.title || "").toLowerCase().substring(0, 20);
+        const companySlug = (job.company || "").toLowerCase().substring(0, 15);
+        const looksStale =
+          (titleSlug.length >= 4 && !jdLower.includes(titleSlug)) &&
+          (companySlug.length >= 3 && !jdLower.includes(companySlug));
+        if (looksStale) {
+          try { AALog && AALog.warn("linkedin.jd.stalePanel", { title: job.title, company: job.company, jdPreview: (jobDescription || "").slice(0, 100) }); } catch(_){}
+          // Poll for up to 4s waiting for panel to show the correct job
+          const staleDeadline = Date.now() + 4000;
+          while (Date.now() < staleDeadline) {
+            await new Promise((r) => setTimeout(r, 400));
+            const fresh = scrapeJobDescription();
+            const freshLower = (fresh || "").toLowerCase();
+            const freshOk =
+              (titleSlug.length >= 4 && freshLower.includes(titleSlug)) ||
+              (companySlug.length >= 3 && freshLower.includes(companySlug));
+            if (freshOk && fresh.length >= 50) {
+              jobDescription = fresh;
+              break;
+            }
+          }
+        }
       }
       try { AALog && AALog.scrape("linkedin.jd.scraped", { jobId: job.id, title: job.title, jdLen: (jobDescription || "").length, jdPreview: (jobDescription || "").slice(0, 400), fetchedApplyUrl: fetchedApplyUrl ? fetchedApplyUrl.slice(0, 100) : null }); } catch(_){}
 
