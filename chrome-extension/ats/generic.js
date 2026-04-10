@@ -750,7 +750,7 @@
     // visible delay. We only await the result when we need it for resume upload.
     const pageJD = scrapeGenericJD();
     const jobDescription = pageJD || pendingJob.jobDescription;
-    // Store salary range in batch progress so banner can display 💰 pill
+    // Store salary range in batch progress so banner can display $pill
     storeSalaryRangeInProgress(extractPayRangeFromJD(jobDescription));
     try { AALog && AALog.api("ats.tailor.request", { company: pendingJob.company, jobTitle: pendingJob.jobTitle, jdLen: (jobDescription || "").length, jdSource: pageJD ? "ats-page" : "linkedin" }); } catch(_){}
     const _tailorStart = Date.now();
@@ -2399,7 +2399,7 @@
         const counter = `<span style="display:inline-block;font-size:11px;font-weight:700;color:#fff;background:rgba(0,0,0,0.22);border-radius:4px;padding:1px 7px;white-space:nowrap;letter-spacing:0.2px;margin:0;">Job ${bp.current} / ${bp.total}</span>`;
         const company = bp.company ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;margin:0;">${bp.company}</span>` : "";
         const role    = bp.title   ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;margin:0;">${bp.title}</span>` : "";
-        const salary  = bp.salaryRange ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.82);white-space:nowrap;margin:0;">💰 ${bp.salaryRange}</span>` : "";
+        const salary  = bp.salaryRange ? `<span style="display:inline-block;font-size:11px;color:rgba(255,255,255,0.82);white-space:nowrap;margin:0;">${bp.salaryRange}</span>` : "";
         const timer   = isAi ? `<span id="aa-elapsed-timer" style="display:inline-block;margin-left:auto;font-size:11px;font-weight:700;color:rgba(255,255,255,0.8);font-variant-numeric:tabular-nums;white-space:nowrap;">0:00</span>` : "";
         return `<div style="display:flex;align-items:center;gap:8px;overflow:hidden;margin:0 0 6px 0;padding:0;flex-wrap:nowrap;">${counter}${company}${role}${salary}${timer}</div>`;
       })() : (isAi ? `<div style="display:flex;justify-content:flex-end;margin:0 0 4px 0;padding:0;"><span id="aa-elapsed-timer" style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.75);font-variant-numeric:tabular-nums;">0:00</span></div>` : "");

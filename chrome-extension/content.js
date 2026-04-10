@@ -1992,7 +1992,7 @@
                 justify-content:center; font-size:13px; font-weight:800; color:white;
               ">A</div>
               <div>
-                <h3 style="margin:0;font-size:13px;font-weight:700;color:white;letter-spacing:-0.1px;">AutoApply AI</h3>
+                <h3 style="margin:0;font-size:13px;font-weight:700;color:white;letter-spacing:-0.1px;">AutoApply</h3>
                 <p style="margin:1px 0 0;font-size:10px;color:rgba(255,255,255,0.7);" id="autoapply-status">Find jobs on this page to get started</p>
               </div>
             </div>
@@ -2213,7 +2213,7 @@
             ${job.company}
           </p>
           <p style="margin: 1px 0 0; font-size: 11px; font-weight: 500; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-            📍 ${job.location}
+            ${job.location}
             ${job.easyApply ? '<span style="color: #9CA3AF; font-size: 10px; margin-left: 4px;">(Easy Apply)</span>' : ""}
           </p>
           ${job.status === "applying" && job.statusText ? `<p style="margin:2px 0 0;font-size:10px;color:#B45309;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${job.statusText}</p>` : ""}

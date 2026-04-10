@@ -1364,7 +1364,7 @@
       const roleTag = (hasBatch && bp.title)
         ? `<span style="${pillStyle}">${bp.title}</span>` : "";
       const salaryTag = (hasBatch && bp.salaryRange)
-        ? `<span style="${pillStyle}">💰 ${bp.salaryRange}</span>` : "";
+        ? `<span style="${pillStyle}">${bp.salaryRange}</span>` : "";
 
       const pct = hasBatch ? Math.round(((bp.current - 1) / bp.total) * 100) : 0;
       const progressBar = hasBatch ? `
