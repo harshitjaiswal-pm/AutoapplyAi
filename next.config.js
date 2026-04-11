@@ -1,7 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // We'll add config here as needed
-  // For now, defaults are perfect for our MVP
+  // Bake the deploy date into the client bundle so the extension zip download
+  // filename always reflects exactly when this version was built/deployed.
+  // Format: YYYY-MM-DD  (e.g. "2026-04-11")
+  env: {
+    NEXT_PUBLIC_BUILD_DATE: new Date().toISOString().slice(0, 10),
+  },
 };
 
 module.exports = nextConfig;
