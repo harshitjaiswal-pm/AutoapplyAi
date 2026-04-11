@@ -116,6 +116,9 @@ function DashboardPage() {
     parsedResumeSummary,
   } = useAppStore();
 
+  /* ── resume preview modal ─────────────────────────────────────────────── */
+  const [resumeModalOpen, setResumeModalOpen] = useState(false);
+
   /* ── panel state ──────────────────────────────────────────────────────── */
   const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [addMode, setAddMode] = useState<"single" | "bulk">("single");
@@ -564,9 +567,19 @@ function DashboardPage() {
                     </p>
                   </div>
                 </div>
-                <Link href={parsedResumeSummary ? "/onboarding?edit=resume" : "/onboarding"} className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium">
-                  {parsedResumeSummary ? "Change" : "Upload →"}
-                </Link>
+                <div className="flex items-center gap-3">
+                  {parsedResumeSummary && pipelineResumeText && (
+                    <button
+                      onClick={() => setResumeModalOpen(true)}
+                      className="text-[11px] text-neutral-400 hover:text-neutral-600 font-medium"
+                    >
+                      View
+                    </button>
+                  )}
+                  <Link href={parsedResumeSummary ? "/onboarding?edit=resume" : "/onboarding"} className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium">
+                    {parsedResumeSummary ? "Change" : "Upload →"}
+                  </Link>
+                </div>
               </div>
 
               {/* Profile */}
@@ -866,6 +879,49 @@ function DashboardPage() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resume preview modal */}
+      {resumeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={() => setResumeModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-neutral-100">
+              <div>
+                <p className="text-sm font-semibold text-neutral-900">Your Resume</p>
+                {parsedResumeSummary && (
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    {parsedResumeSummary.name} · {parsedResumeSummary.jobCount} role{parsedResumeSummary.jobCount !== 1 ? "s" : ""}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setResumeModalOpen(false)}
+                className="text-neutral-400 hover:text-neutral-600 text-lg leading-none"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <pre className="flex-1 overflow-y-auto px-5 py-4 text-[12px] text-neutral-700 whitespace-pre-wrap font-mono leading-relaxed">
+              {pipelineResumeText}
+            </pre>
+            <div className="px-5 py-3 border-t border-neutral-100 flex justify-end">
+              <Link
+                href="/onboarding?edit=resume"
+                className="text-[12px] text-indigo-600 hover:text-indigo-700 font-medium"
+                onClick={() => setResumeModalOpen(false)}
+              >
+                Replace resume →
+              </Link>
             </div>
           </div>
         </div>

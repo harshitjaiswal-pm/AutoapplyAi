@@ -33,6 +33,9 @@ function OnboardingContent() {
     setParsedResumeSummary,
     parsedResumeSummary,
     setOnboardingComplete,
+    setRawResumeText,
+    setPipelineResumeText,
+    setPipelineParsedResume,
   } = useAppStore();
 
   const [resumeFile, setResumeFile] = useState<File | null>(null);
@@ -101,6 +104,21 @@ function OnboardingContent() {
           skillCount,
         });
 
+        // Store full resume text + parsed object in Zustand so dashboard & pipeline can use them
+        setRawResumeText(uploadData.text);
+        setPipelineResumeText(uploadData.text);
+        setPipelineParsedResume(parseData as Parameters<typeof setPipelineParsedResume>[0]);
+
+        // Write to localStorage so the pipeline-bridge can sync to the extension immediately
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("autoapply-parsed-resume", JSON.stringify(parseData));
+          window.dispatchEvent(
+            new CustomEvent("autoapply-sync-resume", {
+              detail: { parsedResume: parseData },
+            })
+          );
+        }
+
         // Pre-fill form fields
         if (name && !userProfile?.firstName) {
           const [first, ...rest] = name.split(" ");
@@ -127,7 +145,7 @@ function OnboardingContent() {
         setResumeLoading(false);
       }
     },
-    [setParsedResumeSummary, userProfile?.firstName, userProfile?.email]
+    [setParsedResumeSummary, setRawResumeText, setPipelineResumeText, setPipelineParsedResume, userProfile?.firstName, userProfile?.email]
   );
 
   const handleSaveProfile = async () => {
