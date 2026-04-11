@@ -4,7 +4,14 @@ const nextConfig = {
   // filename always reflects exactly when this version was built/deployed.
   // Format: YYYY-MM-DD  (e.g. "2026-04-11")
   env: {
-    NEXT_PUBLIC_BUILD_DATE: new Date().toISOString().slice(0, 10),
+    // Format: YYYY-MM-DD-HHmm  (e.g. "2026-04-11-1430")
+    NEXT_PUBLIC_BUILD_DATE: (() => {
+      const d = new Date();
+      const date = d.toISOString().slice(0, 10);
+      const hh   = String(d.getUTCHours()).padStart(2, "0");
+      const mm   = String(d.getUTCMinutes()).padStart(2, "0");
+      return `${date}-${hh}${mm}`;
+    })(),
   },
 };
 
