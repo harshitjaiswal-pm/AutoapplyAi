@@ -204,7 +204,18 @@ function DashboardPage() {
     function loadResumes() {
       try {
         const raw = localStorage.getItem("autoapply-resume-map");
-        if (raw) setRecentResumes(JSON.parse(raw).slice(0, 12));
+        if (raw) {
+          const arr: ResumeMapEntry[] = JSON.parse(raw);
+          // Deduplicate by jobTitle + company (extension may write same entry twice)
+          const seen = new Set<string>();
+          const unique = arr.filter(r => {
+            const key = `${r.jobTitle?.trim().toLowerCase()}__${r.company?.trim().toLowerCase()}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          setRecentResumes(unique.slice(0, 12));
+        }
       } catch {}
     }
     loadResumes();

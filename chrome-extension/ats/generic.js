@@ -667,6 +667,9 @@
     );
     const title = titleEl?.innerText?.trim().split("\n")[0] || document.title.replace(/[\-–|].*$/, "").trim();
     if (!title || title.length < 3) return null;
+    // Reject common UI/nav headings that aren't job titles
+    const NON_JOB_TITLES = /^(primary navigation|main navigation|site navigation|skip to|breadcrumb|header|footer|menu|search|sign in|log in|home)$/i;
+    if (NON_JOB_TITLES.test(title.trim())) return null;
 
     // Company — try meta tags, page content, or domain
     const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content");
