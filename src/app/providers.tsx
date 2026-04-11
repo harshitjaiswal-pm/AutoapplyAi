@@ -5,9 +5,10 @@ import { SessionProvider, useSession } from "next-auth/react";
 import { useAppStore } from "@/store/useAppStore";
 
 /**
- * Clears all localStorage store data if the logged-in user doesn't match
- * what's stored. Prevents one user from seeing another user's data on a
- * shared machine (e.g. Kiran logging in on Harshit's laptop).
+ * On login:
+ * 1. If the stored data belongs to a different user, wipe localStorage and reset Zustand.
+ * 2. Fetch the user's resume from the server (Redis) and hydrate the store + localStorage.
+ *    This makes the resume available on any device without re-uploading.
  */
 function UserStoreGuard() {
   const { data: session, status } = useSession();
@@ -21,18 +22,13 @@ function UserStoreGuard() {
     const storedProfile = useAppStore.getState().userProfile;
     const storedEmail = storedProfile?.email;
 
-    // If there's stored data belonging to a different user, wipe it
+    // If there's stored data belonging to a different user, wipe it first
     if (storedEmail && storedEmail.toLowerCase() !== sessionEmail.toLowerCase()) {
-      // Clear Zustand persisted store
       localStorage.removeItem("autoapply-pipeline");
-
-      // Clear all other autoapply localStorage keys
       const keysToRemove = Object.keys(localStorage).filter((k) =>
         k.startsWith("autoapply") || k.startsWith("aa_")
       );
       keysToRemove.forEach((k) => localStorage.removeItem(k));
-
-      // Reset Zustand in-memory state
       useAppStore.setState({
         userProfile: null,
         parsedResumeSummary: null,
@@ -43,11 +39,37 @@ function UserStoreGuard() {
         rawResumeText: "",
         parsedResume: null,
       });
-
-      // Force a reload so the page re-renders clean
-      window.location.reload();
     }
-  }, [session, status]);
+
+    // Fetch resume from server and hydrate store if not already loaded
+    const alreadyHasResume = !!useAppStore.getState().pipelineResumeText;
+    if (!alreadyHasResume) {
+      fetch("/api/user/resume")
+        .then((r) => r.json())
+        .then((data) => {
+          const resume = data?.resume;
+          if (!resume) return;
+
+          const { resumeText, parsedResume, parsedResumeSummary } = resume;
+
+          // Hydrate Zustand
+          useAppStore.setState({
+            rawResumeText: resumeText,
+            pipelineResumeText: resumeText,
+            pipelineParsedResume: parsedResume,
+            parsedResumeSummary,
+          });
+
+          // Hydrate localStorage so pipeline-bridge can sync to extension
+          localStorage.setItem("autoapply-parsed-resume", JSON.stringify(parsedResume));
+          window.dispatchEvent(
+            new CustomEvent("autoapply-sync-resume", { detail: { parsedResume } })
+          );
+        })
+        .catch((e) => console.warn("AutoApply: Failed to load resume from server", e));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   return null;
 }

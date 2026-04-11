@@ -119,6 +119,22 @@ function OnboardingContent() {
           );
         }
 
+        // Save to server so resume is available on any device
+        try {
+          await fetch("/api/user/resume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              resumeText: uploadData.text,
+              parsedResume: parseData,
+              parsedResumeSummary: { name, jobCount, skillCount },
+            }),
+          });
+        } catch (e) {
+          // Non-fatal — resume is already in localStorage, server save is best-effort
+          console.warn("AutoApply: Failed to save resume to server", e);
+        }
+
         // Pre-fill form fields
         if (name && !userProfile?.firstName) {
           const [first, ...rest] = name.split(" ");
