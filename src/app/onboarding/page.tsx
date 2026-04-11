@@ -655,7 +655,7 @@ function ResumeDropZone({
     const files = e.dataTransfer.files;
     if (files.length > 0) {
       const file = files[0];
-      if (file.type === "application/pdf") {
+      if (file.type === "application/pdf" || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || file.name.endsWith(".docx")) {
         onFile(file);
       }
     }
@@ -678,7 +678,7 @@ function ResumeDropZone({
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf"
+        accept=".pdf,.docx"
         onChange={handleFileInput}
         className="hidden"
       />
@@ -704,7 +704,7 @@ function ResumeDropZone({
               Drop your resume here
             </p>
             <p className="text-[13px] text-neutral-400">
-              or <span className="text-indigo-600 font-medium">click to browse</span> — PDF only
+              or <span className="text-indigo-600 font-medium">click to browse</span> — PDF or Word (.docx)
             </p>
           </div>
         </div>
