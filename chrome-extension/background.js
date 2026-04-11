@@ -1336,10 +1336,22 @@ function injectFloatingTrigger(tabId) {
           const pending   = stored.pendingApplication;
           const jobInfo   = pending || lastJob;  // prefer current pending over stale lastFilledJob
 
-          // Use keyed map lookup for hasPdf — eliminates the wrong-resume display bug
+          // Use keyed map lookup for hasPdf — eliminates the wrong-resume display bug.
+          // Fallback: scan all entries by company+title in case key was generated from a
+          // different URL (e.g. lastFilledJob.applyUrl differs from the stored applyUrl).
           const resumeMap = stored.tailoredResumeMap || {};
           const resumeKey = makeResumeKey(jobInfo);
-          const mapEntry  = resumeMap[resumeKey];
+          let   mapEntry  = resumeMap[resumeKey];
+          if (!mapEntry?.pdf && jobInfo) {
+            // [AutoQA fix 2026-04-11] Key mismatch guard — find the best entry by title+company
+            const co = (jobInfo.company  || "").toLowerCase();
+            const ti = (jobInfo.jobTitle || "").toLowerCase();
+            mapEntry = Object.values(resumeMap).find(e =>
+              e?.pdf &&
+              (co ? (e.company  || "").toLowerCase() === co : true) &&
+              (ti ? (e.jobTitle || "").toLowerCase() === ti : true)
+            ) || null;
+          }
           const hasPdf    = !!(mapEntry?.pdf);
 
           // ① Fill this form
@@ -2105,7 +2117,20 @@ async function handleDownloadResume(job) {
   const resumeKey = makeResumeKey(job);
   const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename"]);
   const map       = stored.tailoredResumeMap || {};
-  const entry     = map[resumeKey];
+  let   entry     = map[resumeKey];
+
+  // [AutoQA fix 2026-04-11] Fallback: if key lookup misses, scan by company+title
+  // Handles case where lastFilledJob.applyUrl differs from the map's stored key.
+  if (!entry?.pdf && job) {
+    const co = (job.company  || "").toLowerCase();
+    const ti = (job.jobTitle || "").toLowerCase();
+    entry = Object.values(map).find(e =>
+      e?.pdf &&
+      (co ? (e.company  || "").toLowerCase() === co : true) &&
+      (ti ? (e.jobTitle || "").toLowerCase() === ti : true)
+    ) || null;
+    if (entry?.pdf) console.log("AutoApply BG [handleDownloadResume] found entry via company+title fallback");
+  }
 
   // DEBUG — log full picture so we can trace wrong-resume issues
   console.log("AutoApply BG [handleDownloadResume] job received:", JSON.stringify(job));

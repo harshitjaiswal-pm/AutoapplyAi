@@ -261,6 +261,9 @@
         jobTitle: pendingJob.jobTitle,
         company: pendingJob.company,
         jobUrl: pendingJob.jobUrl || window.location.href,
+        // [AutoQA fix 2026-04-11] Include applyUrl so the floating panel's makeResumeKey
+        // can find the correct tailoredResumeMap entry after pendingApplication is cleared.
+        applyUrl: pendingJob.applyUrl || pendingJob.jobUrl || window.location.href,
         jobDescription: pendingJob.jobDescription || "",
         funnelFormFilledAt: new Date().toISOString(),
         _completionRecorded: false,

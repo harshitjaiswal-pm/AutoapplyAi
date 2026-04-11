@@ -28,7 +28,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*", "https://*.vercel.app/dashboard*", "http://localhost:3000/dashboard*"],
+      "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*", "https://*.vercel.app/dashboard*", "http://localhost:3000/dashboard*", "https://*.vercel.app/onboarding*", "http://localhost:3000/onboarding*"],
       "js": ["logger.js", "pipeline-bridge.js"],
       "run_at": "document_idle"
     },

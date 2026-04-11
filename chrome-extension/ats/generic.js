@@ -763,6 +763,18 @@
     console.log("AutoApply: Processing generic application for", pendingJob.jobTitle);
     showBanner("Opening application...", "ai");
 
+    // [AutoQA fix 2026-04-11] Check if this run was triggered by "Fill this form" button.
+    // When the user explicitly clicks "Fill this form", we should skip the navigation logic
+    // (clickApplyOnPosting / waitForApplicationForm) and fill whatever is on screen right now.
+    // This fixes pre-screening / multi-step forms where isOnApplicationForm() returns false
+    // because those pages lack the standard "First Name/Email/Resume" fields we detect on.
+    const _forceFillStored = await new Promise(r => chrome.storage.local.get(["_aa_scrapeAndTailor"], r));
+    const forceFill = !!_forceFillStored._aa_scrapeAndTailor;
+    if (forceFill) {
+      await new Promise(r => chrome.storage.local.remove(["_aa_scrapeAndTailor"], r));
+      console.log("AutoApply: forceFill=true — skipping navigation, filling current page directly");
+    }
+
     // Detect Ashby embedded pages — checks URL AND DOM signals
     // (DOM check handles SPA navigation that removes ashby_jid= from URL)
     const isAshbyPage = detectAshbyPage();
@@ -873,8 +885,10 @@
         await sleep(2500);
 
         // No detection gate. Fall straight through to filling.
-      } else if (!isOnApplicationForm()) {
-        // Generic non-Ashby page: scroll and find Apply button
+      } else if (!forceFill && !isOnApplicationForm()) {
+        // Generic non-Ashby page: scroll and find Apply button.
+        // [AutoQA fix 2026-04-11] Skip this entire block when "Fill this form" was explicitly
+        // clicked (forceFill=true) — the user is already on the form they want filled.
         showBanner("Opening application form...", "ai", { subtext: "Tailoring resume in background..." });
         const clicked = await clickApplyOnPosting();
         if (!clicked) {
@@ -992,6 +1006,20 @@
       } else {
         showBanner("Your turn — download your tailored resume below.", "user", { subtext: "Click ↓ Resume to download your tailored resume, then drag it into the upload field." });
       }
+      // [AutoQA fix 2026-04-11] Store lastFilledJob so the floating panel can find the
+      // correct tailoredResumeMap entry (via makeResumeKey) after pendingApplication is cleared.
+      // Without this, the "↓ Resume" download button disappears once pendingApplication is gone.
+      chrome.storage.local.set({
+        lastFilledJob: {
+          id:          pendingJob.id,
+          jobTitle:    pendingJob.jobTitle,
+          company:     pendingJob.company,
+          jobUrl:      pendingJob.jobUrl  || window.location.href,
+          applyUrl:    pendingJob.applyUrl || pendingJob.jobUrl || window.location.href,
+          jobDescription: pendingJob.jobDescription || "",
+          filledAt:    new Date().toISOString(),
+        },
+      });
       chrome.storage.local.remove(["pendingApplication"]);
 
     } catch (err) {
