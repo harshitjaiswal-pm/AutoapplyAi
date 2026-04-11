@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 
 export default function ResumeUploader() {
@@ -11,12 +11,21 @@ export default function ResumeUploader() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
+    rawResumeText,
     parsedResume,
     isParsingResume,
     setRawResumeText,
     setParsedResume,
     setIsParsingResume,
   } = useAppStore();
+
+  // Pre-populate textarea with stored resume if available
+  useEffect(() => {
+    if (rawResumeText && !text) {
+      setText(rawResumeText);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawResumeText]);
 
   // Shared parse logic so file upload can auto-trigger it
   const parseResume = useCallback(
