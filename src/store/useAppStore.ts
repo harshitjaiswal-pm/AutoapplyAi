@@ -258,7 +258,16 @@ export const useAppStore = create<AppState>()(
       setParsedJob: (job) => set({ parsedJob: job }),
       setTailoredResult: (result) => set({ tailoredResult: result }),
       addApplication: (app) =>
-        set((state) => ({ applications: [...state.applications, app] })),
+        set((state) => {
+          // Dedup by jobTitle + company (case-insensitive trim) to prevent duplicates
+          // caused by batched React state updates seeing stale snapshots.
+          const key = `${app.jobTitle?.trim().toLowerCase()}__${app.company?.trim().toLowerCase()}`;
+          const exists = state.applications.some(
+            (a) => `${a.jobTitle?.trim().toLowerCase()}__${a.company?.trim().toLowerCase()}` === key
+          );
+          if (exists) return state;
+          return { applications: [...state.applications, app] };
+        }),
       updateApplicationStatus: (id, status) =>
         set((state) => ({
           applications: state.applications.map((a) =>

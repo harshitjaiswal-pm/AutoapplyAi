@@ -114,7 +114,9 @@
     return; // don't run main init() flow
   }
 
-  showBanner("Opening your application…", "ai", { subtext: "Preparing to fill your form" });
+  // NOTE: showBanner is NOT called here — it's called inside init() after pendingApplication
+  // is confirmed. Calling it unconditionally here caused a misleading banner on all Greenhouse
+  // pages even when no AutoApply flow was active.
   setTimeout(() => init(), 1500);
 
   async function init() {
@@ -647,7 +649,7 @@
     // ── Free-text custom questions ──
     const customTextFields = [
       { labels: ["compensation", "salary", "salary expectation", "compensation expectation", "desired salary", "expected salary", "pay expectation"], value: extractMaxPayFromJD(jobDescription) || user.salaryExpectation || user.compensation || "" },
-      { labels: ["start date", "earliest start", "when can you start"],                       value: user.startDate || "2 weeks notice" },
+      { labels: ["earliest start", "when can you start", "available to start", "start availability"],  value: user.startDate || "2 weeks notice" },
     ];
     for (const { labels, value } of customTextFields) {
       if (value) fillByLabel(labels, value);
@@ -926,6 +928,56 @@
         console.log("AutoApply: [aria-radio] Answered →", yesOrNo);
         return;
       }
+    }
+
+    // 4. Native <select> hidden behind a styled overlay (common Greenhouse pattern)
+    // The native <select> may be visually hidden but still functional via JS value setter.
+    const nativeSelect = container.querySelector("select");
+    if (nativeSelect) {
+      const targetValue = Array.from(nativeSelect.options).find(
+        (o) => o.text.toLowerCase().trim().includes(yesOrNo) || o.value.toLowerCase().trim().includes(yesOrNo)
+      );
+      if (targetValue) {
+        const nativeSelectValueSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")?.set;
+        if (nativeSelectValueSetter) nativeSelectValueSetter.call(nativeSelect, targetValue.value);
+        else nativeSelect.value = targetValue.value;
+        nativeSelect.dispatchEvent(new Event("input",  { bubbles: true }));
+        nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        console.log("AutoApply: [native-select] Answered →", yesOrNo, "value:", targetValue.value);
+        return;
+      }
+    }
+
+    // 5. Custom styled "Select…" trigger div (Greenhouse React-Select replacement)
+    // Click the trigger to open the dropdown, then find and click the matching option
+    // after a short delay (options render asynchronously).
+    const selectTrigger = container.querySelector(
+      "[class*='select__control'], [class*='SelectTrigger'], [class*='dropdown-toggle'], " +
+      "[data-testid*='select'], [class*='custom-select']"
+    ) || Array.from(container.querySelectorAll("div[class]")).find(
+      (el) => el.textContent.trim().toLowerCase() === "select..." ||
+              el.textContent.trim().toLowerCase() === "select one" ||
+              el.getAttribute("aria-haspopup") === "listbox"
+    );
+    if (selectTrigger) {
+      selectTrigger.click();
+      console.log("AutoApply: [custom-select] Opened dropdown trigger for →", yesOrNo);
+      // Scan for matching option after DOM updates
+      setTimeout(() => {
+        const optionEls = document.querySelectorAll(
+          "[class*='select__option'], [class*='dropdown-item'], [role='option'], [class*='SelectItem']"
+        );
+        for (const opt of optionEls) {
+          const optText = (opt.textContent || "").toLowerCase().trim();
+          if (optText.includes(yesOrNo)) {
+            opt.click();
+            console.log("AutoApply: [custom-select] Selected option →", yesOrNo);
+            return;
+          }
+        }
+        console.log("AutoApply: [custom-select] Could not find matching option for →", yesOrNo);
+      }, 400);
+      return;
     }
 
     console.log("AutoApply: answerYesNo — no clickable element found for", yesOrNo, "in", labelEl.textContent?.trim());

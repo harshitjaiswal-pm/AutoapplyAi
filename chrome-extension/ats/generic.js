@@ -51,6 +51,13 @@
     });
   }
 
+  // [AutoQA fix 2026-04-11] LOG was called in the "Reload resume" button handler (showBanner)
+  // but was never defined in this file. All other ATS scripts (greenhouse.js, lever.js,
+  // workday.js, universal.js) define their own LOG constant — generic.js was the only one
+  // missing it, causing a ReferenceError: LOG is not defined whenever the user clicked
+  // "Reload resume" in the error/user-turn banner.
+  const LOG = (...a) => console.log("AutoApply Generic:", ...a);
+
   console.log("AutoApply: Generic ATS script loaded on", window.location.href);
   try { AALog && AALog.state("ats.generic.loaded", { url: window.location.href, isChildFrame: window !== window.top }); } catch(_){}
   try { AALog && AALog.state("ats.loaded", { url: window.location.href, isChildFrame: window !== window.top }); } catch(_){}

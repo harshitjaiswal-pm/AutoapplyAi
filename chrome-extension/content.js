@@ -98,13 +98,16 @@
 
         let title = "";
         if (titleLink) {
-          title = titleLink.getAttribute("aria-label")
-            || titleLink.querySelector("strong")?.textContent?.trim()
+          // Prefer <strong> text — it's always the clean title.
+          // aria-label is tried last because LinkedIn appends " with verification" to it.
+          title = titleLink.querySelector("strong")?.textContent?.trim()
             || titleLink.querySelector('[class*="title"]')?.textContent?.trim()
+            || titleLink.getAttribute("aria-label")
             || titleLink.textContent?.trim()
             || "";
         }
-        title = title.replace(/\s*\(Verified job\)/gi, "").trim();
+        // Strip LinkedIn's verification suffix and legacy "(Verified job)" variant
+        title = title.replace(/\s+with verification$/i, "").replace(/\s*\(Verified job\)/gi, "").trim();
         if (!title || title.length < 3) return;
 
         const { company, location, easyApply } = parseCardText(card.innerText, title);

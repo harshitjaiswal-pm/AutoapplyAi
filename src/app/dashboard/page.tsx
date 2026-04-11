@@ -217,10 +217,16 @@ function DashboardPage() {
         if (!stored) return;
         const completed = JSON.parse(stored);
         if (!Array.isArray(completed)) return;
+        // Build a seen set from this loop's own additions to guard against same-tick dedup failures
+        const seenThisSync = new Set(
+          [...applications, ...pipelineJobs].map((j) => `${j.jobTitle?.trim().toLowerCase()}__${j.company?.trim().toLowerCase()}`)
+        );
         for (const app of completed) {
-          const inApps = applications.some((a) => a.jobTitle === app.jobTitle && a.company === app.company);
+          const key = `${app.jobTitle?.trim().toLowerCase()}__${app.company?.trim().toLowerCase()}`;
+          const inApps = seenThisSync.has(key);
           const inPipeline = pipelineJobs.some((j) => j.jobTitle === app.jobTitle && j.company === app.company);
           if (!inApps && !inPipeline) {
+            seenThisSync.add(key); // prevent same batch from re-adding
             addApplication({
               id: app.id || `ext_${Date.now()}_${Math.random().toString(36).slice(2)}`,
               jobTitle: app.jobTitle,
