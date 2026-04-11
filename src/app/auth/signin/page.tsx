@@ -1,13 +1,22 @@
 "use client";
 
-import { signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { signIn, useSession } from "next-auth/react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useEffect } from "react";
 import Link from "next/link";
 
 function SignInContent() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/dashboard";
+  const { status } = useSession();
+  const router = useRouter();
+
+  // Redirect already-authenticated users straight to the dashboard
+  useEffect(() => {
+    if (status === "authenticated") {
+      router.replace(callbackUrl);
+    }
+  }, [status, router, callbackUrl]);
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center">
@@ -37,13 +46,13 @@ function SignInContent() {
 
           <p className="mt-6 text-center text-[11px] text-neutral-400 leading-relaxed">
             By continuing, you agree to our{" "}
-            <span className="underline underline-offset-2 cursor-pointer hover:text-neutral-600 transition-colors">
+            <Link href="/terms" className="underline underline-offset-2 hover:text-neutral-600 transition-colors">
               Terms
-            </span>{" "}
+            </Link>{" "}
             and{" "}
-            <span className="underline underline-offset-2 cursor-pointer hover:text-neutral-600 transition-colors">
+            <Link href="/privacy" className="underline underline-offset-2 hover:text-neutral-600 transition-colors">
               Privacy Policy
-            </span>
+            </Link>
             .
           </p>
         </div>
