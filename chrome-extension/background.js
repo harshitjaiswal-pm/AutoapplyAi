@@ -1327,6 +1327,16 @@ function injectFloatingTrigger(tabId) {
         return (co + "_" + ti) || "default";
       }
 
+      /* ── Context info strip (injected between header and actions) ── */
+      const contextStrip = document.createElement("div");
+      contextStrip.id = "aa-context-strip";
+      contextStrip.style.cssText = [
+        "background:#F8F7FF", "border-bottom:1px solid #EDE9FE",
+        "padding:7px 14px", "display:none",
+        "font-family:" + FONT,
+      ].join(";");
+      panel.insertBefore(contextStrip, actions);
+
       /* ── Populate panel based on storage state ── */
       function buildPanel() {
         actions.innerHTML = "";
@@ -1353,6 +1363,55 @@ function injectFloatingTrigger(tabId) {
             ) || null;
           }
           const hasPdf    = !!(mapEntry?.pdf);
+
+          // ── Context strip: show current application + last tailored resume ──
+          // Gives the user a visual indicator of which job this pill belongs to
+          // and which resume PDF is ready — especially useful in batch mode.
+          {
+            const strip = document.getElementById("aa-context-strip");
+            if (strip) {
+              const trunc = (s, n) => s && s.length > n ? s.slice(0, n - 1) + "…" : (s || "");
+
+              // Row 1: current application (pending job)
+              const currentLabel = pending
+                ? `${trunc(pending.company || "", 18)}${pending.jobTitle ? " · " + trunc(pending.jobTitle, 20) : ""}`
+                : (lastJob ? `${trunc(lastJob.company || "", 18)}${lastJob.jobTitle ? " · " + trunc(lastJob.jobTitle, 20) : ""}` : "");
+
+              // Row 2: last tailored resume (most recent map entry)
+              const allEntries = Object.values(resumeMap).filter(e => e?.pdf);
+              allEntries.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+              const latestEntry = allEntries[0];
+              const resumeLabel = latestEntry
+                ? `${trunc(latestEntry.company || "", 18)}${latestEntry.jobTitle ? " · " + trunc(latestEntry.jobTitle, 20) : ""}`
+                : "";
+
+              // Only show strip if we have something useful to display
+              const showStrip = !!(currentLabel || resumeLabel);
+              strip.style.display = showStrip ? "block" : "none";
+
+              if (showStrip) {
+                // Highlight mismatch: warn if the resume in the pill is for a different job
+                const resumeMatchesCurrent = mapEntry?.pdf
+                  && latestEntry
+                  && (mapEntry.company || "") === (latestEntry.company || "")
+                  && (mapEntry.jobTitle || "") === (latestEntry.jobTitle || "");
+                const mismatch = hasPdf && latestEntry && !resumeMatchesCurrent;
+
+                strip.innerHTML = `
+                  ${currentLabel ? `
+                  <div style="display:flex;align-items:center;gap:5px;margin-bottom:${resumeLabel ? "4px" : "0"};">
+                    <span style="font-size:9px;font-weight:600;color:#6D28D9;text-transform:uppercase;letter-spacing:0.4px;min-width:52px;">Applying</span>
+                    <span style="font-size:10px;color:#374151;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${currentLabel}</span>
+                  </div>` : ""}
+                  ${resumeLabel ? `
+                  <div style="display:flex;align-items:center;gap:5px;">
+                    <span style="font-size:9px;font-weight:600;color:${mismatch ? "#DC2626" : "#059669"};text-transform:uppercase;letter-spacing:0.4px;min-width:52px;">Resume</span>
+                    <span style="font-size:10px;color:${mismatch ? "#DC2626" : "#374151"};font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${resumeLabel}${mismatch ? " ⚠" : ""}</span>
+                  </div>` : ""}
+                `;
+              }
+            }
+          }
 
           // ① Fill this form
           const fillBtn = makeBtn("→", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""}${jobInfo.company ? " · " + jobInfo.company : ""}`.slice(0, 34) : "Re-run AutoApply on this page", "#4F46E5", () => {
