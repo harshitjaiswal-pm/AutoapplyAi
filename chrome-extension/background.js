@@ -1509,13 +1509,21 @@ function injectFloatingTrigger(tabId) {
           }
 
           // ── Render the right button ───────────────────────────────────────
+          // [AutoQA fix 2026-04-11] Always show a resume action — either download
+          // (PDF already in map) or tailor (kick off PDF generation). Previously
+          // the tailor button was gated on hasResume (parsedResume in storage),
+          // so on login-gate pages where the bridge hadn't synced yet, NEITHER
+          // button appeared. Now the tailor button always shows when no PDF exists.
           if (hasPdf) {
             const dlBtn = makeBtn("↓", "Download resume", "Your tailored PDF for this role", "#059669", () => {
               startDownloadCountdown(dlBtn);
             });
             actions.appendChild(dlBtn);
-          } else if (hasResume) {
-            const tailorBtn = makeBtn("✦", "Tailor resume", "Generate a tailored PDF for this role", "#D97706", () => {
+          } else {
+            const sublabel = hasResume
+              ? "Generate a tailored PDF for this role"
+              : "Sync resume from dashboard first";
+            const tailorBtn = makeBtn("✦", "Tailor resume", sublabel, "#D97706", () => {
               startGenerateProgress(tailorBtn);
             });
             actions.appendChild(tailorBtn);
