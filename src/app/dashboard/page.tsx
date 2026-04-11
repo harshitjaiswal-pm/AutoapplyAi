@@ -627,6 +627,13 @@ function DashboardPage() {
                 >
                   Sync to Extension
                 </button>
+                <a
+                  href="/autoapply-extension.zip"
+                  download="autoapply-extension.zip"
+                  className="w-full flex items-center justify-center gap-1.5 text-[11px] text-neutral-500 hover:text-indigo-600 transition-colors mt-2"
+                >
+                  ↓ Download Extension (.zip)
+                </a>
               </div>
             </div>
           </div>
