@@ -1962,6 +1962,11 @@ async function handleTailorAndFill(job) {
     tailoredResult,
     resumeBlobUrl,
     matchScore: tailoredResult.matchScore,
+    // [AutoQA fix 2026-04-11] Include resumeKey so ATS content script can store it on
+    // the page (window.__autoapply_resumeKey) and always download the correct resume.
+    // Without this, _downloadResumeForPage() couldn't determine which map entry
+    // belonged to the current tab and fell back to the previous job's global PDF.
+    resumeKey,
   };
 }
 

@@ -571,8 +571,8 @@ function DashboardPage() {
                     </p>
                     <p className="text-[11px] text-neutral-400">
                       {parsedResumeSummary
-                        ? parsedResumeSummary.jobCount > 0
-                          ? `${parsedResumeSummary.jobCount} role${parsedResumeSummary.jobCount !== 1 ? "s" : ""} found`
+                        ? (pipelineParsedResume?.experience?.length || parsedResumeSummary.jobCount) > 0
+                          ? `${pipelineParsedResume?.experience?.length || parsedResumeSummary.jobCount} role${(pipelineParsedResume?.experience?.length || parsedResumeSummary.jobCount) !== 1 ? "s" : ""} found`
                           : "Resume ready"
                         : "Not uploaded"}
                     </p>
@@ -910,7 +910,10 @@ function DashboardPage() {
                 <p className="text-sm font-semibold text-neutral-900">Your Resume</p>
                 {parsedResumeSummary && (
                   <p className="text-[11px] text-neutral-400 mt-0.5">
-                    {parsedResumeSummary.name} · {parsedResumeSummary.jobCount} role{parsedResumeSummary.jobCount !== 1 ? "s" : ""}
+                    {/* [AutoQA fix 2026-04-11] Derive jobCount from live parsedResume data when
+                        parsedResumeSummary.jobCount is stale/zero (e.g. uploaded before Redis
+                        hydration was deployed, or summary stored without experience count). */}
+                    {parsedResumeSummary.name} · {(pipelineParsedResume?.experience?.length || parsedResumeSummary.jobCount)} role{(pipelineParsedResume?.experience?.length || parsedResumeSummary.jobCount) !== 1 ? "s" : ""}
                   </p>
                 )}
               </div>

@@ -13,6 +13,13 @@
 
   const AUTOAPPLY_URL = "https://autoapply-ai-delta.vercel.app";
 
+  // [AutoQA fix 2026-04-11] Per-page resume key — set when TAILOR_AND_FILL returns so
+  // _downloadResumeForPage() always downloads the resume tailored for THIS specific job,
+  // even in batch-apply mode where multiple tabs are open simultaneously.
+  // Previously, a race condition caused the ATS tab to fall back to the global
+  // tailoredResumePdf (the previous job's resume) before this job's tailoring was complete.
+  window.__autoapply_resumeKey = window.__autoapply_resumeKey || null;
+
   /** Download the tailored resume for the CURRENT page using its URL as the primary key. */
   function _downloadResumeForPage() {
     chrome.storage.local.get(["tailoredResumeMap"], (r) => {
@@ -24,6 +31,13 @@
         const co = (job.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
         const ti = (job.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
         return (co + "_" + ti) || "default";
+      }
+      // Priority 0: use the key stored when THIS tab's tailoring completed (most reliable)
+      if (window.__autoapply_resumeKey && map[window.__autoapply_resumeKey]) {
+        console.log("AutoApply: Downloading by page-specific resumeKey:", window.__autoapply_resumeKey);
+        const entry = map[window.__autoapply_resumeKey];
+        chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: entry.jobUrl || window.location.href } });
+        return;
       }
       // Priority 1: exact page URL key
       const pageKey = _mk({ applyUrl: window.location.href });
@@ -781,7 +795,15 @@
         job: { ...pendingJob, jobDescription },
       }, 90000).then(r => {
         if (r?.error) { console.error("AutoApply: Tailoring error:", r.error); try { AALog && AALog.error("ats.tailor.error", { error: r.error, ms: Date.now() - _tailorStart }); } catch(_){} }
-        else { try { AALog && AALog.api("ats.tailor.response", { ms: Date.now() - _tailorStart, keys: r?.tailoredResult ? Object.keys(r.tailoredResult) : [], hasResult: !!r?.tailoredResult }); } catch(_){} }
+        else {
+          try { AALog && AALog.api("ats.tailor.response", { ms: Date.now() - _tailorStart, keys: r?.tailoredResult ? Object.keys(r.tailoredResult) : [], hasResult: !!r?.tailoredResult }); } catch(_){}
+          // [AutoQA fix 2026-04-11] Store the resume key for THIS page so _downloadResumeForPage()
+          // always downloads the correct resume even when multiple jobs are being applied in batch.
+          if (r?.resumeKey) {
+            window.__autoapply_resumeKey = r.resumeKey;
+            console.log("AutoApply: Stored page-specific resumeKey:", r.resumeKey);
+          }
+        }
         return r;
       }).catch(err => {
         console.error("AutoApply: Tailoring failed:", err.message);
@@ -1256,6 +1278,7 @@
         { labels: ["preferred name", "nickname", "what should we call you"], value: user.preferredName },
         { labels: ["pronoun", "pronouns", "preferred pronoun"], value: user.pronouns },
         { labels: ["city", "location", "address", "city, province", "city, state"], value: user.province ? `Vancouver, ${user.province}, Canada` : "" },
+        { labels: ["country", "country of residence", "country/region"], value: user.country || "Canada" },
         { labels: ["current company", "current employer", "company name", "current organization", "employer"], value: user.currentCompany },
         { labels: ["how did you hear", "how did you find", "where did you hear", "referral source"], value: user.howDidYouHear },
         // Salary expectation — fill with max pay from JD, fallback to profile value
@@ -1276,6 +1299,13 @@
       // Province/territory dropdown — try select element first, then text input
       const provinceValue = user.province || "British Columbia";
       if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, doc)) {
+        filled++;
+      }
+
+      // [AutoQA fix 2026-04-11] Country dropdown — was never handled in fillGenericForm,
+      // causing the "Country" select to remain on "Select" (unfilled) on many ATS forms.
+      const countryValue = user.country || "Canada";
+      if (fillSelectByLabel(["country", "country of residence", "country/region", "country of work", "work country"], countryValue, doc)) {
         filled++;
       }
 
