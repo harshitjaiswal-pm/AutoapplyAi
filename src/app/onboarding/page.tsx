@@ -282,28 +282,23 @@ function OnboardingContent() {
               </p>
             </div>
 
-            {/* Early access notice — replace this block once the extension is live on the Chrome Web Store */}
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex gap-3">
-              <span className="text-amber-500 text-lg leading-none mt-0.5">⚠</span>
-              <div>
-                <p className="text-[13px] font-semibold text-amber-800">Early access — not on the Chrome Web Store yet</p>
-                <p className="text-[12px] text-amber-700 mt-0.5">
-                  AutoApply is currently in private beta. The Chrome Web Store listing is pending review.
-                  To get the extension now, reach out and we&apos;ll send you the install file directly.
-                </p>
-                <a
-                  href="mailto:harshit.schulich@gmail.com?subject=AutoApply%20Beta%20Access&body=Hi%2C%20I%27d%20like%20to%20get%20early%20access%20to%20the%20AutoApply%20Chrome%20extension."
-                  className="inline-block mt-2 text-[12px] font-semibold text-amber-800 underline underline-offset-2 hover:text-amber-900"
-                >
-                  Request access →
-                </a>
-              </div>
-            </div>
+            {/* Direct download — replace with Chrome Web Store link once the listing is live */}
+            <a
+              href="/autoapply-extension.zip"
+              download="autoapply-extension.zip"
+              className="flex items-center justify-center gap-2.5 w-full bg-indigo-600 text-white text-[15px] font-semibold py-4 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-colors shadow-lg shadow-indigo-200"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="1.5" opacity="0.4"/>
+                <path d="M12 8v8M8 12l4 4 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Download AutoApply Extension
+            </a>
 
             <div className="rounded-xl border border-neutral-100 divide-y divide-neutral-100">
-              <InstallStep num="1" text="Request access above — we'll send you the extension file." />
-              <InstallStep num="2" text='Go to chrome://extensions, enable "Developer mode" (top right), click "Load unpacked", and select the folder we send you.' />
-              <InstallStep num="3" text='Pin AutoApply from the extensions toolbar (puzzle piece icon). You&apos;re done.' />
+              <InstallStep num="1" text="Download the zip above and unzip it to a permanent folder on your computer (don't delete it after)." />
+              <InstallStep num="2" text='Open Chrome and go to chrome://extensions. Turn on "Developer mode" (top-right toggle), then click "Load unpacked" and select the unzipped folder.' />
+              <InstallStep num="3" text='Pin AutoApply from the extensions toolbar (puzzle piece icon), then come back here and continue.' />
             </div>
 
             <div className="flex gap-3">
