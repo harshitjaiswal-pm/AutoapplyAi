@@ -3271,7 +3271,6 @@
             newBtn.addEventListener("click", () => {
               _downloadResumeForPage();
               newBtn.textContent = "↓ Download again"; newBtn.disabled = false;
-              });
             });
           });
         }, 2000);
