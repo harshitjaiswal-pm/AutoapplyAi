@@ -1,6 +1,6 @@
-/** @version 2026-04-11-v16-unthrottled-timeout */
+/** @version 2026-04-12-v17-city-fix */
 // Version stamp visible from page JS via data attribute
-document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-timeout';
+document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
 /**
  * CONTENT SCRIPT — Runs on LinkedIn job search pages.
  *
@@ -16,7 +16,7 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
  */
 
 (() => {
-  const SCRIPT_VERSION = "2.4.5-v16-unthrottled-timeout";
+  const SCRIPT_VERSION = "2.4.6-v17-city-fix";
 
   // Version-aware injection guard: always re-inject when version changes.
   // If a NEWER version arrives (programmatic injection after manifest cache),
@@ -1615,11 +1615,13 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
                     || inp.id?.includes("-numeric")
                     || inp.getAttribute("aria-describedby")?.includes("-numeric");
                   const inpHint = (getInputLabel(modal, inp) + " " + (inp.placeholder || "")).toLowerCase();
-                  const isCityField = /city|town|municipality/.test(inpHint);
+                  const isCityField = /city|town|municipality|\blocation\b/.test(inpHint);
                   const _ffRawCity = job?.location ? job.location.split(',')[0].trim() : "";
-                  const _ffNotReal = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|greater \w+ area)$/i;
-                  const _ffCityOk  = _ffRawCity && _ffRawCity.toLowerCase() !== (job?.company || "").toLowerCase() && !_ffNotReal.test(_ffRawCity);
-                  const cityVal = profile.city || (_ffCityOk ? _ffRawCity : "") || "";
+                  const _ffNotReal = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|global)$/i;
+                  const _ffGreater = /^greater\s+(\w[\w\s]*?)\s+area$/i;
+                  const _ffExtracted = _ffGreater.test(_ffRawCity) ? _ffRawCity.match(_ffGreater)[1].trim() : _ffRawCity;
+                  const _ffCityOk  = _ffExtracted && _ffExtracted.toLowerCase() !== (job?.company || "").toLowerCase() && !_ffNotReal.test(_ffExtracted);
+                  const cityVal = profile.city || (_ffCityOk ? _ffExtracted : "") || "";
                   // For GEO-LOCATION typeahead fields, use the typeahead filler; otherwise main-world fill
                   const inpIsTypeahead = inp.getAttribute('role') === 'combobox' || inp.getAttribute('aria-autocomplete') === 'list';
                   if (isCityField && inpIsTypeahead && cityVal) {
@@ -1659,11 +1661,13 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
                     || inp.id?.includes("-numeric")
                     || inp.getAttribute("aria-describedby")?.includes("-numeric");
                   const inpHint = (getInputLabel(modal, inp) + " " + (inp.placeholder || "")).toLowerCase();
-                  const isCityField = /city|town|municipality/.test(inpHint);
+                  const isCityField = /city|town|municipality|\blocation\b/.test(inpHint);
                   const _ffRawCity = job?.location ? job.location.split(',')[0].trim() : "";
-                  const _ffNotReal = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|greater \w+ area)$/i;
-                  const _ffCityOk  = _ffRawCity && _ffRawCity.toLowerCase() !== (job?.company || "").toLowerCase() && !_ffNotReal.test(_ffRawCity);
-                  const cityVal = profile.city || (_ffCityOk ? _ffRawCity : "") || "";
+                  const _ffNotReal = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|global)$/i;
+                  const _ffGreater = /^greater\s+(\w[\w\s]*?)\s+area$/i;
+                  const _ffExtracted = _ffGreater.test(_ffRawCity) ? _ffRawCity.match(_ffGreater)[1].trim() : _ffRawCity;
+                  const _ffCityOk  = _ffExtracted && _ffExtracted.toLowerCase() !== (job?.company || "").toLowerCase() && !_ffNotReal.test(_ffExtracted);
+                  const cityVal = profile.city || (_ffCityOk ? _ffExtracted : "") || "";
                   // For GEO-LOCATION typeahead fields, use the typeahead filler; otherwise main-world fill
                   const inpIsTypeahead = inp.getAttribute('role') === 'combobox' || inp.getAttribute('aria-autocomplete') === 'list';
                   if (isCityField && inpIsTypeahead && cityVal) {
@@ -1816,11 +1820,14 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
     const phone      = profile.phone || "";
     const _rawJobCity = job?.location ? job.location.split(',')[0].trim() : "";
     // Guard: don't use job.location city if it's the company name, a country, or a vague region
-    const _notRealCity = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|greater \w+ area)$/i;
-    const _jobCityOk  = _rawJobCity
-      && _rawJobCity.toLowerCase() !== (job?.company || "").toLowerCase()
-      && !_notRealCity.test(_rawJobCity);
-    const city        = profile.city || (_jobCityOk ? _rawJobCity : "") || "";
+    const _notRealCity = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|global)$/i;
+    const _greaterArea = /^greater\s+(\w[\w\s]*?)\s+area$/i;
+    // Extract real city from "Greater X Area" patterns (e.g. "Greater Toronto Area" → "Toronto")
+    const _extractedCity = _greaterArea.test(_rawJobCity) ? _rawJobCity.match(_greaterArea)[1].trim() : _rawJobCity;
+    const _jobCityOk  = _extractedCity
+      && _extractedCity.toLowerCase() !== (job?.company || "").toLowerCase()
+      && !_notRealCity.test(_extractedCity);
+    const city        = profile.city || (_jobCityOk ? _extractedCity : "") || "";
     const country    = profile.country || "Canada";
     const linkedinUrl = profile.linkedinUrl || profile.linkedin || "";
     const firstName  = profile.firstName || fullName.split(" ")[0] || "";
@@ -1832,8 +1839,13 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
     );
 
     for (const input of textInputs) {
-      // Skip if already filled and not a retry pass
-      if (!retryPass && input.value && input.value.trim().length > 0) continue;
+      // Skip if already filled and not a retry pass — EXCEPT if the pre-filled value
+      // looks like a company name in a city/location field (LinkedIn/Greenhouse sometimes
+      // pre-fill the company name into location fields)
+      const _prefilled = (input.value || "").trim();
+      const _prefilledIsCompanyName = _prefilled && job?.company
+        && _prefilled.toLowerCase() === (job.company || "").toLowerCase();
+      if (!retryPass && _prefilled.length > 0 && !_prefilledIsCompanyName) continue;
 
       const label = getInputLabel(modal, input).toLowerCase();
       const placeholder = (input.placeholder || "").toLowerCase();
@@ -1847,7 +1859,7 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
       else if (hint.match(/\bfull.?name\b|your name/)) value = fullName;
       else if (hint.includes("email"))                 value = email;
       else if (hint.match(/phone|mobile|cell/))        value = phone;
-      else if (hint.match(/city|town|municipality/))   value = city;
+      else if (hint.match(/city|town|municipality|\bcurrent.?location\b|\byour.?location\b|\blocation\b/))   value = city;
       else if (hint.match(/linkedin/))                 value = linkedinUrl;
       else if (hint.match(/website|portfolio|github/)) value = profile.portfolioUrl || profile.website || profile.github || "";
 
@@ -2402,7 +2414,7 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-
     if (title) title.textContent = job.title;
     if (detail) detail.textContent = `${job.company} — ${job.location}`;
     if (stats) stats.textContent = `${appliedCount} applied · ${skippedCount} skipped`;
-    if (bar) bar.style.width = `${Math.round((index / total) * 100)}%`;
+    if (bar) bar.style.width = `${Math.min(100, Math.round((index / total) * 100))}%`;
   }
 
   function hideProgressOverlay() {
