@@ -215,20 +215,35 @@
         jobTitle = headingText || "";
       }
 
-      // Extract company from URL (e.g., "autodesk" from "autodesk.wd1.myworkdayjobs.com")
-      const urlMatch = window.location.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com/i);
-      const company = urlMatch ? urlMatch[1] : "";
+      // Extract company from URL (e.g., "Autodesk" from "autodesk.wd1.myworkdayjobs.com")
+      const urlMatch = window.location.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com/i)
+                    || window.location.hostname.match(/^([a-z0-9-]+)\.myworkdayjobs\.com/i);
+      let company = urlMatch ? urlMatch[1] : "";
+      // Capitalize first letter of company name
+      if (company) company = company.charAt(0).toUpperCase() + company.slice(1);
 
-      if (jobTitle && company) {
+      // Also try to find company name from page meta/DOM for better accuracy
+      if (!company) {
+        const metaOrg = document.querySelector('meta[property="og:site_name"], meta[name="author"]');
+        if (metaOrg) company = metaOrg.getAttribute("content") || "";
+      }
+
+      // Scrape JD from the page for better tailoring
+      let jobDescription = "";
+      const descEl = document.querySelector('[data-automation-id="jobPostingDescription"]')
+                  || document.querySelector('[class*="jobDescription"], [class*="job-description"]');
+      if (descEl) jobDescription = descEl.innerText?.trim().substring(0, 6000) || "";
+
+      if (jobTitle || company) {
         return {
-          jobTitle: jobTitle,
-          company: company,
+          jobTitle: jobTitle || "Unknown Position",
+          company: company || "Unknown Company",
           jobUrl: window.location.href,
-          // User navigated directly — we don't have a full JD but the state machine will handle it gracefully
+          jobDescription,
         };
       }
 
-      LOG("Could not extract sufficient job info from page (title or company missing)");
+      LOG("Could not extract sufficient job info from page (title and company both missing)");
       return null;
     } catch (err) {
       LOG("Error extracting job info:", err.message);

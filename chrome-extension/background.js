@@ -264,9 +264,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "INJECT_GENERIC_HERE") {
     const tabId = sender.tab?.id;
     if (tabId) {
+      // Clear the injection guard first so generic.js can re-run on the same page
+      // (e.g., user clicks "Fill this form" a second time, or retries after an error)
       chrome.scripting.executeScript({
         target: { tabId },
-        files: ["logger.js", "ats/generic.js"],
+        func: () => { window.__autoapply_ats_injected = false; },
+      }).then(() => {
+        return chrome.scripting.executeScript({
+          target: { tabId },
+          files: ["logger.js", "ats/generic.js"],
+        });
       }).catch((err) => {
         console.warn("AutoApply BG: INJECT_GENERIC_HERE failed for tab", tabId, err.message);
       });

@@ -162,26 +162,28 @@
     const btn = document.createElement("div");
     btn.id = "aa-universal-btn";
     btn.style.cssText = `
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      z-index: 2147483647;
-      background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
-      color: #fff;
-      border-radius: 28px;
-      padding: 10px 18px 10px 14px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 4px 20px rgba(79,70,229,0.45);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      transition: transform 0.15s, box-shadow 0.15s;
-      user-select: none;
+      all: initial !important;
+      position: fixed !important;
+      bottom: 24px !important;
+      right: 24px !important;
+      z-index: 2147483647 !important;
+      background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%) !important;
+      color: #fff !important;
+      border-radius: 28px !important;
+      padding: 10px 18px 10px 14px !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+      font-size: 13px !important;
+      font-weight: 600 !important;
+      cursor: pointer !important;
+      box-shadow: 0 4px 20px rgba(79,70,229,0.45) !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 8px !important;
+      transition: transform 0.15s, box-shadow 0.15s !important;
+      user-select: none !important;
+      line-height: 1.4 !important;
     `;
-    btn.innerHTML = `<span style="font-size:16px;">A</span> Apply with AutoApply`;
+    btn.innerHTML = `<span style="font-size:16px !important;color:#fff !important;">A</span> <span style="color:#fff !important;">Apply with AutoApply</span>`;
     btn.onmouseenter = () => { btn.style.transform = "scale(1.04)"; btn.style.boxShadow = "0 6px 28px rgba(79,70,229,0.55)"; };
     btn.onmouseleave = () => { btn.style.transform = ""; btn.style.boxShadow = "0 4px 20px rgba(79,70,229,0.45)"; };
     btn.onclick = () => showScanPanel();
@@ -199,16 +201,21 @@
     const panel = document.createElement("div");
     panel.id = "aa-universal-panel";
     panel.style.cssText = `
-      position: fixed;
-      bottom: 80px;
-      right: 24px;
-      z-index: 2147483647;
-      background: #fff;
-      border-radius: 16px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.18);
-      width: 340px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      overflow: hidden;
+      all: initial !important;
+      position: fixed !important;
+      bottom: 80px !important;
+      right: 24px !important;
+      z-index: 2147483647 !important;
+      background: #fff !important;
+      border-radius: 16px !important;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.18) !important;
+      width: 340px !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+      overflow: hidden !important;
+      display: block !important;
+      color: #111 !important;
+      line-height: 1.4 !important;
+      font-size: 14px !important;
     `;
 
     panel.innerHTML = `
@@ -238,6 +245,11 @@
             flex:1;background:#4F46E5;color:#fff;border:none;border-radius:8px;
             padding:10px;font-size:13px;font-weight:600;cursor:pointer;
           ">Apply to this Job</button>
+          <button id="aa-panel-resume-dl" style="
+            display:none;background:linear-gradient(135deg,#4F46E5,#7C3AED);color:#fff;border:none;border-radius:8px;
+            padding:10px 12px;font-size:12px;font-weight:700;cursor:pointer;
+            box-shadow:0 2px 6px rgba(79,70,229,0.3);
+          ">↓ Resume</button>
           <button id="aa-panel-rescan" style="
             background:#F5F5F5;border:1px solid #E5E5E5;border-radius:8px;
             padding:10px 12px;font-size:12px;font-weight:500;cursor:pointer;color:#333;
@@ -252,6 +264,22 @@
     panel.querySelector("#aa-panel-close").onclick = () => panel.remove();
     panel.querySelector("#aa-panel-rescan").onclick = () => { panel.remove(); showScanPanel(); };
     panel.querySelector("#aa-panel-apply").onclick = () => triggerApply(job, panel);
+
+    // Show resume download button if a tailored PDF is available
+    const resumeDlBtn = panel.querySelector("#aa-panel-resume-dl");
+    if (resumeDlBtn) {
+      chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf"], (result) => {
+        const hasPdf = !!result.tailoredResumePdf || Object.keys(result.tailoredResumeMap || {}).length > 0;
+        if (hasPdf) {
+          resumeDlBtn.style.display = "inline-block";
+          resumeDlBtn.addEventListener("click", () => {
+            chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: window.location.href } });
+            resumeDlBtn.textContent = "↓ Downloading…";
+            setTimeout(() => { resumeDlBtn.textContent = "↓ Resume"; }, 2000);
+          });
+        }
+      });
+    }
   }
 
   function escHtml(str) {
@@ -310,12 +338,21 @@
       panel.remove();
       // Show the ATS banner and trigger generic fill
       showBannerOnPage("AutoApply is filling this form…", "ai");
+      // Set _aa_scrapeAndTailor flag so generic.js skips navigation and fills the current page directly
+      chrome.storage.local.set({ _aa_scrapeAndTailor: true });
       // Notify background to inject generic.js into this tab
       chrome.runtime.sendMessage({ type: "INJECT_GENERIC_HERE" });
       setTimeout(() => document.getElementById("aa-universal-btn")?.remove(), 500);
     } else {
-      if (statusEl) statusEl.textContent = "Ready — scroll to the Apply button and click it.";
-      applyBtn.textContent = "Stored";
+      // No form detected and same-page URL — still try injecting generic.js to fill whatever is there
+      if (statusEl) statusEl.textContent = "Looking for form fields on this page…";
+      applyBtn.textContent = "Filling…";
+      panel.remove();
+      showBannerOnPage("AutoApply is scanning this page for form fields…", "ai");
+      // Force-fill mode: skip navigation logic in generic.js
+      chrome.storage.local.set({ _aa_scrapeAndTailor: true });
+      chrome.runtime.sendMessage({ type: "INJECT_GENERIC_HERE" });
+      setTimeout(() => document.getElementById("aa-universal-btn")?.remove(), 500);
     }
   }
 
@@ -326,14 +363,14 @@
     if (!banner) {
       banner = document.createElement("div");
       banner.id = "autoapply-banner";
-      banner.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:2147483647;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:10px 18px;box-shadow:0 4px 20px rgba(0,0,0,0.2);`;
+      banner.style.cssText = `all:initial !important;position:fixed !important;top:0 !important;left:0 !important;right:0 !important;z-index:2147483647 !important;color:#fff !important;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif !important;padding:10px 18px !important;box-shadow:0 4px 20px rgba(0,0,0,0.2) !important;display:block !important;line-height:1.4 !important;`;
       document.body.prepend(banner);
     }
     const bg = type === "error" ? "linear-gradient(135deg,#B91C1C,#DC2626)"
               : type === "user"  ? "linear-gradient(135deg,#B45309,#D97706)"
               : "linear-gradient(135deg,#4F46E5,#7C3AED)";
     banner.style.background = bg;
-    banner.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:11px;font-weight:600;background:rgba(255,255,255,0.18);border-radius:5px;padding:2px 8px;letter-spacing:0.2px;white-space:nowrap;">✦ AutoApply</span><span style="font-size:13px;font-weight:500;">${message}</span></div>`;
+    banner.innerHTML = `<div style="display:flex !important;align-items:center !important;gap:8px !important;"><span style="font-size:11px !important;font-weight:600 !important;background:rgba(255,255,255,0.18) !important;border-radius:5px !important;padding:2px 8px !important;letter-spacing:0.2px !important;white-space:nowrap !important;color:#fff !important;">✦ AutoApply</span><span style="font-size:13px !important;font-weight:500 !important;color:#fff !important;">${message}</span></div>`;
   }
 
   /* ── Boot ─────────────────────────────────────────────────────────────── */

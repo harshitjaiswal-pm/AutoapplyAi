@@ -16,7 +16,7 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
  */
 
 (() => {
-  const SCRIPT_VERSION = "2.4.6-v17-city-fix";
+  const SCRIPT_VERSION = "2.4.7-v18-resume-dl";
 
   // Version-aware injection guard: always re-inject when version changes.
   // If a NEWER version arrives (programmatic injection after manifest cache),
@@ -2306,6 +2306,36 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
   }
 
   /**
+   * Download the tailored resume for the most recently applied job.
+   * Uses tailoredResumeMap with the same keying logic as background.js handleDownloadResume().
+   */
+  function _downloadResumeFromPanel() {
+    chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename", "pendingApplication", "lastFilledJob"], (result) => {
+      const map = result.tailoredResumeMap || {};
+      // Try to find the most recent job's resume
+      const job = result.pendingApplication || result.lastFilledJob;
+      if (job) {
+        chrome.runtime.sendMessage({
+          type: "DOWNLOAD_RESUME",
+          job: { company: job.company, jobTitle: job.jobTitle, applyUrl: job.applyUrl || job.jobUrl },
+        });
+        return;
+      }
+      // Fallback: download whatever is in tailoredResumePdf
+      if (result.tailoredResumePdf) {
+        chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: {} });
+        return;
+      }
+      // Last resort: download first entry in the map
+      const keys = Object.keys(map);
+      if (keys.length > 0) {
+        const entry = map[keys[keys.length - 1]];
+        chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { company: entry.company, jobTitle: entry.jobTitle } });
+      }
+    });
+  }
+
+  /**
    * Render context-aware quick-action buttons above the Stop button.
    * Called from updateJobStatus, stopApplying, and renderJobList.
    */
@@ -2313,40 +2343,63 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
     const bar = document.getElementById("autoapply-action-bar");
     if (!bar) return;
 
-    if (!isApplying) {
-      // Not in a batch — show Re-Scan shortcut if jobs are stale
-      bar.style.display = scrapedJobs.length > 0 ? "flex" : "none";
-      bar.innerHTML = scrapedJobs.length > 0 ? `
+    // Check if any resume is available for download
+    chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf"], (result) => {
+      const hasPdf = !!result.tailoredResumePdf || Object.keys(result.tailoredResumeMap || {}).length > 0;
+      const resumeBtn = hasPdf ? `<button id="aa-action-resume-dl" style="
+        background:linear-gradient(135deg,#4F46E5,#7C3AED); border:none; border-radius:6px;
+        padding:6px 12px; font-size:11px; font-weight:700; cursor:pointer; color:#fff;
+        box-shadow:0 2px 6px rgba(79,70,229,0.3);
+      ">↓ Resume</button>` : "";
+
+      if (!isApplying) {
+        // Not in a batch — show Re-Scan shortcut + resume download if available
+        bar.style.display = (scrapedJobs.length > 0 || hasPdf) ? "flex" : "none";
+        bar.innerHTML = `${scrapedJobs.length > 0 ? `
+          <button id="aa-action-rescan" style="
+            flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
+            padding:6px 10px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
+          ">Re-Scan Page</button>` : ""}${resumeBtn}`;
+        const rescanBtn = document.getElementById("aa-action-rescan");
+        if (rescanBtn) rescanBtn.addEventListener("click", requestReScan);
+        document.getElementById("aa-action-resume-dl")?.addEventListener("click", () => {
+          _downloadResumeFromPanel();
+          const btn = document.getElementById("aa-action-resume-dl");
+          if (btn) btn.textContent = "↓ Downloading…";
+          setTimeout(() => { if (btn) btn.textContent = "↓ Resume"; }, 2000);
+        });
+        return;
+      }
+
+      // During a batch run — show skip + resume download + optional retry
+      const applyingJob = scrapedJobs.find(j => j.status === "applying");
+      const hasFailedJob = scrapedJobs.some(j => j.status === "failed");
+
+      bar.style.display = "flex";
+      bar.innerHTML = `
+        <button id="aa-action-skip" style="
+          flex:1; background:#FEF3C7; border:1px solid #FCD34D; border-radius:6px;
+          padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#92400E;
+          ${applyingJob ? "" : "opacity:0.4;pointer-events:none;"}
+        ">⏭ Skip Job</button>
+        ${resumeBtn}
         <button id="aa-action-rescan" style="
           flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
-          padding:6px 10px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
-        ">Re-Scan Page</button>` : "";
-      const rescanBtn = document.getElementById("aa-action-rescan");
-      if (rescanBtn) rescanBtn.addEventListener("click", requestReScan);
-      return;
-    }
+          padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
+        ">Re-Scan</button>
+      `;
 
-    // During a batch run — show skip + optional retry
-    const applyingJob = scrapedJobs.find(j => j.status === "applying");
-    const hasFailedJob = scrapedJobs.some(j => j.status === "failed");
-
-    bar.style.display = "flex";
-    bar.innerHTML = `
-      <button id="aa-action-skip" style="
-        flex:1; background:#FEF3C7; border:1px solid #FCD34D; border-radius:6px;
-        padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#92400E;
-        ${applyingJob ? "" : "opacity:0.4;pointer-events:none;"}
-      ">⏭ Skip Job</button>
-      <button id="aa-action-rescan" style="
-        flex:1; background:#F5F5F5; border:1px solid #E5E5E5; border-radius:6px;
-        padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer; color:#374151;
-      ">Re-Scan</button>
-    `;
-
-    document.getElementById("aa-action-skip")?.addEventListener("click", () => {
-      if (applyingJob) requestSkip();
+      document.getElementById("aa-action-skip")?.addEventListener("click", () => {
+        if (applyingJob) requestSkip();
+      });
+      document.getElementById("aa-action-resume-dl")?.addEventListener("click", () => {
+        _downloadResumeFromPanel();
+        const btn = document.getElementById("aa-action-resume-dl");
+        if (btn) btn.textContent = "↓ Downloading…";
+        setTimeout(() => { if (btn) btn.textContent = "↓ Resume"; }, 2000);
+      });
+      document.getElementById("aa-action-rescan")?.addEventListener("click", requestReScan);
     });
-    document.getElementById("aa-action-rescan")?.addEventListener("click", requestReScan);
   }
 
   /* ─────────────────────── UI ─────────────────────── */
@@ -2389,6 +2442,12 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 12px;">
+          <button id="progress-resume-dl" style="
+            display:none; border:none; border-radius:6px; padding:5px 12px;
+            font-size:11px; font-weight:700; cursor:pointer;
+            background:rgba(255,255,255,0.95); color:#4F46E5;
+            box-shadow:0 1px 4px rgba(0,0,0,0.15);
+          ">↓ Resume</button>
           <span style="font-size: 11px; color: rgba(255,255,255,0.8);" id="progress-stats"></span>
         </div>
       </div>
@@ -2415,6 +2474,25 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
     if (detail) detail.textContent = `${job.company} — ${job.location}`;
     if (stats) stats.textContent = `${appliedCount} applied · ${skippedCount} skipped`;
     if (bar) bar.style.width = `${Math.min(100, Math.round((index / total) * 100))}%`;
+
+    // Show/hide resume download button based on whether a PDF is available
+    const resumeDlBtn = document.getElementById("progress-resume-dl");
+    if (resumeDlBtn) {
+      chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf"], (result) => {
+        const hasPdf = !!result.tailoredResumePdf || Object.keys(result.tailoredResumeMap || {}).length > 0;
+        resumeDlBtn.style.display = hasPdf ? "inline-block" : "none";
+      });
+      // Wire handler only once
+      if (!resumeDlBtn._wired) {
+        resumeDlBtn._wired = true;
+        resumeDlBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          _downloadResumeFromPanel();
+          resumeDlBtn.textContent = "↓ Downloading…";
+          setTimeout(() => { resumeDlBtn.textContent = "↓ Resume"; }, 2000);
+        });
+      }
+    }
   }
 
   function hideProgressOverlay() {

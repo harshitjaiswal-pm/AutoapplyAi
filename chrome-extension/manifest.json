@@ -47,8 +47,12 @@
       "matches": [
         "https://*.myworkdayjobs.com/*",
         "https://*.wd1.myworkdayjobs.com/*",
+        "https://*.wd2.myworkdayjobs.com/*",
         "https://*.wd3.myworkdayjobs.com/*",
-        "https://*.wd5.myworkdayjobs.com/*"
+        "https://*.wd4.myworkdayjobs.com/*",
+        "https://*.wd5.myworkdayjobs.com/*",
+        "https://*.wd10.myworkdayjobs.com/*",
+        "https://*.wd12.myworkdayjobs.com/*"
       ],
       "js": ["logger.js", "ats/workday.js"],
       "run_at": "document_idle"
