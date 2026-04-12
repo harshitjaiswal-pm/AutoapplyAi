@@ -1584,21 +1584,37 @@ function injectFloatingTrigger(tabId) {
 
             setStatus("Tailoring resume…");
 
-            // Fire the request IMMEDIATELY — no artificial delay
-            chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
+            // [AutoQA fix 2026-04-11] Was incorrectly sending DOWNLOAD_RESUME (which
+            // just downloads an existing PDF — silently does nothing when none exists).
+            // Must send TAILOR_AND_FILL to actually generate the tailored resume PDF.
+            const jobForTailor = {
+              ...(jobInfo || {}),
+              applyUrl: jobInfo?.applyUrl || jobInfo?.jobUrl || window.location.href,
+            };
+            chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: jobForTailor }, (r) => {
               clearInterval(tickInterval);
-              // Snap bar to 100% then finish
               if (barEl) { barEl.style.transition = "width 0.4s ease-out"; barEl.style.width = "100%"; }
-              if (phaseEl) phaseEl.textContent = "Downloading!";
-              if (timeEl) timeEl.textContent = elapsed + "s";
-              setStatus(`Done in ${elapsed}s — check downloads!`);
-              btn.style.opacity = "";
-              btn.style.pointerEvents = "";
-              delete btn.dataset.counting;
-              setTimeout(() => {
-                sublabelEl.textContent = "Creates resume PDF for this role";
-                setStatus("");
-              }, 4000);
+              if (r?.error || !r?.tailoredResult) {
+                if (phaseEl) phaseEl.textContent = "Failed — try again";
+                if (phaseEl) phaseEl.style.color = "#DC2626";
+                setStatus("Tailoring failed");
+                btn.style.opacity = "";
+                btn.style.pointerEvents = "";
+                delete btn.dataset.counting;
+                setTimeout(() => { sublabelEl.textContent = "Generate a tailored PDF for this role"; setStatus(""); }, 4000);
+              } else {
+                if (phaseEl) phaseEl.textContent = "Done! Downloading…";
+                if (timeEl) timeEl.textContent = elapsed + "s";
+                setStatus(`✓ Resume ready — downloading!`);
+                // Trigger the download now that we have the PDF
+                chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobForTailor });
+                btn.style.opacity = "";
+                btn.style.pointerEvents = "";
+                delete btn.dataset.counting;
+                setTimeout(() => { sublabelEl.textContent = "Your AI-customised resume PDF"; setStatus(""); }, 5000);
+                // Rebuild panel so the ↓ Download button replaces this Tailor button
+                setTimeout(() => buildPanel(), 1000);
+              }
             });
 
             // Tick every second: update elapsed, phase label, and bar width
