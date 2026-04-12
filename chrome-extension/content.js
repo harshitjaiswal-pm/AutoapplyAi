@@ -467,9 +467,12 @@
     const beforeLower = beforeSnapshot.toLowerCase();
     const titleFirst20already = (job.title || "").toLowerCase().substring(0, 20);
     const companyFirst15already = (job.company || "").toLowerCase().substring(0, 15);
+    // Require BOTH title AND company to match — OR caused false positives when
+    // two jobs share the same title (e.g. "Senior Product Manager" at Calculi AI
+    // would match Mighty Networks' "Senior Product Manager, Growth" card).
     const alreadyLoaded =
-      (titleFirst20already.length >= 4 && beforeLower.includes(titleFirst20already)) ||
-      (companyFirst15already.length >= 3 && beforeLower.includes(companyFirst15already));
+      titleFirst20already.length >= 4 && beforeLower.includes(titleFirst20already) &&
+      companyFirst15already.length >= 3 && beforeLower.includes(companyFirst15already);
     if (alreadyLoaded) {
       console.log(`AutoApply: Job "${job.title}" already in detail panel — skipping click`);
       try { AALog && AALog.nav("linkedin.clickCard.alreadyLoaded", { title: job.title }); } catch(_){}
@@ -1391,11 +1394,18 @@
       // Fire TAILOR_AND_FILL now so it runs while the form steps are being filled.
       // fillEasyApplyStep will poll storage for tailoredResumePdf when it hits
       // the resume upload field, waiting up to 90s for the API call to finish.
+      //
+      // Use the job-specific /jobs/view/<id>/ URL as the key — window.location.href
+      // on the LinkedIn search page is the same for ALL Easy Apply jobs, which would
+      // cause every job to share the same tailoredResumeMap entry.
+      const eaApplyUrl = job.linkedinJobId
+        ? `https://www.linkedin.com/jobs/view/${job.linkedinJobId}/`
+        : window.location.href;
       const tailorJob = {
         jobTitle:       job.title       || jobData?.jobTitle || "",
         company:        job.company     || jobData?.company  || "",
-        jobUrl:         window.location.href,
-        applyUrl:       window.location.href,
+        jobUrl:         eaApplyUrl,
+        applyUrl:       eaApplyUrl,
         jobDescription: jobData?.jobDescription || "",
         source:         "linkedin_easy_apply",
       };
@@ -1431,16 +1441,21 @@
           console.log("AutoApply EasyApply: All fields filled — waiting for user to click Submit");
           try { AALog && AALog.state("linkedin.easyApply.readyToSubmit", { title: job.title, company: job.company }); } catch(_){}
 
-          // Trigger resume tailoring in the background while user reviews the form
-          const tailorJob = {
-            jobTitle:       job.title       || jobData?.jobTitle || "",
-            company:        job.company     || jobData?.company  || "",
-            jobUrl:         window.location.href,
-            applyUrl:       window.location.href,
-            jobDescription: jobData?.jobDescription || "",
-            source:         "linkedin_easy_apply",
-          };
-          chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: tailorJob }, () => {});
+          // Set lastFilledJob so the floating pill shows the ↓ Download Resume button.
+          // Tailoring was already kicked off at the start of handleEasyApply — no need
+          // to send TAILOR_AND_FILL again here. The PDF will appear in the pill as soon
+          // as the background API call completes.
+          chrome.storage.local.set({
+            lastFilledJob: {
+              id:             job.id || "",
+              jobTitle:       job.title       || jobData?.jobTitle || "",
+              company:        job.company     || jobData?.company  || "",
+              jobUrl:         eaApplyUrl,
+              applyUrl:       eaApplyUrl,
+              jobDescription: jobData?.jobDescription || "",
+              filledAt:       new Date().toISOString(),
+            },
+          });
 
           // Pulse the Submit button so the user can spot it immediately
           submitBtn.style.transition = "box-shadow 0.4s ease-in-out";
