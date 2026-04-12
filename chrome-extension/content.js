@@ -1,3 +1,6 @@
+/** @version 2026-04-11-v4 */
+// Version stamp visible from page JS via data attribute
+document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
 /**
  * CONTENT SCRIPT — Runs on LinkedIn job search pages.
  *
@@ -1703,6 +1706,10 @@
 
       // Generic short answer — skip (needs AI, handled below via textarea detection)
 
+      // DEBUG: stamp hint/value onto DOM so page JS can read it
+      document.documentElement.dataset.aaLastHint = hint.substring(0, 80);
+      document.documentElement.dataset.aaLastValue = String(value);
+
       if (value !== null && value !== "") {
         easyApplySetValue(input, value);
       }
@@ -1710,8 +1717,13 @@
       // Final fallback: any number input still empty after all rules → fill with "1"
       // Handles niche/specialized fields like "years with Dedicated Hosting PM" where
       // our hint patterns don't match but LinkedIn requires a decimal > 0.
-      if ((value === null || value === "") && input.type === "number" && !input.value?.trim()) {
-        easyApplySetValue(input, "1");
+      // For type="text" fields with numeric validation, also fill with "5".
+      if ((value === null || value === "") && !input.value?.trim()) {
+        if (input.type === "number") {
+          easyApplySetValue(input, "1");
+        } else if (input.id?.includes("-numeric") || input.getAttribute("aria-describedby")?.includes("-numeric")) {
+          easyApplySetValue(input, "5");
+        }
       }
     }
 
