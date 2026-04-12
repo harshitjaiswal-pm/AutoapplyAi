@@ -1445,7 +1445,10 @@
       chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: tailorJob }, () => {});
 
       let stepCount = 0;
-      const MAX_STEPS = 12;
+      const MAX_STEPS = 15; // Allow up to 15 actual modal pages
+      let lastStepLabel = "";
+      let sameStepStreak = 0;
+      const MAX_SAME_STEP = 3; // Bail if stuck on same step 3× in a row
 
       while (stepCount < MAX_STEPS) {
         stepCount++;
@@ -1453,6 +1456,19 @@
 
         // Fill all fields on the current step
         const stepLabel = getEasyApplyStepLabel(modal);
+
+        // Stuck-step detection: if the modal isn't advancing, bail early
+        if (stepLabel === lastStepLabel && stepLabel !== "filling…") {
+          sameStepStreak++;
+          if (sameStepStreak >= MAX_SAME_STEP) {
+            console.error(`AutoApply EasyApply: Stuck on step "${stepLabel}" after ${sameStepStreak} retries — aborting`);
+            try { AALog && AALog.error("linkedin.easyApply.stuckStep", { stepLabel, stepCount, title: job.title }); } catch(_){}
+            break;
+          }
+        } else {
+          sameStepStreak = 0;
+          lastStepLabel = stepLabel;
+        }
         updateJobStatus(job.id, "applying", `Easy Apply — ${stepLabel}`);
         console.log(`AutoApply EasyApply: Step ${stepCount} — ${stepLabel}`);
         try { AALog && AALog.state("linkedin.easyApply.step", { step: stepCount, label: stepLabel, title: job.title }); } catch(_){}
@@ -1525,6 +1541,23 @@
             // Attempt a second fill pass for any fields still empty
             await fillEasyApplyStep(modal, profile, stored, job, jobData, true);
             await new Promise(r => setTimeout(r, 400));
+
+            // If errors still persist after retry pass, force-fill all remaining
+            // empty required inputs with safe fallback values so we don't loop forever.
+            const stillErrors = getEasyApplyErrors(modal);
+            if (stillErrors.length > 0) {
+              console.warn("AutoApply EasyApply: Errors persist — force-filling remaining empty fields");
+              for (const inp of modal.querySelectorAll(
+                "input[type='number'], input[type='text'][required], input[required]:not([type='radio']):not([type='checkbox']):not([type='file'])"
+              )) {
+                if (!inp.value?.trim()) {
+                  // Number inputs need a value > 0; text inputs get a placeholder
+                  const fallback = (inp.type === "number") ? "1" : "N/A";
+                  easyApplySetValue(inp, fallback);
+                }
+              }
+              await new Promise(r => setTimeout(r, 400));
+            }
           }
           nextBtn.click();
           continue;
@@ -1658,14 +1691,27 @@
       else if (hint.match(/linkedin/))                 value = linkedinUrl;
       else if (hint.match(/website|portfolio|github/)) value = profile.portfolioUrl || profile.website || profile.github || "";
 
-      // Numeric / years
-      else if (hint.match(/years.*(experience|exp)\b/)) value = profile.yearsExperience || "5";
+      // Numeric / years — broad pattern to catch all LinkedIn "how many years..." variants:
+      // "years of experience", "years of PM experience", "years with X Product Management",
+      // "years working for X", "years in X", "how many years X"
+      else if (hint.match(/\byears?\b.*\b(experience|exp|management|working|hosting|cloud|software|product|industry|field|practice)\b/i)
+            || hint.match(/\bhow many years\b/i)
+            || hint.match(/\byears?\s+of\b/i)) {
+        value = profile.yearsExperience || "5";
+      }
       else if (hint.match(/salary|compensation|expected|desired/)) value = "";
 
       // Generic short answer — skip (needs AI, handled below via textarea detection)
 
       if (value !== null && value !== "") {
         easyApplySetValue(input, value);
+      }
+
+      // Final fallback: any number input still empty after all rules → fill with "1"
+      // Handles niche/specialized fields like "years with Dedicated Hosting PM" where
+      // our hint patterns don't match but LinkedIn requires a decimal > 0.
+      if ((value === null || value === "") && input.type === "number" && !input.value?.trim()) {
+        easyApplySetValue(input, "1");
       }
     }
 
