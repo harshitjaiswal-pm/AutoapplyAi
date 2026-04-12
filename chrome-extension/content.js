@@ -1,6 +1,6 @@
-/** @version 2026-04-11-v4 */
+/** @version 2026-04-11-v16-unthrottled-timeout */
 // Version stamp visible from page JS via data attribute
-document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
+document.documentElement.dataset.aaContentVersion = '2026-04-11-v16-unthrottled-timeout';
 /**
  * CONTENT SCRIPT — Runs on LinkedIn job search pages.
  *
@@ -16,10 +16,17 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
  */
 
 (() => {
-  const SCRIPT_VERSION = "2.4.0";
+  const SCRIPT_VERSION = "2.4.5-v16-unthrottled-timeout";
 
-  // Version-aware injection guard: always re-inject when version changes
+  // Version-aware injection guard: always re-inject when version changes.
+  // If a NEWER version arrives (programmatic injection after manifest cache),
+  // tear down the old panel so the new code takes full ownership.
   if (window.__autoapply_injected === SCRIPT_VERSION) return;
+  if (window.__autoapply_injected && window.__autoapply_injected !== SCRIPT_VERSION) {
+    const oldPanel = document.getElementById('autoapply-panel');
+    if (oldPanel) oldPanel.remove();
+    console.log(`[AA-TAKEOVER] Replacing old instance v${window.__autoapply_injected} with v${SCRIPT_VERSION}`);
+  }
   window.__autoapply_injected = SCRIPT_VERSION;
   console.log(`AutoApply: Content script v${SCRIPT_VERSION} injecting...`);
 
@@ -201,7 +208,10 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
         continue;
       }
       if (!location) {
-        location = line.replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\uFE0F\u200D]+\s*/u, "").trim();
+        const cleanLoc = line.replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\uFE0F\u200D]+\s*/u, "").trim();
+        // Skip if this line is just the company name repeated (LinkedIn sometimes shows it twice)
+        if (cleanLoc.toLowerCase() === company.toLowerCase()) continue;
+        location = cleanLoc;
         break;
       }
     }
@@ -225,7 +235,32 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
     try {
       try { AALog && AALog.scrape("linkedin.jd.fetch.start", { jobId: linkedinJobId }); } catch(_){}
       const url = `https://www.linkedin.com/jobs/view/${linkedinJobId}/`;
-      const resp = await fetch(url, { credentials: "include" });
+      const _fetchController = new AbortController();
+      // MessageChannel watchdog — Chrome throttles setTimeout in background/covered
+      // windows (Cowork overlay causes tiny viewport), inflating 15s to 2+ min.
+      // MessageChannel posts are NOT subject to background throttling.
+      let _watchdogPort = null;
+      (function startWatchdog(controller, ms) {
+        const start = Date.now();
+        const mc = new MessageChannel();
+        _watchdogPort = mc.port1;
+        mc.port1.onmessage = function tick() {
+          if (controller.signal.aborted) { mc.port1.close(); return; }
+          if (Date.now() - start >= ms) {
+            controller.abort();
+            mc.port1.close();
+          } else {
+            mc.port2.postMessage(null);
+          }
+        };
+        mc.port2.postMessage(null);
+      })(_fetchController, 15000);
+      let resp;
+      try {
+        resp = await fetch(url, { credentials: "include", signal: _fetchController.signal });
+      } finally {
+        if (_watchdogPort) { _watchdogPort.close(); _watchdogPort = null; }
+      }
       if (!resp.ok) {
         try { AALog && AALog.error("linkedin.jd.fetch.httpError", { status: resp.status, jobId: linkedinJobId }); } catch(_){}
         return { description: null, applyUrl: null };
@@ -394,7 +429,8 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
    * Click a job card by its dismiss button index and wait for detail panel.
    * Falls back to matching by job title if the index has shifted.
    */
-  async function clickJobCard(job) {
+  async function clickJobCard(job, forceClick = false) {
+    console.log(`[AA-V10-DBG] clickJobCard title="${(job.title||'').slice(0,25)}" forceClick=${forceClick}`);
     let card = null;
 
     // --- Strategy A cards: li[data-occludable-job-id] ---
@@ -467,16 +503,20 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
     // Re-clicking an already-selected job card can trigger full-page navigation
     // on some LinkedIn job types (e.g. promoted Amazon listings) which kills
     // the content script before the confirmation modal can appear.
-    const beforeLower = beforeSnapshot.toLowerCase();
+    // IMPORTANT: Only check the first 250 chars (the visible header area) for both
+    // title and company. Using more of the panel text risks false positives where
+    // LinkedIn's sidebar "related jobs" or "similar companies" sections contain the
+    // target company name even though a different job is in the main panel.
+    const headerSnapshot = beforeSnapshot.toLowerCase().slice(0, 250);
     const titleFirst20already = (job.title || "").toLowerCase().substring(0, 20);
     const companyFirst15already = (job.company || "").toLowerCase().substring(0, 15);
-    // Require BOTH title AND company to match — OR caused false positives when
-    // two jobs share the same title (e.g. "Senior Product Manager" at Calculi AI
-    // would match Mighty Networks' "Senior Product Manager, Growth" card).
+    // Require BOTH title AND company to match in the header-only window.
     const alreadyLoaded =
-      titleFirst20already.length >= 4 && beforeLower.includes(titleFirst20already) &&
-      companyFirst15already.length >= 3 && beforeLower.includes(companyFirst15already);
-    if (alreadyLoaded) {
+      titleFirst20already.length >= 4 && headerSnapshot.includes(titleFirst20already) &&
+      companyFirst15already.length >= 3 && headerSnapshot.includes(companyFirst15already);
+    // v10 fix: forceClick bypasses alreadyLoaded so startApplying can always re-navigate
+    // to the correct job after the review modal (LinkedIn may have auto-navigated away).
+    if (alreadyLoaded && !forceClick) {
       console.log(`AutoApply: Job "${job.title}" already in detail panel — skipping click`);
       try { AALog && AALog.nav("linkedin.clickCard.alreadyLoaded", { title: job.title }); } catch(_){}
       await new Promise((r) => setTimeout(r, 400));
@@ -786,10 +826,12 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
     if (companyWordInHeader && titleMatch) return true;
     // Title match + company anywhere in broader page
     if (titleMatch && companyInPage) return true;
-    // Title first 3 words match in header (very specific) — accept alone
-    if (titleWordsMatch && titleFirstWords.length >= 15) return true;
+    // Title first 3 words match in header (very specific) — accept alone.
+    // Threshold raised to 22 to exclude generic 2-word titles like "Product Manager"
+    // (exactly 15 chars) which would otherwise false-match any PM job in the panel.
+    if (titleWordsMatch && titleFirstWords.length >= 22) return true;
     // Title alone when it's long and unique enough
-    if (titleMatch && titleFirst25.length >= 20) return true;
+    if (titleMatch && titleFirst25.length >= 22) return true;
     return false;
   }
 
@@ -1300,7 +1342,11 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
         // have changed the detail panel to a different job (e.g. a promoted listing
         // auto-selected by LinkedIn's SPA — this is what causes Fluxon to open for Clearco).
         updateJobStatus(job.id, "applying", "Opening application...");
-        await clickJobCard(job);
+        // v10 fix: forceClick=true so we always physically re-click the card after
+        // the review modal — LinkedIn may have auto-navigated the detail panel to
+        // a different job while the modal was open, and alreadyLoaded would have
+        // silently skipped the re-click, causing Apply to open the wrong job.
+        await clickJobCard(job, /* forceClick= */ true);
 
         // Verify the panel actually shows the right job before clicking Apply.
         // Poll up to 5 seconds in 300ms ticks instead of a fixed sleep.
@@ -1312,10 +1358,10 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
         }
 
         if (!panelReady) {
-          // One retry: re-click and wait again
+          // One retry: re-click (force) and wait again
           console.warn(`AutoApply: Panel not showing "${job.title}" — retrying card click`);
           try { AALog && AALog.error("linkedin.startApplying.panelMismatch", { title: job.title, company: job.company }); } catch(_){}
-          await clickJobCard(job);
+          await clickJobCard(job, /* forceClick= */ true);
           const retryDeadline = Date.now() + 4000;
           while (Date.now() < retryDeadline) {
             await new Promise((r) => setTimeout(r, 300));
@@ -1461,7 +1507,10 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
         const stepLabel = getEasyApplyStepLabel(modal);
 
         // Stuck-step detection: if the modal isn't advancing, bail early
-        if (stepLabel === lastStepLabel && stepLabel !== "filling…") {
+        // Note: "filling…" (no progress text, no h3) is treated like any other label —
+        // bailing after MAX_SAME_STEP consecutive "filling…" is correct and avoids
+        // the old infinite-loop bug where the exception let it run to MAX_STEPS.
+        if (stepLabel === lastStepLabel) {
           sameStepStreak++;
           if (sameStepStreak >= MAX_SAME_STEP) {
             console.error(`AutoApply EasyApply: Stuck on step "${stepLabel}" after ${sameStepStreak} retries — aborting`);
@@ -1532,7 +1581,59 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
         }
 
         if (reviewBtn) {
+          // Pre-Review force-fill: fill any empty numeric fields via MAIN world
+          // right before clicking Review. This ensures the field is filled LAST —
+          // after any radio-button re-renders that might have cleared it earlier.
+          for (const inp of modal.querySelectorAll(
+            'input[type="number"], input[id*="-numeric"], input[aria-describedby*="-numeric"]'
+          )) {
+            if (!inp.value?.trim()) {
+              const fallback = inp.type === "number" ? "1" : "5";
+              console.log("AutoApply EasyApply: Pre-Review force-filling numeric field:", inp.id?.slice(-50));
+              await easyApplySetValueMainWorld(inp, fallback);
+              await new Promise(r => setTimeout(r, 200));
+            }
+          }
           reviewBtn.click();
+          await new Promise(r => setTimeout(r, 600)); // let LinkedIn validate
+          // Check for validation errors AFTER clicking Review — same safety net as nextBtn
+          const reviewErrors = getEasyApplyErrors(modal);
+          if (reviewErrors.length > 0) {
+            console.warn("AutoApply EasyApply: Validation errors after Review click", stepCount, reviewErrors);
+            // Retry fill pass
+            await fillEasyApplyStep(modal, profile, stored, job, jobData, true);
+            await new Promise(r => setTimeout(r, 400));
+            // Force-fill any still-empty required inputs
+            const stillReviewErrors = getEasyApplyErrors(modal);
+            if (stillReviewErrors.length > 0) {
+              console.warn("AutoApply EasyApply: Errors persist after Review retry — force-filling via main world");
+              for (const inp of modal.querySelectorAll(
+                "input[type='number'], input[type='text'][required], input[required]:not([type='radio']):not([type='checkbox']):not([type='file'])"
+              )) {
+                if (!inp.value?.trim()) {
+                  const isNumeric = inp.type === "number"
+                    || inp.id?.includes("-numeric")
+                    || inp.getAttribute("aria-describedby")?.includes("-numeric");
+                  const inpHint = (getInputLabel(modal, inp) + " " + (inp.placeholder || "")).toLowerCase();
+                  const isCityField = /city|town|municipality/.test(inpHint);
+                  const _ffRawCity = job?.location ? job.location.split(',')[0].trim() : "";
+                  const _ffNotReal = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|greater \w+ area)$/i;
+                  const _ffCityOk  = _ffRawCity && _ffRawCity.toLowerCase() !== (job?.company || "").toLowerCase() && !_ffNotReal.test(_ffRawCity);
+                  const cityVal = profile.city || (_ffCityOk ? _ffRawCity : "") || "";
+                  // For GEO-LOCATION typeahead fields, use the typeahead filler; otherwise main-world fill
+                  const inpIsTypeahead = inp.getAttribute('role') === 'combobox' || inp.getAttribute('aria-autocomplete') === 'list';
+                  if (isCityField && inpIsTypeahead && cityVal) {
+                    await fillGeoTypeahead(inp, cityVal);
+                  } else {
+                    const fallback = isNumeric ? (inp.type === "number" ? "1" : "5") : (isCityField ? cityVal : "N/A");
+                    if (fallback) await easyApplySetValueMainWorld(inp, fallback);
+                  }
+                }
+              }
+              await new Promise(r => setTimeout(r, 400));
+            }
+            reviewBtn.click(); // second attempt
+          }
           continue; // next iteration will see Submit button
         }
 
@@ -1549,17 +1650,42 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
             // empty required inputs with safe fallback values so we don't loop forever.
             const stillErrors = getEasyApplyErrors(modal);
             if (stillErrors.length > 0) {
-              console.warn("AutoApply EasyApply: Errors persist — force-filling remaining empty fields");
+              console.warn("AutoApply EasyApply: Errors persist — force-filling remaining empty fields via main world");
               for (const inp of modal.querySelectorAll(
                 "input[type='number'], input[type='text'][required], input[required]:not([type='radio']):not([type='checkbox']):not([type='file'])"
               )) {
                 if (!inp.value?.trim()) {
-                  // Number inputs need a value > 0; text inputs get a placeholder
-                  const fallback = (inp.type === "number") ? "1" : "N/A";
-                  easyApplySetValue(inp, fallback);
+                  const isNumeric = inp.type === "number"
+                    || inp.id?.includes("-numeric")
+                    || inp.getAttribute("aria-describedby")?.includes("-numeric");
+                  const inpHint = (getInputLabel(modal, inp) + " " + (inp.placeholder || "")).toLowerCase();
+                  const isCityField = /city|town|municipality/.test(inpHint);
+                  const _ffRawCity = job?.location ? job.location.split(',')[0].trim() : "";
+                  const _ffNotReal = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|greater \w+ area)$/i;
+                  const _ffCityOk  = _ffRawCity && _ffRawCity.toLowerCase() !== (job?.company || "").toLowerCase() && !_ffNotReal.test(_ffRawCity);
+                  const cityVal = profile.city || (_ffCityOk ? _ffRawCity : "") || "";
+                  // For GEO-LOCATION typeahead fields, use the typeahead filler; otherwise main-world fill
+                  const inpIsTypeahead = inp.getAttribute('role') === 'combobox' || inp.getAttribute('aria-autocomplete') === 'list';
+                  if (isCityField && inpIsTypeahead && cityVal) {
+                    await fillGeoTypeahead(inp, cityVal);
+                  } else {
+                    const fallback = isNumeric ? (inp.type === "number" ? "1" : "5") : (isCityField ? cityVal : "N/A");
+                    if (fallback) await easyApplySetValueMainWorld(inp, fallback);
+                  }
                 }
               }
               await new Promise(r => setTimeout(r, 400));
+            }
+          }
+          // Pre-Next force-fill: fill any empty numeric fields right before clicking Next
+          for (const inp of modal.querySelectorAll(
+            'input[type="number"], input[id*="-numeric"], input[aria-describedby*="-numeric"]'
+          )) {
+            if (!inp.value?.trim()) {
+              const fallback = inp.type === "number" ? "1" : "5";
+              console.log("AutoApply EasyApply: Pre-Next force-filling numeric field:", inp.id?.slice(-50));
+              await easyApplySetValueMainWorld(inp, fallback);
+              await new Promise(r => setTimeout(r, 200));
             }
           }
           nextBtn.click();
@@ -1616,8 +1742,12 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
 
   /** Human-readable step label from the modal progress text */
   function getEasyApplyStepLabel(modal) {
+    // Try progress/pagination element first, but only if it has readable text.
+    // LinkedIn uses CSS-only progress bars (no innerText) — fall through to h3.
     const prog = modal.querySelector('[class*="progress"], [class*="header-progress"], [class*="pagination"]');
-    if (prog) return prog.innerText.trim().replace(/\n/g, " ") || "filling…";
+    const progText = prog ? prog.innerText.trim().replace(/\n/g, " ") : "";
+    if (progText) return progText;
+    // Fall back to section heading (e.g. "Additional Questions", "Contact info")
     const h3 = modal.querySelector("h3");
     if (h3) return h3.innerText.trim().slice(0, 60);
     return "filling…";
@@ -1635,11 +1765,32 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
   /** Collect visible validation error messages from the current step */
   function getEasyApplyErrors(modal) {
     const errors = [];
+    // Standard error class selectors
     for (const el of modal.querySelectorAll('[class*="error"], [class*="invalid"], [aria-invalid="true"]')) {
       const t = el.innerText?.trim();
       if (t) errors.push(t);
     }
-    return errors;
+    // LinkedIn aria-describedby pattern: input's aria-describedby ends with "-error"
+    // e.g. id="...formElement-XXX-numeric-error" — contains the validation message text
+    for (const inp of modal.querySelectorAll('input[aria-describedby], textarea[aria-describedby]')) {
+      const errId = inp.getAttribute('aria-describedby');
+      if (errId) {
+        const errEl = document.getElementById(errId);
+        const t = errEl?.innerText?.trim();
+        if (t) errors.push(t);
+      }
+    }
+    // Also detect empty required -numeric fields directly (LinkedIn's decimal validator
+    // doesn't set aria-invalid — just check if a required numeric-style input is empty)
+    for (const inp of modal.querySelectorAll('input[required][type="text"], input[required][type="number"]')) {
+      if (!inp.value?.trim()) {
+        const isNumeric = inp.type === "number"
+          || inp.id?.includes("-numeric")
+          || inp.getAttribute("aria-describedby")?.includes("-numeric");
+        if (isNumeric) errors.push(`empty required numeric field: ${inp.id?.slice(-40)}`);
+      }
+    }
+    return [...new Set(errors)];
   }
 
   /** Check if the modal shows a success/confirmation state */
@@ -1663,7 +1814,13 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
     const fullName   = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
     const email      = profile.email || "";
     const phone      = profile.phone || "";
-    const city       = profile.city || "";
+    const _rawJobCity = job?.location ? job.location.split(',')[0].trim() : "";
+    // Guard: don't use job.location city if it's the company name, a country, or a vague region
+    const _notRealCity = /^(canada|usa|united states|united kingdom|australia|remote|anywhere|greater \w+ area)$/i;
+    const _jobCityOk  = _rawJobCity
+      && _rawJobCity.toLowerCase() !== (job?.company || "").toLowerCase()
+      && !_notRealCity.test(_rawJobCity);
+    const city        = profile.city || (_jobCityOk ? _rawJobCity : "") || "";
     const country    = profile.country || "Canada";
     const linkedinUrl = profile.linkedinUrl || profile.linkedin || "";
     const firstName  = profile.firstName || fullName.split(" ")[0] || "";
@@ -1711,7 +1868,17 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
       document.documentElement.dataset.aaLastValue = String(value);
 
       if (value !== null && value !== "") {
-        easyApplySetValue(input, value);
+        // City / municipality fields on LinkedIn are often GEO-LOCATION typeaheads
+        // (role="combobox" / aria-autocomplete="list"). Plain value-setting is rejected
+        // by LinkedIn's validator — must simulate typeahead interaction instead.
+        const isCityValue = hint.match(/city|town|municipality/);
+        const isTypeahead = input.getAttribute('role') === 'combobox'
+          || input.getAttribute('aria-autocomplete') === 'list';
+        if (isCityValue && isTypeahead && value) {
+          await fillGeoTypeahead(input, value);
+        } else {
+          easyApplySetValue(input, value);
+        }
       }
 
       // Final fallback: any number input still empty after all rules → fill with "1"
@@ -1720,9 +1887,11 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
       // For type="text" fields with numeric validation, also fill with "5".
       if ((value === null || value === "") && !input.value?.trim()) {
         if (input.type === "number") {
-          easyApplySetValue(input, "1");
+          // Use main-world fill for React-controlled numeric inputs
+          await easyApplySetValueMainWorld(input, "1");
         } else if (input.id?.includes("-numeric") || input.getAttribute("aria-describedby")?.includes("-numeric")) {
-          easyApplySetValue(input, "5");
+          // Use main-world fill: isolated world events don't reach React's fiber handlers
+          await easyApplySetValueMainWorld(input, "5");
         }
       }
     }
@@ -1832,6 +2001,26 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
         }
       }
     }
+
+    // ── Final re-verification pass ──────────────────────────────────────────
+    // Radio/checkbox clicks above can trigger React re-renders that reset
+    // controlled text inputs back to their empty state.
+    // CRITICAL: Wait for React to flush async re-renders BEFORE checking field values.
+    // Without this delay the re-verify runs before React re-renders, sees "5" in the
+    // field (still the pre-render value), skips it, then React wipes it moments later.
+    await new Promise(r => setTimeout(r, 500));
+    for (const inp of modal.querySelectorAll(
+      "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file'])"
+    )) {
+      if (inp.value?.trim()) continue; // still has value — skip
+      if (inp.type === "number") {
+        await easyApplySetValueMainWorld(inp, "1");
+        console.log("AutoApply EasyApply: Re-filled number input via main world:", inp.id?.substring(0, 60));
+      } else if (inp.id?.includes("-numeric") || inp.getAttribute("aria-describedby")?.includes("-numeric")) {
+        await easyApplySetValueMainWorld(inp, "5");
+        console.log("AutoApply EasyApply: Re-filled -numeric input via main world:", inp.id?.substring(0, 60));
+      }
+    }
   }
 
   /** Get the label text associated with a form input */
@@ -1873,6 +2062,101 @@ document.documentElement.dataset.aaContentVersion = '2026-04-11-v4';
     input.dispatchEvent(new Event("input",  { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     input.dispatchEvent(new Event("blur",   { bubbles: true }));
+  }
+
+  /**
+   * Fill a React-controlled input via the MAIN WORLD (background script bridge).
+   * Content scripts run in the isolated world — their synthetic events don't
+   * reliably reach React's fiber event handlers. The background runs the fill
+   * code via chrome.scripting.executeScript({ world: "MAIN" }) which has full
+   * access to React's patched prototype and event system.
+   * Falls back to easyApplySetValue if the input has no id or the call fails.
+   */
+  async function easyApplySetValueMainWorld(input, value) {
+    if (!input.id) {
+      easyApplySetValue(input, value);
+      return;
+    }
+    try {
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+          { type: "FILL_INPUT_MAIN_WORLD", inputId: input.id, value: String(value) },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              console.warn("AutoApply: FILL_INPUT_MAIN_WORLD error:", chrome.runtime.lastError.message);
+              easyApplySetValue(input, value); // fallback
+            } else if (response?.error) {
+              console.warn("AutoApply: FILL_INPUT_MAIN_WORLD remote error:", response.error);
+              easyApplySetValue(input, value); // fallback
+            } else {
+              console.log("AutoApply: FILL_INPUT_MAIN_WORLD success:", response?.finalValue);
+            }
+            resolve();
+          }
+        );
+      });
+    } catch (e) {
+      console.warn("AutoApply: FILL_INPUT_MAIN_WORLD exception:", e.message);
+      easyApplySetValue(input, value);
+    }
+  }
+
+  /**
+   * Fill a LinkedIn GEO-LOCATION typeahead input (role="combobox" / aria-autocomplete="list").
+   * Plain value-setting doesn't trigger LinkedIn's geocoding API, so we:
+   *   1. Focus + clear the input
+   *   2. Set the city value via native setter + fire InputEvent to trigger the search API
+   *   3. Poll for the autocomplete dropdown (up to ~3s)
+   *   4. Click the first suggestion
+   * Returns true if a dropdown option was successfully selected, false otherwise.
+   */
+  async function fillGeoTypeahead(input, value) {
+    if (!value) return false;
+    try {
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+
+      // 1. Focus and clear
+      input.focus();
+      input.click();
+      nativeSetter.call(input, '');
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true }));
+      await new Promise(r => setTimeout(r, 150));
+
+      // 2. Set value + fire InputEvent to trigger LinkedIn's debounced search API
+      nativeSetter.call(input, value);
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: value
+      }));
+      // Also fire a keydown to unblock any debounce that listens for key activity
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: value.slice(-1), bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup',   { key: value.slice(-1), bubbles: true }));
+
+      // 3. Poll for dropdown option (max ~3s, 15 × 200ms)
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 200));
+        // LinkedIn typeahead dropdown selectors (checked across multiple form types)
+        const option = document.querySelector(
+          '.artdeco-typeahead__results-list [role="option"], ' +
+          '.artdeco-typeahead__results-list li, ' +
+          '[role="listbox"] [role="option"], ' +
+          '[data-test-autocomplete-item]'
+        );
+        if (option && option.offsetParent !== null) {
+          option.click();
+          console.log(`AutoApply fillGeoTypeahead: selected "${option.textContent.trim().slice(0,40)}" for input "${input.id?.slice(-40)}"`);
+          await new Promise(r => setTimeout(r, 300));
+          return true;
+        }
+      }
+      console.warn(`AutoApply fillGeoTypeahead: dropdown never appeared for value "${value}" on input "${input.id?.slice(-40)}"`);
+      return false;
+    } catch (e) {
+      console.warn('AutoApply fillGeoTypeahead error:', e.message);
+      return false;
+    }
   }
 
   /** Fill a <select> based on its label / profile data */

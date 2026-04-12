@@ -495,6 +495,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async
   }
 
+  /* ── Fill a single React-controlled text/number input via main world ── */
+  /* Content scripts are in the isolated world and can't reliably trigger  */
+  /* React's synthetic event handlers. This runs in the MAIN world so the  */
+  /* React fiber's onChange gets called with the correct value.             */
+  if (message.type === "FILL_INPUT_MAIN_WORLD") {
+    const tabId = sender.tab?.id;
+    if (!tabId) { sendResponse({ error: "No tab ID" }); return true; }
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      world: "MAIN",
+      args: [message.inputId, message.value],
+      func: function(inputId, value) {
+        try {
+          var inp = document.getElementById(inputId);
+          if (!inp) return { error: "input not found: " + inputId };
+          // Use React's patched setter (available in main world)
+          var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          var setter = Object.getOwnPropertyDescriptor(proto, "value") && Object.getOwnPropertyDescriptor(proto, "value").set;
+          if (setter) setter.call(inp, value); else inp.value = value;
+          inp.dispatchEvent(new Event("input",  { bubbles: true }));
+          inp.dispatchEvent(new Event("change", { bubbles: true }));
+          inp.dispatchEvent(new Event("blur",   { bubbles: true }));
+          return { success: true, finalValue: inp.value };
+        } catch(e) {
+          return { error: e.message };
+        }
+      }
+    }, function(results) {
+      sendResponse(results && results[0] && results[0].result ? results[0].result : { error: "no result" });
+    });
+    return true; // async
+  }
+
   /* ── From ATS scripts: Fill React Select dropdowns via main world ── */
   if (message.type === "FILL_DROPDOWNS_MAIN_WORLD") {
     const tabId = sender.tab?.id;
