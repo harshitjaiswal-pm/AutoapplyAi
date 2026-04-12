@@ -760,19 +760,31 @@
     if (!panel) return false;
     const fullPanelText = (panel.innerText || "").toLowerCase();
     if (!fullPanelText) return false;
-    // Use a tight 500-char window for header-area checks (company/title appear first)
-    const headerText = fullPanelText.slice(0, 500);
+    // Use an 800-char window for header-area checks (company/title appear first)
+    const headerText = fullPanelText.slice(0, 800);
     const titleFirst25 = (job.title || "").toLowerCase().substring(0, 25);
     const companyFirst20 = (job.company || "").toLowerCase().substring(0, 20);
     const titleMatch = titleFirst25.length >= 4 && headerText.includes(titleFirst25);
-    // Company match: check both header (strong) and broader text (weaker)
+    // Company match: check header (strong) and broader text (weaker)
     const companyInHeader = companyFirst20.length >= 3 && headerText.includes(companyFirst20);
-    const companyInPage   = companyFirst20.length >= 5 && fullPanelText.slice(0, 800).includes(companyFirst20);
+    const companyInPage   = companyFirst20.length >= 4 && fullPanelText.slice(0, 1200).includes(companyFirst20);
+
+    // Word-level fallback: check that the first word of the company appears in header
+    // e.g. job.company = "Mighty Networks Inc" → first word = "mighty" → likely in panel
+    const companyFirstWord = companyFirst20.split(/\s+/)[0];
+    const titleFirstWord   = titleFirst25.split(/\s+/)[0];
+    const companyWordInHeader = companyFirstWord.length >= 4 && headerText.includes(companyFirstWord);
+    const titleFirstWords     = titleFirst25.split(/\s+/).slice(0, 3).join(" ");
+    const titleWordsMatch     = titleFirstWords.length >= 8 && headerText.includes(titleFirstWords);
 
     // Company confirmed in header = high confidence, accept it alone
     if (companyInHeader) return true;
-    // Title match + company anywhere in page = good enough
+    // First word of company in header + title match anywhere = good enough
+    if (companyWordInHeader && titleMatch) return true;
+    // Title match + company anywhere in broader page
     if (titleMatch && companyInPage) return true;
+    // Title first 3 words match in header (very specific) — accept alone
+    if (titleWordsMatch && titleFirstWords.length >= 15) return true;
     // Title alone when it's long and unique enough
     if (titleMatch && titleFirst25.length >= 20) return true;
     return false;
@@ -1315,8 +1327,27 @@
           continue; // Skip this job rather than open the wrong company's ATS
         }
 
+        // Scroll the detail panel back to TOP before clicking Apply — after reading
+        // the JD we scrolled down, which hides the Apply button. Scroll up first.
+        {
+          const detailPanelForScroll = document.querySelector(
+            '.jobs-search__job-details, [class*="jobs-search__job-details"], [class*="job-details"]'
+          ) || document.querySelector('.scaffold-layout__detail');
+          if (detailPanelForScroll) {
+            detailPanelForScroll.scrollTop = 0;
+            await new Promise((r) => setTimeout(r, 400));
+          }
+        }
+
         try { AALog && AALog.nav("linkedin.apply.click", { jobId: job.id }); } catch(_){}
         applyType = await clickApplyButton();
+
+        // If button not found first try, scroll up more aggressively and retry once
+        if (!applyType) {
+          window.scrollTo(0, 0);
+          await new Promise((r) => setTimeout(r, 500));
+          applyType = await clickApplyButton();
+        }
         try { AALog && AALog.nav("linkedin.apply.result", { jobId: job.id, applyType }); } catch(_){}
       }
 
@@ -1338,6 +1369,7 @@
         const eaResult = await handleEasyApply(job, jobData);
         if (eaResult.waitingForUser) {
           // All fields filled — user must click Submit themselves (by design)
+          // Status was already set to "ready" inside handleEasyApply
           updateStatus(`✅ Easy Apply filled: ${job.title} — click Submit in the LinkedIn modal`);
         } else if (eaResult.success) {
           appliedCount++;
@@ -1519,7 +1551,7 @@
 
   /** Wait up to 8s for the Easy Apply modal to appear */
   async function waitForEasyApplyModal() {
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + 12000; // 12s — LinkedIn can be slow to open modal
     while (Date.now() < deadline) {
       const modal = findEasyApplyModal();
       if (modal) return modal;
@@ -2279,6 +2311,7 @@
   function getStatusIcon(status) {
     switch (status) {
       case "applying": return '<span style="color:#F59E0B;font-size:12px;">●</span>';
+      case "ready":    return '<span style="color:#10B981;font-size:12px;">✓</span>';
       case "opened":   return '<span style="color:#3B82F6;font-size:12px;">↗</span>';
       case "applied":  return '<span style="color:#10B981;font-size:12px;">✓</span>';
       case "skipped":  return '<span style="color:#9CA3AF;font-size:12px;">–</span>';
@@ -2290,6 +2323,7 @@
   function getStatusLabel(status) {
     switch (status) {
       case "applying": return "Filling…";
+      case "ready":    return "Ready ✓";
       case "opened":   return "Opened";
       case "applied":  return "Applied";
       case "skipped":  return "Skipped";
@@ -2331,6 +2365,7 @@
         ${job.status === "applying" ? "background: #FFF7ED;" : ""}
         ${job.status === "opened" ? "background: #EFF6FF;" : ""}
         ${job.status === "applied" ? "background: #F0FDF4;" : ""}
+        ${job.status === "ready" ? "background: #F0FDF4;" : ""}
         ${job.status === "failed" ? "background: #FEF2F2;" : ""}
       " data-job-id="${job.id}" class="autoapply-job-item">
         ${job.status !== "pending"
@@ -2367,6 +2402,7 @@
             ${job.status === "opened" ? "background: #DBEAFE; color: #1E40AF;" : ""}
             ${job.status === "applied" ? "background: #D1FAE5; color: #065F46;" : ""}
             ${job.status === "applying" ? "background: #FEF3C7; color: #92400E;" : ""}
+            ${job.status === "ready" ? "background: #D1FAE5; color: #065F46;" : ""}
             ${job.status === "failed" ? "background: #FEE2E2; color: #991B1B;" : ""}
             ${job.status === "skipped" ? "background: #F3F4F6; color: #6B7280;" : ""}
           ">${getStatusLabel(job.status)}</span>` : ""}

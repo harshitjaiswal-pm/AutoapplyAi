@@ -1387,7 +1387,7 @@ function injectFloatingTrigger(tabId) {
       /* ── Populate panel based on storage state ── */
       function buildPanel() {
         actions.innerHTML = "";
-        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumeMap", "parsedResume", "userProfile"], (stored) => {
+        chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumeMap", "parsedResume", "userProfile", "tailoredResumePdf"], (stored) => {
           const hasResume = !!stored.parsedResume;
           const lastJob   = stored.lastFilledJob;
           const pending   = stored.pendingApplication;
@@ -1409,7 +1409,8 @@ function injectFloatingTrigger(tabId) {
               (ti ? (e.jobTitle || "").toLowerCase() === ti : true)
             ) || null;
           }
-          const hasPdf    = !!(mapEntry?.pdf);
+          // Also check tailoredResumePdf — set by Easy Apply tailoring (separate from map)
+          const hasPdf    = !!(mapEntry?.pdf) || !!(stored.tailoredResumePdf);
 
           // ── Context strip: show current application + last tailored resume ──
           // Gives the user a visual indicator of which job this pill belongs to
@@ -1637,7 +1638,14 @@ function injectFloatingTrigger(tabId) {
           // so on login-gate pages where the bridge hadn't synced yet, NEITHER
           // button appeared. Now the tailor button always shows when no PDF exists.
           if (hasPdf) {
-            const dlBtn = makeBtn("↓", "Download resume", "Your tailored PDF for this role", "#059669", () => {
+            // Build a descriptive sublabel: "For [Role] · [Company]" when we know it
+            const dlEntry   = mapEntry || null;
+            const dlRole    = dlEntry?.jobTitle || jobInfo?.jobTitle || "";
+            const dlCompany = dlEntry?.company  || jobInfo?.company  || "";
+            const dlSublabel = (dlRole || dlCompany)
+              ? `For ${[dlRole, dlCompany].filter(Boolean).join(" · ").slice(0, 40)}`
+              : "Your tailored PDF for this role";
+            const dlBtn = makeBtn("↓", "Download resume", dlSublabel, "#059669", () => {
               startDownloadCountdown(dlBtn);
             });
             actions.appendChild(dlBtn);
@@ -1748,6 +1756,29 @@ function injectFloatingTrigger(tabId) {
             window.location.reload();
           });
           actions.appendChild(reloadBtn);
+        });
+      }
+
+      // ── Auto-rebuild panel when storage changes ──────────────────────────
+      // Ensures the ↓ Download Resume button appears automatically after
+      // Easy Apply or ATS tailoring completes — without the user needing to
+      // reopen the pill. Guard against duplicate listeners across re-injections.
+      if (!window.__aaStorageListenerAdded) {
+        window.__aaStorageListenerAdded = true;
+        chrome.storage.onChanged.addListener((changes, area) => {
+          if (area !== "local") return;
+          if (
+            changes.tailoredResumeMap ||
+            changes.lastFilledJob     ||
+            changes.tailoredResumePdf ||
+            changes.pendingApplication
+          ) {
+            // Only rebuild while panel is actually visible — avoids needless DOM work
+            const panelEl = document.getElementById("aa-floating-panel");
+            if (panelEl && panelEl.style.display !== "none") {
+              buildPanel();
+            }
+          }
         });
       }
 
