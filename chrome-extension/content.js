@@ -1333,7 +1333,10 @@
       } else if (applyType === "easy_apply") {
         // jobData was built earlier in this iteration
         const eaResult = await handleEasyApply(job, jobData);
-        if (eaResult.success) {
+        if (eaResult.waitingForUser) {
+          // All fields filled — user must click Submit themselves (by design)
+          updateStatus(`✅ Easy Apply filled: ${job.title} — click Submit in the LinkedIn modal`);
+        } else if (eaResult.success) {
           appliedCount++;
           updateStatus(`Easy Apply submitted: ${job.title}`);
         }
@@ -1375,7 +1378,6 @@
         chrome.storage.local.get(["userProfile", "tailoredResumePdf", "parsedResume"], r)
       );
       const profile = stored.userProfile || {};
-      const hasPdf  = !!stored.tailoredResumePdf;
 
       updateJobStatus(job.id, "applying", "Easy Apply — waiting for modal…");
       const modal = await waitForEasyApplyModal();
@@ -1384,6 +1386,21 @@
         try { AALog && AALog.error("linkedin.easyApply.noModal", { title: job.title }); } catch(_){}
         return { success: false };
       }
+
+      // ── Kick off resume tailoring in parallel ──────────────────────────
+      // Fire TAILOR_AND_FILL now so it runs while the form steps are being filled.
+      // fillEasyApplyStep will poll storage for tailoredResumePdf when it hits
+      // the resume upload field, waiting up to 90s for the API call to finish.
+      const tailorJob = {
+        jobTitle:       job.title       || jobData?.jobTitle || "",
+        company:        job.company     || jobData?.company  || "",
+        jobUrl:         window.location.href,
+        applyUrl:       window.location.href,
+        jobDescription: jobData?.jobDescription || "",
+        source:         "linkedin_easy_apply",
+      };
+      console.log("AutoApply EasyApply: kicking off resume tailoring in parallel");
+      chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: tailorJob }, () => {});
 
       let stepCount = 0;
       const MAX_STEPS = 12;
@@ -1408,23 +1425,44 @@
         const nextBtn    = findEasyApplyBtn(modal, ["continue to next step", "next", "continue"]);
 
         if (submitBtn) {
-          console.log("AutoApply EasyApply: Submitting application");
-          updateJobStatus(job.id, "applying", "Easy Apply — submitting…");
-          submitBtn.click();
-          await new Promise(r => setTimeout(r, 2000));
-          // Check for success confirmation
-          const confirmed = await checkEasyApplySuccess(modal);
-          if (confirmed) {
-            // Log funnel completion
-            chrome.runtime.sendMessage({ type: "FUNNEL_STAGE", stage: "completed", job: {
-              jobTitle: job.title, company: job.company, jobUrl: window.location.href,
-            }});
-            updateJobStatus(job.id, "applied");
-            try { AALog && AALog.nav("linkedin.easyApply.submitted", { title: job.title, company: job.company }); } catch(_){}
-          } else {
-            updateJobStatus(job.id, "applied", "Submitted (verify manually)");
-          }
-          return { success: true };
+          // ── STOP before submit — user must click Submit themselves ──
+          // AutoApply fills every field but intentionally does NOT submit Easy Apply.
+          // The user must review and click Submit in the modal themselves.
+          console.log("AutoApply EasyApply: All fields filled — waiting for user to click Submit");
+          try { AALog && AALog.state("linkedin.easyApply.readyToSubmit", { title: job.title, company: job.company }); } catch(_){}
+
+          // Trigger resume tailoring in the background while user reviews the form
+          const tailorJob = {
+            jobTitle:       job.title       || jobData?.jobTitle || "",
+            company:        job.company     || jobData?.company  || "",
+            jobUrl:         window.location.href,
+            applyUrl:       window.location.href,
+            jobDescription: jobData?.jobDescription || "",
+            source:         "linkedin_easy_apply",
+          };
+          chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: tailorJob }, () => {});
+
+          // Pulse the Submit button so the user can spot it immediately
+          submitBtn.style.transition = "box-shadow 0.4s ease-in-out";
+          submitBtn.style.outline = "3px solid #0a66c2";
+          submitBtn.style.outlineOffset = "3px";
+          let _pulseOn = true;
+          const _pulseInterval = setInterval(() => {
+            _pulseOn = !_pulseOn;
+            submitBtn.style.boxShadow = _pulseOn
+              ? "0 0 0 5px rgba(10,102,194,0.45)"
+              : "0 0 0 2px rgba(10,102,194,0.15)";
+          }, 500);
+          setTimeout(() => {
+            clearInterval(_pulseInterval);
+            submitBtn.style.boxShadow = "";
+            submitBtn.style.outline = "";
+          }, 60000); // stop pulsing after 60s
+
+          updateJobStatus(job.id, "ready", "✅ All fields filled — click Submit when ready");
+          updateStatus(`✅ Easy Apply filled: ${job.title} — click Submit in the modal when ready`);
+
+          return { success: false, waitingForUser: true };
         }
 
         if (reviewBtn) {
@@ -1642,13 +1680,38 @@
     }
 
     // ── Resume file upload ──────────────────────────────────────────────
-    // Only try to upload if we have a tailored PDF and a visible file input
-    if (stored.tailoredResumePdf) {
-      const fileInput = modal.querySelector("input[type='file']");
-      if (fileInput) {
+    // Tailoring was kicked off in parallel at the start of handleEasyApply.
+    // Poll chrome.storage.local directly (not the cached `stored` object) so
+    // we pick up the PDF once the background API call finishes — up to 90s.
+    const fileInput = modal.querySelector("input[type='file']");
+    if (fileInput) {
+      let pdfBase64 = null;
+
+      // Quick check first — PDF might already be ready
+      const quickCheck = await new Promise(r => chrome.storage.local.get(["tailoredResumePdf"], r));
+      pdfBase64 = quickCheck.tailoredResumePdf || null;
+
+      if (!pdfBase64) {
+        // Poll every 500ms for up to 90 seconds
+        console.log("AutoApply EasyApply: Resume not ready yet — waiting for tailoring to complete…");
+        updateJobStatus(job.id, "applying", "Easy Apply — generating tailored resume…");
+        for (let i = 0; i < 180; i++) {
+          await new Promise(r => setTimeout(r, 500));
+          const poll = await new Promise(r => chrome.storage.local.get(["tailoredResumePdf"], r));
+          if (poll.tailoredResumePdf) {
+            pdfBase64 = poll.tailoredResumePdf;
+            console.log(`AutoApply EasyApply: Tailored resume ready after ~${((i + 1) * 0.5).toFixed(1)}s`);
+            break;
+          }
+        }
+        if (!pdfBase64) {
+          console.warn("AutoApply EasyApply: Tailored resume not ready after 90s — skipping PDF upload");
+        }
+      }
+
+      if (pdfBase64) {
         try {
-          // Convert base64 PDF to a File object and attach to the input
-          const base64  = stored.tailoredResumePdf.replace(/^data:application\/pdf;base64,/, "");
+          const base64  = pdfBase64.replace(/^data:application\/pdf;base64,/, "");
           const bytes   = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
           const blob    = new Blob([bytes], { type: "application/pdf" });
           const safeName = ((job.title || "Resume") + "_" + (job.company || "")).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40) + ".pdf";
@@ -1657,7 +1720,8 @@
           dt.items.add(file);
           fileInput.files = dt.files;
           fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-          console.log("AutoApply EasyApply: Uploaded resume PDF");
+          console.log("AutoApply EasyApply: Uploaded tailored resume PDF —", safeName);
+          updateJobStatus(job.id, "applying", "Easy Apply — tailored resume uploaded ✓");
         } catch (err) {
           console.warn("AutoApply EasyApply: Resume upload failed", err.message);
         }
