@@ -801,6 +801,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  /* ── Auto-sync resume from web app when chrome.storage has no parsedResume ──
+   * Called by content.js when it detects parsedResume is missing before a batch run.
+   * Strategy:
+   *   1. Find any open tab matching the AutoApply web app URL
+   *   2. Inject pipeline-bridge.js into it → reads localStorage → sets chrome.storage
+   *   3. If no open tab, open the dashboard in background, wait 4s, then close it
+   * content.js polls for parsedResume after calling this — no callback needed.
+   */
+  if (message.type === "SYNC_RESUME") {
+    (async () => {
+      const stored = await chrome.storage.local.get(["autoapplyUrl"]);
+      const appUrl = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+      const dashUrl = `${appUrl}/dashboard`;
+
+      // Try to find an already-open tab on the web app
+      const allTabs = await chrome.tabs.query({});
+      const appTab  = allTabs.find(t => t.url && (
+        t.url.includes("autoapply-ai") || t.url.includes(appUrl) || t.url.includes("localhost:3000")
+      ));
+
+      if (appTab) {
+        // Inject the bridge into the existing tab — it will read localStorage and sync
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: appTab.id }, files: ["pipeline-bridge.js"] });
+          console.log("AutoApply BG: SYNC_RESUME — injected bridge into existing tab", appTab.id);
+        } catch(e) {
+          console.warn("AutoApply BG: SYNC_RESUME — bridge inject failed:", e.message);
+        }
+        sendResponse({ ok: true, method: "existingTab" });
+      } else {
+        // Open the dashboard in a background tab, let the bridge run, then close it
+        console.log("AutoApply BG: SYNC_RESUME — no app tab found, opening dashboard to sync...");
+        try {
+          const newTab = await chrome.tabs.create({ url: dashUrl, active: false });
+          // Wait up to 5s for the tab to load and bridge to sync, then close
+          await new Promise(r => setTimeout(r, 5000));
+          chrome.tabs.remove(newTab.id).catch(() => {});
+          console.log("AutoApply BG: SYNC_RESUME — dashboard tab closed after sync");
+        } catch(e) {
+          console.warn("AutoApply BG: SYNC_RESUME — failed to open dashboard tab:", e.message);
+        }
+        sendResponse({ ok: true, method: "newTab" });
+      }
+    })();
+    return true; // async
+  }
+
   /* ── From floating panel: Re-fill the current ATS page WITHOUT reloading ── */
   if (message.type === "FILL_CURRENT_PAGE") {
     const tabId = sender.tab?.id;

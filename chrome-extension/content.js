@@ -1094,11 +1094,37 @@
     });
 
     if (!stored.parsedResume) {
-      updateStatus("No resume found. Upload your resume on the AutoApply pipeline page first.", "error");
-      isApplying = false;
-      renderJobList();
-      updateStartButton();
-      return;
+      // [AutoQA fix 2026-04-11] Auto-sync: ask background.js to inject the pipeline
+      // bridge into any open dashboard tab (or open one briefly) to pull parsedResume
+      // from localStorage → chrome.storage. Then poll up to 8s before giving up.
+      updateStatus("Syncing your resume from the AutoApply dashboard…", "info");
+      chrome.runtime.sendMessage({ type: "SYNC_RESUME" }, () => {});
+
+      // Poll every 500ms for up to 8 seconds
+      let synced = false;
+      for (let attempt = 0; attempt < 16; attempt++) {
+        await new Promise(r => setTimeout(r, 500));
+        const recheckStored = await new Promise(r => chrome.storage.local.get(["parsedResume"], r));
+        if (recheckStored.parsedResume) {
+          stored.parsedResume = recheckStored.parsedResume;
+          synced = true;
+          break;
+        }
+      }
+
+      if (!synced) {
+        const appUrl = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+        updateStatus(
+          `Resume not found — please visit ${appUrl}/dashboard, then try again.`,
+          "error"
+        );
+        isApplying = false;
+        renderJobList();
+        updateStartButton();
+        return;
+      }
+
+      updateStatus("Resume synced! Starting applications…", "success");
     }
 
     for (let i = 0; i < selectedJobs.length; i++) {
