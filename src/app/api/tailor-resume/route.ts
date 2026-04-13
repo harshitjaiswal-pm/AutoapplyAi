@@ -136,6 +136,68 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // [Fix 2026-04-13] RULE ZERO runtime guard: Claude occasionally normalizes
+    // dates (e.g. "Present" → "2026-04", or rounds months). RULE ZERO in the
+    // system prompt forbids this, but without a runtime check a slip produces
+    // a downloaded PDF with wrong employment dates — a silent correctness bug.
+    // Compare every startDate/endDate between input and output; if ANY field
+    // changed, reject the response and force a retry rather than serve a
+    // tailored resume with mutated dates.
+    const normalize = (s: unknown): string =>
+      typeof s === "string" ? s.trim().toLowerCase() : "";
+    const inputExp: unknown[] = Array.isArray(parsedResume?.experience)
+      ? parsedResume.experience
+      : [];
+    const outputExp: unknown[] = Array.isArray(tailoredResult.experience)
+      ? tailoredResult.experience
+      : Array.isArray(tailoredResult.tailoredResume?.experience)
+      ? tailoredResult.tailoredResume.experience
+      : [];
+    if (inputExp.length > 0 && outputExp.length > 0) {
+      // Match output entries to input entries by company+title fuzzy match,
+      // since AI may reorder. For each matched pair, compare dates.
+      const mutatedDates: string[] = [];
+      for (const out of outputExp as Record<string, unknown>[]) {
+        const outCompany = normalize(out?.company);
+        const outTitle = normalize(out?.title);
+        const match = (inputExp as Record<string, unknown>[]).find(
+          (inp) =>
+            normalize(inp?.company) === outCompany ||
+            (outCompany && normalize(inp?.company).includes(outCompany)) ||
+            (outTitle && normalize(inp?.title) === outTitle)
+        );
+        if (!match) continue;
+        const inStart = normalize(match?.startDate);
+        const inEnd = normalize(match?.endDate);
+        const outStart = normalize(out?.startDate);
+        const outEnd = normalize(out?.endDate);
+        if (inStart && outStart && inStart !== outStart) {
+          mutatedDates.push(
+            `${outCompany}: startDate "${inStart}" → "${outStart}"`
+          );
+        }
+        if (inEnd && outEnd && inEnd !== outEnd) {
+          mutatedDates.push(
+            `${outCompany}: endDate "${inEnd}" → "${outEnd}"`
+          );
+        }
+      }
+      if (mutatedDates.length > 0) {
+        console.error(
+          "Tailor-resume: RULE ZERO violated — dates mutated:",
+          mutatedDates
+        );
+        return NextResponse.json(
+          {
+            error:
+              "AI altered employment dates (RULE ZERO violation). Please retry.",
+            details: mutatedDates,
+          },
+          { status: 422 }
+        );
+      }
+    }
+
     return NextResponse.json({ tailoredResult });
   } catch (error: unknown) {
     console.error("Tailoring error:", error);

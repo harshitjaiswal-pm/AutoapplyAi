@@ -60,9 +60,18 @@
         chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: matched.jobUrl || window.location.href } });
         return;
       }
-      // Priority 3: global fallback
-      LOG("No company match — using global tailoredResumePdf fallback");
-      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: window.location.href } });
+      // [Fix 2026-04-13] Removed global `tailoredResumePdf` fallback.
+      // The prior behavior silently served whatever PDF was last tailored —
+      // if the user tailored for Job A then opened Job B's ATS before
+      // tailoring B, Job A's resume would upload onto Job B's form.
+      // Instead: ask background to download with NO fallback, which triggers
+      // the SHOW_BANNER path showing "Tailor Resume first" to the user.
+      LOG("No keyed or company match — requesting download without fallback (will show banner)");
+      chrome.runtime.sendMessage({
+        type: "DOWNLOAD_RESUME",
+        job: { applyUrl: window.location.href },
+        noGlobalFallback: true,
+      });
     });
   }
   LOG("Script loaded on", window.location.href);
@@ -324,17 +333,22 @@
       return;
     }
 
-    // Click "Apply Manually" (preferred) or "Use My Last Application"
+    // [Fix 2026-04-13] ALWAYS click "Apply Manually" — never "Use My Last
+    // Application". The previous fallback could inject data from an
+    // unrelated prior Workday application into the current form, which is
+    // a cross-contamination risk. If "Apply Manually" is unavailable we
+    // show a banner asking the user to handle the modal themselves rather
+    // than silently reusing last application's data.
     const applyManually = document.querySelector('[data-automation-id="applyManually"]');
     if (applyManually) {
-      LOG("Clicking 'Apply Manually'");
+      LOG("Clicking 'Apply Manually' (fresh application — never reuses prior data)");
       applyManually.click();
     } else {
-      const useLastApp = document.querySelector('[data-automation-id="useMyLastApplication"]');
-      if (useLastApp) {
-        LOG("Clicking 'Use My Last Application'");
-        useLastApp.click();
-      }
+      LOG("'Apply Manually' not available — showing user banner; refusing to reuse last application");
+      showBanner(
+        "⚠️ Workday 'Apply Manually' button not found. Please choose 'Apply Manually' yourself to avoid mixing in data from a previous application.",
+        "warn"
+      );
     }
 
     await sleep(2000); // Wait for form page to load

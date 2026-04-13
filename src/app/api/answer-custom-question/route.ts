@@ -8,8 +8,15 @@ import Anthropic from "@anthropic-ai/sdk";
  * Used by the extension when it encounters open-ended questions it can't fill
  * from the user's profile (e.g. "Describe how you use AI in your work").
  *
- * Body: { question: string, resumeSummary: string, jobTitle: string, company: string }
+ * Body: { question: string, resumeSummary: string, jobTitle: string, company: string, jobDescription?: string }
  * Returns: { answer: string }
+ *
+ * [Fix 2026-04-13] Added optional `jobDescription` so answers can be grounded
+ * in the actual JD text — not just the job title + company. This closes a
+ * cross-contamination vector: if an ATS script held stale `pendingApplication`
+ * from a previous job, the old answer-generation path would produce text
+ * aligned with the previous job's title/company. Passing the JD forces the
+ * model to ground every answer in the posting the user is actually looking at.
  */
 
 const CORS_HEADERS = {
@@ -25,7 +32,7 @@ export async function OPTIONS() {
 
 export async function POST(request: NextRequest) {
   try {
-    const { question, resumeSummary, jobTitle, company } = await request.json();
+    const { question, resumeSummary, jobTitle, company, jobDescription } = await request.json();
 
     if (!question) {
       return NextResponse.json({ error: "question is required" }, { status: 400, headers: CORS_HEADERS });
@@ -56,8 +63,15 @@ CRITICAL RULES:
 - NEVER output meta-commentary like "I don't have your background" or "Could you share..." — that would be filled into a form field and is embarrassing.
 Return ONLY the answer text — no preamble, no labels, no quotes.`;
 
+    // If a JD is available, include a trimmed version (first ~1500 chars) so
+    // the answer can reference actual responsibilities/tech stack/mission —
+    // not generic language inferred from title + company alone.
+    const jdSection = jobDescription && typeof jobDescription === "string" && jobDescription.trim().length > 50
+      ? `\nJob description (for grounding — reference specific points):\n${jobDescription.trim().slice(0, 1500)}\n`
+      : "";
+
     const userContent = `Candidate applying to: ${jobTitle || "a role"} at ${company || "a company"}
-Candidate summary: ${resumeSummary || "(no summary provided)"}
+Candidate summary: ${resumeSummary || "(no summary provided)"}${jdSection}
 
 Application question: ${question}
 

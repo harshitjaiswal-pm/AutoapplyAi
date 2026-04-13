@@ -60,9 +60,17 @@
         return;
       }
 
-      // Priority 3: global fallback — most recently tailored resume
-      LOG("No company match found — using global tailoredResumePdf fallback");
-      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: window.location.href } });
+      // [Fix 2026-04-13] Removed global `tailoredResumePdf` fallback to
+      // prevent cross-contamination where Job A's resume gets uploaded onto
+      // Job B's form if Job B was opened before its own tailoring completed.
+      // Now: request download with noGlobalFallback; background will emit
+      // SHOW_BANNER telling the user to "Tailor Resume first".
+      LOG("No keyed or company match — requesting download without fallback (will show banner)");
+      chrome.runtime.sendMessage({
+        type: "DOWNLOAD_RESUME",
+        job: { applyUrl: window.location.href },
+        noGlobalFallback: true,
+      });
     });
   }
 

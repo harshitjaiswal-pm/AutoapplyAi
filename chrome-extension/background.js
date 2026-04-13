@@ -60,6 +60,13 @@ function __aa_persistForeignLogs(entries) {
 
 // Track whether we're expecting a new tab from an Apply click
 let expectingNewTab = false;
+// [Fix 2026-04-13] Optional host scope for the expectingNewTab fallback
+// path. When the apply URL is known ahead of the click (e.g. from
+// LinkedIn JD scraping), we set this so that if some UNRELATED tab opens
+// during the 60s window — an ad, a popup, a different company's portal —
+// we don't inject the pending application into it. Empty string = unscoped
+// (legacy behavior kept for flows where the apply URL isn't known).
+let expectingNewTabHost = "";
 let expectingTimeout = null;
 
 // Track which tab owns the active application so we can detect navigation away
@@ -157,10 +164,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Start watching for new tabs
       expectingNewTab = true;
+      // [Fix 2026-04-13] Scope to apply-URL host when known. If the new tab's
+      // host doesn't match, we refuse to inject — preventing injection into
+      // unrelated popups/ads/tabs that happen to open during the 60s window.
+      expectingNewTabHost = "";
+      try {
+        const applyUrl = message.job?.applyUrl || message.job?.jobUrl || "";
+        if (applyUrl) expectingNewTabHost = new URL(applyUrl).hostname;
+      } catch(_) {}
       // Auto-expire after 60 seconds (increased from 30 for slow page loads)
       clearTimeout(expectingTimeout);
       expectingTimeout = setTimeout(() => {
         expectingNewTab = false;
+        expectingNewTabHost = "";
         stopKeepAlive();
       }, 60000);
 
@@ -433,7 +449,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From ATS scripts: Download the tailored resume as PDF ── */
   if (message.type === "DOWNLOAD_RESUME") {
-    handleDownloadResume(message.job, sender.tab?.id);
+    handleDownloadResume(message.job, sender.tab?.id, { noGlobalFallback: !!message.noGlobalFallback });
     sendResponse({ success: true });
     return true;
   }
@@ -495,8 +511,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   /* ── From ATS content scripts: Generate an answer for a custom application question ── */
   if (message.type === "ANSWER_CUSTOM_QUESTION") {
     startKeepAlive();
-    const { question, resumeSummary, jobTitle, company } = message;
-    handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, company })
+    // [Fix 2026-04-13] Extract + forward jobDescription if caller supplied it
+    const { question, resumeSummary, jobTitle, company, jobDescription } = message;
+    handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, company, jobDescription })
       .then((answer) => { stopKeepAlive(); sendResponse({ answer }); })
       .catch((err) => { stopKeepAlive(); sendResponse({ error: err.message }); });
     return true; // async
@@ -1301,9 +1318,33 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // Skip if it's our own app
   if (url.includes("vercel.app") || url.includes("localhost:3000")) return;
 
+  // [Fix 2026-04-13] If we captured an expected host at PREPARE time, require
+  // the new tab's host to match. Prevents injecting pending application data
+  // into unrelated tabs that happen to open during the 60s window.
+  if (expectingNewTabHost) {
+    let newHost = "";
+    try { newHost = new URL(url).hostname; } catch(_) {}
+    const hostMatches =
+      newHost &&
+      (newHost === expectingNewTabHost ||
+        newHost.endsWith("." + expectingNewTabHost) ||
+        expectingNewTabHost.endsWith("." + newHost));
+    if (!hostMatches) {
+      console.log(
+        "AutoApply BG: New tab host",
+        newHost,
+        "does not match expected host",
+        expectingNewTabHost,
+        "— refusing injection."
+      );
+      return;
+    }
+  }
+
   // This is likely the external career site — inject the generic ATS script
   console.log("AutoApply BG: Detected new tab for external apply:", tab.url);
   expectingNewTab = false;
+  expectingNewTabHost = "";
   clearTimeout(expectingTimeout);
 
   // Instant banner first, full script after render
@@ -2436,16 +2477,19 @@ async function fetch_analyze_job(job) {
  * Generate a concise answer for an ATS custom question using the API.
  * Calls /api/answer-custom-question with question + candidate context.
  */
-async function handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, company }) {
+async function handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, company, jobDescription }) {
   const stored = await chrome.storage.local.get(["autoapplyUrl"]);
   const apiUrl = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
-  try { AALog && AALog.api("bg.api.answerCustomQuestion.start", { questionPreview: (question || "").slice(0, 80) }); } catch(_){}
+  try { AALog && AALog.api("bg.api.answerCustomQuestion.start", { questionPreview: (question || "").slice(0, 80), hasJD: !!jobDescription }); } catch(_){}
 
   try {
     const res = await fetch(`${apiUrl}/api/answer-custom-question`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, resumeSummary, jobTitle, company }),
+      // [Fix 2026-04-13] Forward jobDescription so the API can ground the
+      // answer in the actual posting — prevents stale-context answers when
+      // an ATS script held a previous job's pendingApplication.
+      body: JSON.stringify({ question, resumeSummary, jobTitle, company, jobDescription }),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -2483,7 +2527,8 @@ function makeResumeKey(job) {
  * Download the tailored resume PDF to the user's Downloads folder.
  * Uses keyed lookup so batch jobs always download the correct resume.
  */
-async function handleDownloadResume(job, callerTabId) {
+async function handleDownloadResume(job, callerTabId, opts) {
+  const noGlobalFallback = !!(opts && opts.noGlobalFallback);
   const resumeKey = makeResumeKey(job);
   const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename", "lastResumeKey"]);
   const map       = stored.tailoredResumeMap || {};
@@ -2527,13 +2572,19 @@ async function handleDownloadResume(job, callerTabId) {
 
   // Prefer the keyed entry; only fall back to global slot if it was generated for THIS job.
   // Never silently serve a resume from a different job (the old backward-compat bug).
-  const globalMatchesCurrent = stored.lastResumeKey && stored.lastResumeKey === resumeKey;
+  // [Fix 2026-04-13] When caller (ATS script on form page) requested
+  // `noGlobalFallback`, NEVER serve the global tailoredResumePdf — not even
+  // if its lastResumeKey matches. This closes the last remaining wrong-resume
+  // window in batch-mode races. Panel download (no flag) still allows the
+  // matched-global path for backward compat.
+  const globalMatchesCurrent = !noGlobalFallback && stored.lastResumeKey && stored.lastResumeKey === resumeKey;
   if (!entry?.pdf && stored.tailoredResumePdf && !globalMatchesCurrent) {
     console.warn(
       "AutoApply BG [handleDownloadResume] BLOCKED stale global resume — " +
       "it was generated for key:", stored.lastResumeKey,
       "but current job key is:", resumeKey,
-      ". Aborting download. User must click 'Tailor Resume' first."
+      ". Aborting download. User must click 'Tailor Resume' first.",
+      "noGlobalFallback:", noGlobalFallback
     );
   }
   const base64   = entry?.pdf      || (globalMatchesCurrent ? stored.tailoredResumePdf : null);

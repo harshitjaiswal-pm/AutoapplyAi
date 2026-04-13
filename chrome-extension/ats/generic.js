@@ -154,6 +154,17 @@
         });
         console.warn("AutoApply: Child frame body HTML:", document.body?.innerHTML?.substring(0, 4000));
         await chrome.storage.local.set({ _ashby_iframe_filled: 0 });
+        // [Fix 2026-04-13] Surface the silent timeout to the user. Without
+        // this, the form simply never filled and the user had no way to
+        // know why. Render an in-frame banner asking them to refresh.
+        try {
+          const banner = document.createElement("div");
+          banner.setAttribute("data-autoapply-banner", "ashby-timeout");
+          banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;padding:10px 16px;background:#f59e0b;color:#111;font:600 13px -apple-system,BlinkMacSystemFont,sans-serif;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,0.2);";
+          banner.textContent = "⚠️ AutoApply: application form didn't load in time. Please refresh this page. (If it still doesn't load, the site may have changed — report this to support.)";
+          document.body && document.body.appendChild(banner);
+          setTimeout(() => banner.remove(), 15000);
+        } catch(_){}
         return;
       }
       await sleep(500); // brief settle
@@ -1572,6 +1583,9 @@
               resumeSummary,
               jobTitle: job?.jobTitle || "",
               company: job?.company || "",
+              // [Fix 2026-04-13] Include JD so API can ground answers in
+              // the actual posting — prevents stale-context answers.
+              jobDescription: job?.jobDescription || job?.description || "",
             },
             (r) => { clearTimeout(timer); resolve(r); }
           );
