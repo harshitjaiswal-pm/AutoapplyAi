@@ -169,6 +169,7 @@ WHAT YOU MUST NEVER DO:
 - Use forced bridging phrases like "directly applicable to [JD domain]", "capabilities transferable to [JD field]", "expertise relevant to [JD area]", or any variant that staples a JD reference onto the end of a bullet. Let the work speak for itself.
 - Use generic skills categories like "Technical / Tools / Soft Skills" — use specific, descriptive categories
 - Output an empty skills section — ALWAYS populate it with at least 3 categories of real skills
+- Nest skills inside a "categories" wrapper or return them as an array of objects — the skills field MUST be a flat object where each key is a category name and each value is an array of skill strings. Example: { "Product & Strategy": ["roadmap", "OKRs"], "Data & Analytics": ["SQL", "A/B testing"] }. NEVER: { "categories": [...] } or [{ "name": "...", "skills": [...] }]
 
 CRITICAL — PRESERVE THIS INFORMATION:
 - Immigration/work authorization status (e.g., "Canadian Permanent Resident", "US Citizen", "H-1B", "Open Work Permit"). If present in the original resume, it MUST appear in the tailored resume — in the contact info or summary. This is often a dealbreaker for recruiters.
