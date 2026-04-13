@@ -1413,8 +1413,9 @@
       const btnFilled = await fillButtonStyleYesNo(doc);
       filled += btnFilled;
 
-      // Fill cover letter in large textareas
+      // Fill cover letter in large textareas (or click "Enter manually" first on Greenhouse-style upload)
       if (tailoredResult.coverLetter) {
+        let clFilled = false;
         const textareas = queryAllDeep("textarea", doc);
         for (const ta of textareas) {
           const label = getFieldLabel(ta).toLowerCase();
@@ -1423,7 +1424,40 @@
               label.includes("comments") || label.includes("note")) {
             setNativeValue(ta, tailoredResult.coverLetter);
             filled++;
+            clFilled = true;
             break;
+          }
+        }
+
+        // If no textarea found, look for file-upload style cover letter with "Enter manually" button
+        if (!clFilled) {
+          const labels = doc.querySelectorAll("label, .field-label, h3, .application-label");
+          for (const lbl of labels) {
+            const txt = (lbl.textContent || "").toLowerCase();
+            if (txt.includes("cover letter") || txt.includes("cover_letter")) {
+              const section = lbl.closest(".field") || lbl.closest(".section") || lbl.parentElement?.parentElement;
+              if (!section) continue;
+              const allBtns = section.querySelectorAll("a, button, [role='button']");
+              for (const btn of allBtns) {
+                const btnTxt = (btn.textContent || "").toLowerCase().trim();
+                if (btnTxt.includes("enter manually") || btnTxt.includes("paste") || btnTxt === "text") {
+                  console.log("AutoApply: Clicking 'Enter manually' for cover letter");
+                  btn.click();
+                  await new Promise(r => setTimeout(r, 500));
+                  const newTA = section.querySelector("textarea") || doc.querySelector("textarea[name*='cover'], textarea[id*='cover']");
+                  if (newTA) {
+                    setNativeValue(newTA, tailoredResult.coverLetter);
+                    newTA.dispatchEvent(new Event("input", { bubbles: true }));
+                    newTA.dispatchEvent(new Event("change", { bubbles: true }));
+                    filled++;
+                    clFilled = true;
+                    console.log("AutoApply: Filled cover letter via 'Enter manually'");
+                  }
+                  break;
+                }
+              }
+              if (clFilled) break;
+            }
           }
         }
       }

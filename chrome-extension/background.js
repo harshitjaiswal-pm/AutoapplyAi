@@ -2593,15 +2593,18 @@ Rules:
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({
-        message:       prompt,
+        messages:      [{ role: "user", content: prompt }],
         systemContext: "You are an expert cover letter writer who tailors each letter precisely to the job and resume. Output ONLY the 3 paragraph body. No headers, no salutation, no sign-off, no markdown.",
       }),
     });
 
-    if (!aiRes.ok) throw new Error(`Cover letter AI failed (${aiRes.status})`);
+    if (!aiRes.ok) {
+      const errBody = await aiRes.text().catch(() => "");
+      throw new Error(`Cover letter AI failed (${aiRes.status}): ${errBody.slice(0, 200)}`);
+    }
     const aiData   = await aiRes.json();
-    const rawText  = aiData.response || aiData.content || aiData.text || aiData.message || "";
-    if (!rawText) throw new Error("Empty AI response");
+    const rawText  = aiData.reply || aiData.response || aiData.content || aiData.text || aiData.message || "";
+    if (!rawText) throw new Error("Empty AI response (keys: " + Object.keys(aiData).join(",") + ")");
 
     // Split on blank lines to get individual paragraphs
     paragraphs = rawText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);

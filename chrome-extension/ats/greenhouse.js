@@ -607,17 +607,62 @@
       if (value && fillByLabel(labels, value)) filled++;
     }
 
-    // Fill cover letter synchronously if present
+    // Fill cover letter — handle both textarea and Greenhouse file-upload style
     if (tailoredResult?.coverLetter) {
+      let clFilled = false;
+
+      // Check if there's already a cover letter textarea visible
       const textareas = document.querySelectorAll("textarea");
       for (const ta of textareas) {
         const label = getFieldLabel(ta).toLowerCase();
         if (label.includes("cover letter") || label.includes("cover_letter")) {
           setNativeValue(ta, tailoredResult.coverLetter);
           filled++;
+          clFilled = true;
           console.log("AutoApply: Filled cover letter textarea");
           break;
         }
+      }
+
+      // If no textarea found, look for Greenhouse's file upload cover letter section
+      // and click "Enter manually" to reveal the textarea
+      if (!clFilled) {
+        const labels = document.querySelectorAll("label, .field-label, h3, .application-label");
+        for (const lbl of labels) {
+          const txt = (lbl.textContent || "").toLowerCase();
+          if (txt.includes("cover letter")) {
+            // Find the "Enter manually" or "paste" link/button near this label
+            const section = lbl.closest(".field") || lbl.closest(".section") || lbl.parentElement?.parentElement;
+            if (!section) continue;
+            const manualBtn = section.querySelector('a[href="#"], button, [role="button"]');
+            // Look for buttons/links with text "Enter manually" or "paste" or "text"
+            const allBtns = section.querySelectorAll("a, button, [role='button']");
+            for (const btn of allBtns) {
+              const btnTxt = (btn.textContent || "").toLowerCase().trim();
+              if (btnTxt.includes("enter manually") || btnTxt.includes("paste") || btnTxt === "text") {
+                console.log("AutoApply: Clicking 'Enter manually' for cover letter");
+                btn.click();
+                // Wait for textarea to appear, then fill it
+                await new Promise(r => setTimeout(r, 500));
+                const newTA = section.querySelector("textarea") || document.querySelector("textarea[name*='cover'], textarea[id*='cover']");
+                if (newTA) {
+                  setNativeValue(newTA, tailoredResult.coverLetter);
+                  newTA.dispatchEvent(new Event("input", { bubbles: true }));
+                  newTA.dispatchEvent(new Event("change", { bubbles: true }));
+                  filled++;
+                  clFilled = true;
+                  console.log("AutoApply: Filled cover letter via 'Enter manually' textarea");
+                }
+                break;
+              }
+            }
+            if (clFilled) break;
+          }
+        }
+      }
+
+      if (!clFilled) {
+        console.log("AutoApply: Cover letter available but no textarea or manual entry found on page");
       }
     }
 
