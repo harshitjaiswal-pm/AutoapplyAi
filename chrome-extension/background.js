@@ -1448,8 +1448,10 @@ function injectFloatingTrigger(tabId) {
 
       /* ── Populate panel based on storage state ── */
       function buildPanel() {
-        actions.innerHTML = "";
+        // [v19 fix] Clear inside the async callback, not before — prevents duplication
+        // when buildPanel() is called twice quickly (both callbacks would append).
         chrome.storage.local.get(["lastFilledJob", "pendingApplication", "tailoredResumeMap", "parsedResume", "userProfile", "tailoredResumePdf"], (stored) => {
+          actions.innerHTML = "";
           const hasResume = !!stored.parsedResume;
           const lastJob   = stored.lastFilledJob;
           const pending   = stored.pendingApplication;
@@ -2462,15 +2464,31 @@ async function handleDownloadResume(job, callerTabId) {
 
   // [AutoQA fix 2026-04-11] Fallback: if key lookup misses, scan by company+title
   // Handles case where lastFilledJob.applyUrl differs from the map's stored key.
+  // [v19 fix] Use fuzzy matching — scraped company from DOM ("Kraken") may differ
+  // from stored company ("Kraken Digital Asset Exchange"). Use includes() for partial match.
   if (!entry?.pdf && job) {
-    const co = (job.company  || "").toLowerCase();
-    const ti = (job.jobTitle || "").toLowerCase();
-    entry = Object.values(map).find(e =>
-      e?.pdf &&
-      (co ? (e.company  || "").toLowerCase() === co : true) &&
-      (ti ? (e.jobTitle || "").toLowerCase() === ti : true)
-    ) || null;
-    if (entry?.pdf) console.log("AutoApply BG [handleDownloadResume] found entry via company+title fallback");
+    const co = (job.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const ti = (job.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    entry = Object.values(map).find(e => {
+      if (!e?.pdf) return false;
+      const eCo = (e.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const eTi = (e.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      // Fuzzy: either direction includes works (stored may be longer or shorter)
+      const coMatch = !co || eCo.includes(co) || co.includes(eCo);
+      const tiMatch = !ti || eTi.includes(ti) || ti.includes(eTi);
+      return coMatch && tiMatch;
+    }) || null;
+    if (entry?.pdf) console.log("AutoApply BG [handleDownloadResume] found entry via fuzzy company+title fallback");
+  }
+
+  // [v19 fix] Last resort: if we still don't have an entry and there's only one PDF
+  // in the map, just use it — user clearly wants to download the only resume they have.
+  if (!entry?.pdf) {
+    const allPdfs = Object.values(map).filter(e => e?.pdf);
+    if (allPdfs.length === 1) {
+      entry = allPdfs[0];
+      console.log("AutoApply BG [handleDownloadResume] using only available PDF (single-entry fallback)");
+    }
   }
 
   // DEBUG — log full picture so we can trace wrong-resume issues
