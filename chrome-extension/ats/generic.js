@@ -383,8 +383,8 @@
       const labels = queryAllDeep("label", doc);
       for (const lbl of labels) {
         const text = (lbl.textContent || "").replace(/\*/g, "").trim().toLowerCase();
-        if (text === "full name" || text === "first name" || text === "email" ||
-            text === "email address" || text === "phone" || text === "resume") {
+        if (text.includes("full name") || text.includes("first name") || text.includes("email") ||
+            text.includes("email address") || text.includes("phone") || text.includes("resume")) {
           const style = window.getComputedStyle(lbl);
           if (style.display !== "none" && style.visibility !== "hidden") return true;
         }
@@ -781,6 +781,34 @@
     const isICIMS     = detectICIMS();
     const isTaleo     = detectTaleo();
 
+    // ── Taleo: override stale pendingJob with data scraped from current Taleo page ──
+    // When AutoApply was triggered from a different job (e.g. Luxoft) but the user
+    // is now on a Taleo form for a different company, the pendingApplication will be
+    // stale. We re-scrape the actual job title/company from the Taleo page header.
+    if (isTaleo) {
+      // Job title: look for "Applying for: <title>" pattern or h1/h2
+      const applyingForEl = Array.from(document.querySelectorAll("span, div, td, th, p, h1, h2, h3"))
+        .find(el => /applying\s+for\s*:/i.test(el.textContent || ""));
+      let taleoTitle = applyingForEl
+        ? (applyingForEl.textContent || "").replace(/applying\s+for\s*:/i, "").trim().split("\n")[0].trim()
+        : null;
+      if (!taleoTitle) {
+        const h1 = document.querySelector("h1, h2");
+        taleoTitle = h1?.innerText?.trim().split("\n")[0] || null;
+      }
+      // Company: extract from subdomain (e.g. justenergy.taleo.net → "Just Energy")
+      const subdomain = location.hostname.replace(/\.taleo\.net$/i, "").split(".").pop() || "";
+      const taleoCompany = subdomain
+        ? subdomain.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ")
+            .replace(/\b\w/g, c => c.toUpperCase())
+        : (pendingJob?.company || "");
+      if (taleoTitle && taleoTitle.length > 2) {
+        console.log(`AutoApply: Taleo override — job="${taleoTitle}" company="${taleoCompany}"`);
+        pendingJob = { ...pendingJob, jobTitle: taleoTitle, company: taleoCompany, jobUrl: location.href };
+        await chrome.storage.local.set({ pendingApplication: pendingJob });
+      }
+    }
+
     // ── Fire tailoring immediately in the background ──
     // We don't wait for it here — form fills happen in parallel so there's no
     // visible delay. We only await the result when we need it for resume upload.
@@ -885,7 +913,7 @@
         await sleep(2500);
 
         // No detection gate. Fall straight through to filling.
-      } else if (!forceFill && !isOnApplicationForm()) {
+      } else if (!forceFill && !isTaleo && !isOnApplicationForm()) {
         // Generic non-Ashby page: scroll and find Apply button.
         // [AutoQA fix 2026-04-11] Skip this entire block when "Fill this form" was explicitly
         // clicked (forceFill=true) — the user is already on the form they want filled.
