@@ -1689,11 +1689,17 @@ function injectFloatingTrigger(tabId) {
               startDownloadCountdown(dlBtn);
             });
             actions.appendChild(dlBtn);
-          } else {
-            const sublabel = hasResume
-              ? "Generate a tailored PDF for this role"
+          }
+
+          // ── Always show Tailor button — user can re-tailor at any time ──
+          // Previously hidden when hasPdf=true, which left users stuck with a
+          // stale resume and no way to regenerate without leaving the page.
+          {
+            const tailorLabel   = hasPdf ? "Re-tailor for this job" : "Tailor resume";
+            const tailorSublabel = hasResume
+              ? (hasPdf ? "Generate a fresh tailored PDF for this role" : "Generate a tailored PDF for this role")
               : "Sync resume from dashboard first";
-            const tailorBtn = makeBtn("✦", "Tailor resume", sublabel, "#D97706", () => {
+            const tailorBtn = makeBtn("✦", tailorLabel, tailorSublabel, "#D97706", () => {
               startGenerateProgress(tailorBtn);
             });
             actions.appendChild(tailorBtn);
@@ -2316,7 +2322,7 @@ function makeResumeKey(job) {
  */
 async function handleDownloadResume(job) {
   const resumeKey = makeResumeKey(job);
-  const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename"]);
+  const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename", "lastResumeKey"]);
   const map       = stored.tailoredResumeMap || {};
   let   entry     = map[resumeKey];
 
@@ -2340,9 +2346,19 @@ async function handleDownloadResume(job) {
   console.log("AutoApply BG [handleDownloadResume] entry found:", !!entry, "entry filename:", entry?.filename);
   console.log("AutoApply BG [handleDownloadResume] globalPdf:", !!stored.tailoredResumePdf, "globalFilename:", stored.tailoredResumeFilename);
 
-  // Prefer the keyed entry; fall back to global slot for backward compat
-  const base64   = entry?.pdf      || stored.tailoredResumePdf;
-  const filename = entry?.filename || stored.tailoredResumeFilename ||
+  // Prefer the keyed entry; only fall back to global slot if it was generated for THIS job.
+  // Never silently serve a resume from a different job (the old backward-compat bug).
+  const globalMatchesCurrent = stored.lastResumeKey && stored.lastResumeKey === resumeKey;
+  if (!entry?.pdf && stored.tailoredResumePdf && !globalMatchesCurrent) {
+    console.warn(
+      "AutoApply BG [handleDownloadResume] BLOCKED stale global resume — " +
+      "it was generated for key:", stored.lastResumeKey,
+      "but current job key is:", resumeKey,
+      ". Aborting download. User must click 'Tailor Resume' first."
+    );
+  }
+  const base64   = entry?.pdf      || (globalMatchesCurrent ? stored.tailoredResumePdf : null);
+  const filename = entry?.filename || (globalMatchesCurrent ? stored.tailoredResumeFilename : null) ||
     `${job?.company || "Company"}_${job?.jobTitle || "Resume"}_Tailored.pdf`;
 
   if (!base64) {
