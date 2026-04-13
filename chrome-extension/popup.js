@@ -664,7 +664,7 @@ function renderHistoryList(history, query) {
     list.innerHTML = `
       <div class="history-empty">
         <div class="history-empty-icon">${q ? "🔍" : "📋"}</div>
-        <p>${q ? "No matches for "" + query + """ : "No applications recorded yet."}</p>
+        <p>${q ? 'No matches for "' + query + '"' : "No applications recorded yet."}</p>
         ${!q ? '<p style="margin-top:4px;font-size:11px;">Applications are automatically tracked when AutoApply fills a form.</p>' : ""}
       </div>`;
     return;
