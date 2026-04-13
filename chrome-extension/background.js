@@ -2344,26 +2344,19 @@ async function handleGenerateBehavioralAnswer(question, jobTitle, company, jobDe
 
   console.log("AutoApply BG: Generating behavioral answer for:", question.substring(0, 60));
 
-  // Build the prompt for the AI
-  const prompt = `You are an applicant for a job application. You are applying for ${jobTitle} at ${company}.
-
-${resumeText ? `Your resume summary: ${resumeText}` : ""}
-
-${jobDescription ? `Job description excerpt: ${jobDescription.substring(0, 500)}` : ""}
-
-Please answer the following application question in 2-3 sentences, in first person, naturally and professionally:
-
-"${question}"
-
-Provide only the answer text, no additional formatting or preamble.`;
+  // [v19 fix] Use /api/answer-custom-question (the endpoint that actually exists).
+  // Previously called /api/generate-text which returned 404, silently failing.
+  const resumeSummary = resumeText || "";
 
   try {
-    const res = await fetch(`${apiUrl}/api/generate-text`, {
+    const res = await fetch(`${apiUrl}/api/answer-custom-question`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        prompt,
-        maxTokens: 150,
+        question,
+        resumeSummary,
+        jobTitle: jobTitle || "",
+        company: company || "",
       }),
     });
 
@@ -2374,7 +2367,7 @@ Provide only the answer text, no additional formatting or preamble.`;
     }
 
     const data = await res.json();
-    const answer = data.answer || data.text || "";
+    const answer = data.answer || "";
 
     if (!answer) {
       throw new Error("No answer generated from API");

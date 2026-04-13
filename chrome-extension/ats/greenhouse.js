@@ -998,7 +998,8 @@
       for (const ta of textareas) {
         if (ta.value?.trim()) continue; // Already filled
 
-        const label = (getFieldLabel(ta) || "").toLowerCase();
+        const rawLabel = getFieldLabel(ta) || "";
+        const label = rawLabel.toLowerCase();
         if (!label || label.length < 5) continue;
 
         // Skip known question types that shouldn't use AI answers
@@ -1006,7 +1007,7 @@
           continue;
         }
 
-        console.log(`AutoApply: Generating behavioral answer for textarea: "${label.substring(0, 50)}"`);
+        console.log(`AutoApply: Generating behavioral answer for textarea: "${rawLabel.substring(0, 50)}"`);
         const resumeText = tailoredResult?.tailoredResume
           ? `${jobData?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
           : "";
@@ -1014,7 +1015,7 @@
         try {
           const result = await chrome.runtime.sendMessage({
             type: "GENERATE_BEHAVIORAL_ANSWER",
-            question: label,
+            question: rawLabel,
             jobTitle: jobData?.jobTitle || "",
             company: jobData?.company || "",
             jobDescription: jobData?.jobDescription?.substring(0, 500) || "",
@@ -1037,7 +1038,8 @@
       for (const el of editables) {
         if (el.textContent?.trim()) continue; // Already filled
 
-        const label = (getFieldLabel(el) || "").toLowerCase();
+        const rawLabel = getFieldLabel(el) || "";
+        const label = rawLabel.toLowerCase();
         if (!label || label.length < 5) continue;
 
         // Skip known question types
@@ -1045,7 +1047,7 @@
           continue;
         }
 
-        console.log(`AutoApply: Generating behavioral answer for rich text editor: "${label.substring(0, 50)}"`);
+        console.log(`AutoApply: Generating behavioral answer for rich text editor: "${rawLabel.substring(0, 50)}"`);
         const resumeText = tailoredResult?.tailoredResume
           ? `${jobData?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
           : "";
@@ -1053,7 +1055,7 @@
         try {
           const result = await chrome.runtime.sendMessage({
             type: "GENERATE_BEHAVIORAL_ANSWER",
-            question: label,
+            question: rawLabel,
             jobTitle: jobData?.jobTitle || "",
             company: jobData?.company || "",
             jobDescription: jobData?.jobDescription?.substring(0, 500) || "",
