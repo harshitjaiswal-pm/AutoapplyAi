@@ -1429,25 +1429,40 @@
    * one, and fill the answers.
    */
   async function fillCustomQuestions(tailoredResult, job) {
-    // Collect all textareas across accessible documents
+    // Collect textareas, contenteditable elements, and large text inputs
     const docs = getAccessibleDocuments();
     const candidates = [];
 
+    // Question-like patterns: labels containing "?" or starting with interrogative words
+    const questionPatterns = /^(why|what|how|describe|tell|explain|share|walk|please)/i;
+
     for (const doc of docs) {
+      // Scan textareas + contenteditable divs + text inputs
       const textareas = queryAllDeep("textarea", doc);
-      for (const ta of textareas) {
-        if ((ta.value || "").trim()) continue; // already filled
-        const rawLabel = getFieldLabel(ta);
+      const editables = Array.from(doc.querySelectorAll("[contenteditable='true'], [role='textbox']"));
+      const allFields = [...textareas, ...editables];
+
+      for (const el of allFields) {
+        // Check if already filled — different check for textarea vs contenteditable
+        const isTextarea = el.tagName === "TEXTAREA";
+        const currentVal = isTextarea ? (el.value || "").trim() : (el.textContent || "").trim();
+        if (currentVal) continue; // already filled
+
+        const rawLabel = getFieldLabel(el);
         const label = rawLabel.toLowerCase();
 
         // Skip known standard fields already handled above
         const standardPrefixes = ["cover", "letter", "additional", "message", "comments", "note",
-          "email", "phone", "linkedin", "github", "portfolio", "name", "city", "location"];
+          "email", "phone", "linkedin", "github", "portfolio", "name", "city", "location",
+          "address", "postal", "zip", "country", "province", "state", "salary", "compensation"];
         if (standardPrefixes.some(p => label.includes(p))) continue;
 
-        // Only pick up labels that look like open-ended questions (≥ 20 chars)
-        if (rawLabel.length >= 20) {
-          candidates.push({ element: ta, label: rawLabel });
+        // Accept if: label looks like a question (has "?" or interrogative start),
+        // OR label is ≥ 15 chars (likely a custom prompt). Old threshold of 20 was
+        // too strict — missed "Why Wealthsimple?" (19 chars).
+        const isQuestion = label.includes("?") || questionPatterns.test(label.trim());
+        if (isQuestion || rawLabel.length >= 15) {
+          candidates.push({ element: el, label: rawLabel, isContentEditable: !isTextarea });
         }
       }
     }
@@ -1461,10 +1476,10 @@
                           user.resumeSummary || "";
 
     let filled = 0;
-    for (const { element, label } of candidates) {
+    for (const { element, label, isContentEditable } of candidates) {
       try {
         const resp = await new Promise((resolve) => {
-          const timer = setTimeout(() => resolve(null), 12000);
+          const timer = setTimeout(() => resolve(null), 15000); // 15s for AI generation
           chrome.runtime.sendMessage(
             {
               type: "ANSWER_CUSTOM_QUESTION",
@@ -1479,7 +1494,15 @@
 
         const answer = resp?.answer;
         if (answer && answer.length > 10) {
-          setNativeValue(element, answer);
+          if (isContentEditable) {
+            // For contenteditable / rich-text editors
+            element.textContent = answer;
+            element.dispatchEvent(new Event("input", { bubbles: true }));
+            element.dispatchEvent(new Event("change", { bubbles: true }));
+            element.dispatchEvent(new Event("blur", { bubbles: true }));
+          } else {
+            setNativeValue(element, answer);
+          }
           console.log(`AutoApply: Filled custom question "${label.slice(0, 60)}" with AI answer`);
           try { AALog && AALog.form("ats.fillCustomQuestion.done", { labelPreview: label.slice(0, 80), answerLen: answer.length }); } catch(_){}
           filled++;
