@@ -1453,7 +1453,38 @@ function injectFloatingTrigger(tabId) {
           const hasResume = !!stored.parsedResume;
           const lastJob   = stored.lastFilledJob;
           const pending   = stored.pendingApplication;
-          const jobInfo   = pending || lastJob;  // prefer current pending over stale lastFilledJob
+
+          // ── [v19 fix] Detect external ATS page and scrape current page info ──
+          // When on an external ATS (non-LinkedIn), storage may hold stale data
+          // from a previous job. Use the current page's DOM as source of truth.
+          const currentUrl = window.location.href;
+          const isLinkedIn = currentUrl.includes("linkedin.com");
+          let currentPageJob = null;
+          if (!isLinkedIn) {
+            // Scrape job title from page — try common selectors then <title>
+            const titleEl = document.querySelector("h1") || document.querySelector("[data-automation-id='jobPostingHeader']");
+            const pageTitle = (titleEl ? titleEl.textContent : document.title || "").trim();
+            // Try to extract company from page
+            const metaCompany = document.querySelector('meta[property="og:site_name"]')?.content
+              || document.querySelector('meta[name="author"]')?.content || "";
+            // Use domain as fallback company name
+            const domainCompany = window.location.hostname.replace(/^(www|jobs|careers|recruit)\./, "")
+              .replace(/\.(com|org|net|io|co|zohorecruit).*/, "")
+              .replace(/\./g, " ");
+            const company = metaCompany || (domainCompany.charAt(0).toUpperCase() + domainCompany.slice(1));
+            currentPageJob = {
+              jobTitle: pageTitle.slice(0, 80),
+              company: company.slice(0, 40),
+              applyUrl: currentUrl,
+              jobUrl: currentUrl,
+            };
+          }
+
+          // On external ATS pages, prefer current-page data over stale storage.
+          // On LinkedIn, use storage as before (pendingApplication is set correctly there).
+          const jobInfo = isLinkedIn
+            ? (pending || lastJob)
+            : (currentPageJob || pending || lastJob);
 
           // Use keyed map lookup for hasPdf — eliminates the wrong-resume display bug.
           // Fallback: scan all entries by company+title in case key was generated from a
@@ -1482,10 +1513,11 @@ function injectFloatingTrigger(tabId) {
             if (strip) {
               const trunc = (s, n) => s && s.length > n ? s.slice(0, n - 1) + "…" : (s || "");
 
-              // Row 1: current application (pending job)
-              const currentLabel = pending
-                ? `${trunc(pending.company || "", 18)}${pending.jobTitle ? " · " + trunc(pending.jobTitle, 20) : ""}`
-                : (lastJob ? `${trunc(lastJob.company || "", 18)}${lastJob.jobTitle ? " · " + trunc(lastJob.jobTitle, 20) : ""}` : "");
+              // Row 1: current application — use currentPageJob on external ATS, storage on LinkedIn
+              const applyingJob = !isLinkedIn && currentPageJob ? currentPageJob : (pending || lastJob);
+              const currentLabel = applyingJob
+                ? `${trunc(applyingJob.company || "", 18)}${applyingJob.jobTitle ? " · " + trunc(applyingJob.jobTitle, 20) : ""}`
+                : "";
 
               // Row 2: last tailored resume (most recent map entry)
               const allEntries = Object.values(resumeMap).filter(e => e?.pdf);
@@ -1877,7 +1909,10 @@ function injectFloatingTrigger(tabId) {
           actions.appendChild(makeDivider());
 
           // ④ Open job posting in new tab
-          const jobPostingUrl = jobInfo?.jobUrl || jobInfo?.applyUrl || jobInfo?.linkedinUrl;
+          // [v19 fix] On external ATS pages, always use current URL — stored URL may be stale
+          const jobPostingUrl = !isLinkedIn
+            ? currentUrl
+            : (jobInfo?.jobUrl || jobInfo?.applyUrl || jobInfo?.linkedinUrl);
           if (jobPostingUrl) {
             const openBtn = makeBtn("↗", "Open job posting", jobPostingUrl.replace(/^https?:\/\//, "").slice(0, 35), "#6B7280", () => {
               window.open(jobPostingUrl, "_blank");
