@@ -1633,39 +1633,69 @@ function injectFloatingTrigger(tabId) {
               applyUrl: jobInfo?.applyUrl || jobInfo?.jobUrl || window.location.href,
             };
 
-            // If the stored jobInfo has no jobDescription (common when user clicks
-            // "Re-tailor" mid-application before the auto-apply flow has populated it),
-            // extract the JD from the current page DOM so the analyze-job API has
-            // something to work with. Without this, the API crashes with an empty body.
-            if (!jobForTailor.jobDescription || jobForTailor.jobDescription.length < 50) {
-              try {
-                // Try structured selectors first (Workday, Greenhouse, Lever, generic)
-                const jdSelectors = [
-                  '[data-automation-id="jobPostingDescription"]',  // Workday
-                  '.job-description', '#job-description',
-                  '[class*="jobDescription"]', '[class*="job-desc"]',
-                  '.description__text', '.show-more-less-html',    // LinkedIn
-                  '[data-testid="jobDescriptionText"]',            // Greenhouse
-                  '.content-intro',                                // Lever
-                  'article', 'main',
-                ];
-                let jdText = "";
-                for (const sel of jdSelectors) {
-                  const el = document.querySelector(sel);
-                  if (el && el.innerText && el.innerText.length > 100) {
-                    jdText = el.innerText.slice(0, 6000);
-                    break;
-                  }
+            // ALWAYS scrape JD from the current ATS page when Re-tailor is clicked.
+            // Stored jobDescription may be from a different job entirely (e.g. when the
+            // extension opened the wrong ATS URL — Luxoft batch landing on Just Energy's
+            // Taleo). The page is always the authoritative source for the JD.
+            // On LinkedIn Easy Apply the JD isn't on the page, so we keep stored JD as
+            // fallback when the page has no parseable job description.
+            try {
+              const jdSelectors = [
+                '[data-automation-id="jobPostingDescription"]',  // Workday
+                '.job-description', '#job-description',
+                '[class*="jobDescription"]', '[class*="job-desc"]',
+                '.description__text', '.show-more-less-html',    // LinkedIn
+                '[data-testid="jobDescriptionText"]',            // Greenhouse
+                '.content-intro',                                // Lever
+                '.ftlfield', '[class*="jobDetail"]',             // Taleo
+                'article', 'main',
+              ];
+              let jdText = "";
+              for (const sel of jdSelectors) {
+                const el = document.querySelector(sel);
+                if (el && el.innerText && el.innerText.length > 100) {
+                  jdText = el.innerText.slice(0, 6000);
+                  break;
                 }
-                // Fallback: grab all visible body text
-                if (!jdText) jdText = document.body ? document.body.innerText.slice(0, 6000) : "";
-                if (jdText) {
-                  jobForTailor.jobDescription = jdText;
-                  console.log("AutoApply: extracted JD from page DOM for re-tailor, length:", jdText.length);
-                }
-              } catch (domErr) {
-                console.warn("AutoApply: could not extract JD from DOM:", domErr.message);
               }
+              if (!jdText) jdText = document.body ? document.body.innerText.slice(0, 6000) : "";
+              if (jdText && jdText.length > 50) {
+                jobForTailor.jobDescription = jdText;
+                console.log("AutoApply: ALWAYS overriding JD from page DOM for re-tailor, length:", jdText.length);
+              }
+              // Also override company from ATS subdomain when stored company looks wrong.
+              // E.g. "luxoft.taleo.net" → company = "Luxoft" even if stored says something else.
+              const hostname = window.location.hostname.toLowerCase();
+              const atsMap = { "taleo.net": true, "greenhouse.io": true, "lever.co": true,
+                "ashbyhq.com": true, "smartrecruiters.com": true, "icims.com": true };
+              for (const [atsDomain] of Object.entries(atsMap)) {
+                if (hostname.endsWith("." + atsDomain)) {
+                  const sub = hostname.slice(0, hostname.length - atsDomain.length - 1);
+                  if (sub && sub.length >= 2) {
+                    const derivedCompany = sub.replace(/[-_]/g, " ")
+                      .replace(/\b\w/g, c => c.toUpperCase());
+                    // Only override if stored company clearly doesn't match this page's host
+                    const storedCo = (jobForTailor.company || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                    const subClean = sub.replace(/[^a-z0-9]/g, "");
+                    if (!storedCo.includes(subClean) && !subClean.includes(storedCo)) {
+                      console.log(`AutoApply: Re-tailor — overriding company from subdomain: "${jobForTailor.company}" → "${derivedCompany}"`);
+                      jobForTailor.company = derivedCompany;
+                    }
+                  }
+                  break;
+                }
+              }
+              // Try to extract job title from page h1 / title tag when it looks stale
+              const pageH1 = (document.querySelector('h1')?.innerText || "").trim().slice(0, 100);
+              if (pageH1.length > 5) {
+                const storedTitle = (jobForTailor.jobTitle || "").toLowerCase();
+                if (!pageH1.toLowerCase().includes(storedTitle.slice(0, 10)) && storedTitle.length > 3) {
+                  console.log(`AutoApply: Re-tailor — overriding title from page h1: "${jobForTailor.jobTitle}" → "${pageH1}"`);
+                  jobForTailor.jobTitle = pageH1;
+                }
+              }
+            } catch (domErr) {
+              console.warn("AutoApply: could not extract JD/metadata from DOM:", domErr.message);
             }
 
             chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: jobForTailor }, (r) => {
