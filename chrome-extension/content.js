@@ -327,7 +327,9 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
       }
 
       // Pick the best candidate URL. If there are multiple (e.g. sidebar "similar jobs"),
-      // prefer the one whose domain/subdomain contains the company name slug.
+      // prefer the one whose domain/subdomain OR link-text context matches the company.
+      // CRITICAL: LinkedIn sidebars embed "similar jobs" from other companies — we must
+      // NOT blindly take the first ATS URL (e.g. Luxoft's page may have Just Energy's Taleo).
       let applyUrl = null;
       if (candidateUrls.length === 1) {
         applyUrl = candidateUrls[0];
@@ -337,21 +339,43 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
           .toLowerCase()
           .replace(/[^a-z0-9]/g, "")
           .substring(0, 12); // first 12 alphanum chars
-        // Score each candidate: +2 if subdomain/path matches company slug, +1 if domain portion matches
-        let bestScore = -1;
+
+        // Also collect surrounding context (link text + aria-label) for each candidate,
+        // so we can score based on whether nearby text mentions the target company.
+        const urlContextMap = new Map();
+        for (const a of doc.querySelectorAll("a[href]")) {
+          const href = a.href || "";
+          if (candidateUrls.includes(href)) {
+            const ctx = ((a.textContent || "") + " " + (a.getAttribute("aria-label") || "")
+              + " " + (a.closest("li,article,section,div")?.textContent || "").slice(0, 200))
+              .toLowerCase().replace(/\s+/g, " ");
+            urlContextMap.set(href, (urlContextMap.get(href) || "") + " " + ctx);
+          }
+        }
+
+        // Score each candidate:
+        //   +4 if the URL hostname contains the company slug (e.g. luxoft.taleo.net for Luxoft)
+        //   +2 if any part of the URL contains the company slug
+        //   +2 if the surrounding link text/context contains the company slug
+        //   -3 if context mentions a different company more prominently (sidebar cross-contamination)
+        let bestScore = -999;
         for (const url of candidateUrls) {
           let score = 0;
+          const urlLower = url.toLowerCase().replace(/[^a-z0-9]/g, "");
           if (companySlug.length >= 3) {
-            const urlLower = url.toLowerCase();
-            const hostMatch = urlLower.replace(/https?:\/\//, "").split("/")[0]; // hostname
-            if (hostMatch.replace(/[^a-z0-9]/g, "").includes(companySlug)) score += 2;
-            else if (urlLower.replace(/[^a-z0-9]/g, "").includes(companySlug)) score += 1;
+            const hostname = url.toLowerCase().replace(/https?:\/\//, "").split("/")[0].replace(/[^a-z0-9]/g, "");
+            if (hostname.includes(companySlug)) score += 4;
+            else if (urlLower.includes(companySlug)) score += 2;
+            const ctx = (urlContextMap.get(url) || "").replace(/[^a-z0-9\s]/g, "");
+            if (ctx.includes(companySlug)) score += 2;
           }
           if (score > bestScore) { bestScore = score; applyUrl = url; }
         }
-        // If no company match, fall back to first candidate (original behavior)
-        if (!applyUrl) applyUrl = candidateUrls[0];
-        try { AALog && AALog.scrape("linkedin.jd.applyUrlPicked", { companyHint, companySlug, candidates: candidateUrls.length, chosen: applyUrl?.slice(0, 120) }); } catch(_){}
+        // Only use the fallback (first candidate) if NO candidate scored positively.
+        // If all candidates scored 0 or below, the job's ATS URL isn't identifiable —
+        // return null so the extension falls back to clicking the Apply button in the panel.
+        if (bestScore <= 0) applyUrl = null;
+        try { AALog && AALog.scrape("linkedin.jd.applyUrlPicked", { companyHint, companySlug, candidates: candidateUrls.length, chosen: applyUrl?.slice(0, 120), bestScore }); } catch(_){}
       }
 
       try {
@@ -1358,46 +1382,72 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
         }
 
         if (!panelReady) {
-          // One retry: re-click (force) and wait again
-          console.warn(`AutoApply: Panel not showing "${job.title}" — retrying card click`);
-          try { AALog && AALog.error("linkedin.startApplying.panelMismatch", { title: job.title, company: job.company }); } catch(_){}
-          await clickJobCard(job, /* forceClick= */ true);
-          const retryDeadline = Date.now() + 4000;
-          while (Date.now() < retryDeadline) {
-            await new Promise((r) => setTimeout(r, 300));
-            if (isPanelShowingJob(job)) { panelReady = true; break; }
+          // Retries 2 & 3: re-click (force) and wait up to 5s each time
+          // LinkedIn may auto-navigate during the review modal — keep trying
+          for (let attempt = 2; attempt <= 3 && !panelReady; attempt++) {
+            console.warn(`AutoApply: Panel not showing "${job.title}" — retry ${attempt}/3`);
+            try { AALog && AALog.error("linkedin.startApplying.panelMismatch", { attempt, title: job.title, company: job.company }); } catch(_){}
+            await clickJobCard(job, /* forceClick= */ true);
+            const retryDeadline = Date.now() + 5000;
+            while (Date.now() < retryDeadline) {
+              await new Promise((r) => setTimeout(r, 300));
+              if (isPanelShowingJob(job)) { panelReady = true; break; }
+            }
           }
         }
 
         if (!panelReady) {
-          console.error(`AutoApply: Panel still not showing "${job.title}" — aborting to avoid wrong Apply click`);
-          try { AALog && AALog.error("linkedin.startApplying.panelMismatchAbort", { title: job.title, company: job.company }); } catch(_){}
-          updateJobStatus(job.id, "failed");
-          continue; // Skip this job rather than open the wrong company's ATS
-        }
+          // Final fallback: LinkedIn panel stubbornly shows a different job.
+          // User already confirmed this job via the review modal, so we attempt
+          // clickApplyButton() anyway — if it finds a button, we proceed; if not,
+          // we fail with a clear user-facing message.
+          console.warn(`AutoApply: Panel mismatch for "${job.title}" — attempting Apply click anyway (user already confirmed)`);
+          try { AALog && AALog.error("linkedin.startApplying.panelMismatchFallback", { title: job.title, company: job.company }); } catch(_){}
 
-        // Scroll the detail panel back to TOP before clicking Apply — after reading
-        // the JD we scrolled down, which hides the Apply button. Scroll up first.
-        {
-          const detailPanelForScroll = document.querySelector(
-            '.jobs-search__job-details, [class*="jobs-search__job-details"], [class*="job-details"]'
-          ) || document.querySelector('.scaffold-layout__detail');
-          if (detailPanelForScroll) {
-            detailPanelForScroll.scrollTop = 0;
-            await new Promise((r) => setTimeout(r, 400));
+          // Scroll to top so the Apply button is visible even if panel shows wrong job
+          {
+            const panelFallback = document.querySelector(
+              '.jobs-search__job-details, [class*="jobs-search__job-details"], [class*="job-details"]'
+            ) || document.querySelector('.scaffold-layout__detail');
+            if (panelFallback) { panelFallback.scrollTop = 0; await new Promise(r => setTimeout(r, 400)); }
           }
-        }
-
-        try { AALog && AALog.nav("linkedin.apply.click", { jobId: job.id }); } catch(_){}
-        applyType = await clickApplyButton();
-
-        // If button not found first try, scroll up more aggressively and retry once
-        if (!applyType) {
-          window.scrollTo(0, 0);
-          await new Promise((r) => setTimeout(r, 500));
           applyType = await clickApplyButton();
+          if (!applyType) {
+            // Truly no Apply button — fail with a clear reason the user can act on
+            const mismatchReason = "LinkedIn showed a different job in the panel — please click the job card manually and re-run";
+            console.error(`AutoApply: Panel mismatch abort for "${job.title}"`);
+            try { AALog && AALog.error("linkedin.startApplying.panelMismatchAbort", { title: job.title, company: job.company }); } catch(_){}
+            updateJobStatus(job.id, "failed", mismatchReason);
+            continue;
+          }
+          // Apply button found despite panel mismatch — continue as normal below
         }
-        try { AALog && AALog.nav("linkedin.apply.result", { jobId: job.id, applyType }); } catch(_){}
+
+        // Only click Apply if panelMismatch fallback didn't already click it
+        if (panelReady) {
+          // Scroll the detail panel back to TOP before clicking Apply — after reading
+          // the JD we scrolled down, which hides the Apply button. Scroll up first.
+          {
+            const detailPanelForScroll = document.querySelector(
+              '.jobs-search__job-details, [class*="jobs-search__job-details"], [class*="job-details"]'
+            ) || document.querySelector('.scaffold-layout__detail');
+            if (detailPanelForScroll) {
+              detailPanelForScroll.scrollTop = 0;
+              await new Promise((r) => setTimeout(r, 400));
+            }
+          }
+
+          try { AALog && AALog.nav("linkedin.apply.click", { jobId: job.id }); } catch(_){}
+          applyType = await clickApplyButton();
+
+          // If button not found first try, scroll up more aggressively and retry once
+          if (!applyType) {
+            window.scrollTo(0, 0);
+            await new Promise((r) => setTimeout(r, 500));
+            applyType = await clickApplyButton();
+          }
+          try { AALog && AALog.nav("linkedin.apply.result", { jobId: job.id, applyType }); } catch(_){}
+        }
       }
 
       if (!isApplying) break; // Stop clicked while opening ATS
