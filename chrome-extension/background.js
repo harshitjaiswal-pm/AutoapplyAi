@@ -1632,6 +1632,42 @@ function injectFloatingTrigger(tabId) {
               ...(jobInfo || {}),
               applyUrl: jobInfo?.applyUrl || jobInfo?.jobUrl || window.location.href,
             };
+
+            // If the stored jobInfo has no jobDescription (common when user clicks
+            // "Re-tailor" mid-application before the auto-apply flow has populated it),
+            // extract the JD from the current page DOM so the analyze-job API has
+            // something to work with. Without this, the API crashes with an empty body.
+            if (!jobForTailor.jobDescription || jobForTailor.jobDescription.length < 50) {
+              try {
+                // Try structured selectors first (Workday, Greenhouse, Lever, generic)
+                const jdSelectors = [
+                  '[data-automation-id="jobPostingDescription"]',  // Workday
+                  '.job-description', '#job-description',
+                  '[class*="jobDescription"]', '[class*="job-desc"]',
+                  '.description__text', '.show-more-less-html',    // LinkedIn
+                  '[data-testid="jobDescriptionText"]',            // Greenhouse
+                  '.content-intro',                                // Lever
+                  'article', 'main',
+                ];
+                let jdText = "";
+                for (const sel of jdSelectors) {
+                  const el = document.querySelector(sel);
+                  if (el && el.innerText && el.innerText.length > 100) {
+                    jdText = el.innerText.slice(0, 6000);
+                    break;
+                  }
+                }
+                // Fallback: grab all visible body text
+                if (!jdText) jdText = document.body ? document.body.innerText.slice(0, 6000) : "";
+                if (jdText) {
+                  jobForTailor.jobDescription = jdText;
+                  console.log("AutoApply: extracted JD from page DOM for re-tailor, length:", jdText.length);
+                }
+              } catch (domErr) {
+                console.warn("AutoApply: could not extract JD from DOM:", domErr.message);
+              }
+            }
+
             chrome.runtime.sendMessage({ type: "TAILOR_AND_FILL", job: jobForTailor }, (r) => {
               clearInterval(tickInterval);
               if (barEl) { barEl.style.transition = "width 0.4s ease-out"; barEl.style.width = "100%"; }
