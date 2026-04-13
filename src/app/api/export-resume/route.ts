@@ -25,6 +25,73 @@ import {
  * and this route returns the file as a binary download.
  */
 
+/**
+ * Normalize the AI's skills output into a flat array of { category, items }.
+ * Handles all known shapes the AI might return:
+ *   A: { technical: ["skill1"], tools: ["tool1"] }
+ *   B: { "Product & Strategy": ["skill1"], "Data & Analytics": ["skill2"] }
+ *   C: { categories: [{ name: "...", skills: ["..."] }] }
+ *   D: [{ name: "...", skills: ["..."] }]
+ *   E: values are objects instead of strings (e.g. [{ name: "SQL" }])
+ */
+function normalizeSkills(
+  skills: unknown
+): Array<{ category: string; items: string[] }> {
+  if (!skills || typeof skills !== "object") return [];
+
+  const result: Array<{ category: string; items: string[] }> = [];
+
+  function extractItems(arr: unknown[]): string[] {
+    return arr
+      .map((v) => {
+        if (typeof v === "string") return v;
+        if (v && typeof v === "object") {
+          const obj = v as Record<string, unknown>;
+          return String(obj.name || obj.skill || obj.text || "");
+        }
+        return String(v);
+      })
+      .filter(Boolean);
+  }
+
+  function processCategory(cat: unknown) {
+    if (!cat || typeof cat !== "object") return;
+    const c = cat as Record<string, unknown>;
+    const name = String(c.name || c.category || "Other");
+    const items = Array.isArray(c.skills)
+      ? c.skills
+      : Array.isArray(c.items)
+        ? c.items
+        : [];
+    const extracted = extractItems(items);
+    if (extracted.length > 0) result.push({ category: name, items: extracted });
+  }
+
+  if (Array.isArray(skills)) {
+    // Shape D: skills is directly an array of { name, skills }
+    for (const cat of skills) processCategory(cat);
+  } else {
+    const obj = skills as Record<string, unknown>;
+    if (Array.isArray(obj.categories)) {
+      // Shape C: { categories: [...] }
+      for (const cat of obj.categories) processCategory(cat);
+    } else {
+      // Shape A/B: { key: [...], ... }
+      for (const [key, value] of Object.entries(obj)) {
+        if (Array.isArray(value) && value.length > 0) {
+          const items = extractItems(value);
+          const categoryName =
+            key.charAt(0).toUpperCase() + key.slice(1);
+          if (items.length > 0)
+            result.push({ category: categoryName, items });
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { resume, format } = await request.json();
@@ -272,24 +339,23 @@ async function generateDocx(resume: any) {
               ]
             : []),
 
-          // Skills — handle both fixed keys and arbitrary category names from AI
-          ...(resume.skills && typeof resume.skills === "object"
-            ? [
-                sectionHeading("Skills"),
-                ...Object.entries(resume.skills)
-                  .filter(([, value]) => Array.isArray(value) && (value as string[]).length > 0)
-                  .map(([key, value]) => {
-                    const categoryName = key.charAt(0).toUpperCase() + key.slice(1);
-                    return new Paragraph({
-                      spacing: { after: 40 },
-                      children: [
-                        new TextRun({ text: `${categoryName}: `, bold: true, font: "Arial", size: 20 }),
-                        new TextRun({ text: (value as string[]).filter(Boolean).join(", "), font: "Arial", size: 20 }),
-                      ],
-                    });
-                  }),
-              ]
-            : []),
+          // Skills — normalize all AI output shapes, then render
+          ...((() => {
+            const skillEntries = normalizeSkills(resume.skills);
+            if (skillEntries.length === 0) return [];
+            return [
+              sectionHeading("Skills"),
+              ...skillEntries.map((entry) =>
+                new Paragraph({
+                  spacing: { after: 40 },
+                  children: [
+                    new TextRun({ text: `${entry.category}: `, bold: true, font: "Arial", size: 20 }),
+                    new TextRun({ text: entry.items.join(", "), font: "Arial", size: 20 }),
+                  ],
+                })
+              ),
+            ];
+          })()),
 
           // Experience
           ...(experienceChildren.length
@@ -446,26 +512,14 @@ async function generatePdf(resume: any) {
     y += 4;
   }
 
-  // Skills — handle both fixed keys (technical/tools/soft) and arbitrary category names
-  // The AI may return { technical: [...], tools: [...] } OR { "Product & Strategy": [...], "Data & Analytics": [...] }
-  if (resume.skills && typeof resume.skills === "object") {
-    const skillEntries: Array<{ category: string; items: string[] }> = [];
-
-    for (const [key, value] of Object.entries(resume.skills)) {
-      if (Array.isArray(value) && value.length > 0) {
-        // Capitalize the category name nicely
-        const categoryName = key.charAt(0).toUpperCase() + key.slice(1);
-        skillEntries.push({ category: categoryName, items: value.filter(Boolean).map(String) });
-      }
+  // Skills — normalize all AI output shapes, then render
+  const pdfSkillEntries = normalizeSkills(resume.skills);
+  if (pdfSkillEntries.length > 0) {
+    heading("Skills");
+    for (const entry of pdfSkillEntries) {
+      wrappedText(sanitizeForPdf(`${entry.category}: ${entry.items.join(", ")}`), 10);
     }
-
-    if (skillEntries.length > 0) {
-      heading("Skills");
-      for (const entry of skillEntries) {
-        wrappedText(sanitizeForPdf(`${entry.category}: ${entry.items.join(", ")}`), 10);
-      }
-      y += 4;
-    }
+    y += 4;
   }
 
   // Experience
