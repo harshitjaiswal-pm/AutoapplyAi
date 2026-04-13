@@ -1554,21 +1554,25 @@ function injectFloatingTrigger(tabId) {
               const applyTitle   = (applyingJob?.jobTitle || "").trim();
               const applyLabel = [applyCompany, applyTitle].filter(Boolean).join(" · ");
 
+              // Show the resume for the CURRENT job if it exists; otherwise show latest.
+              // This prevents showing a stale resume from a previous application.
+              const currentJobEntry = mapEntry?.pdf ? mapEntry : null;
               const allEntries = Object.values(resumeMap).filter(e => e?.pdf);
               allEntries.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
               const latestEntry = allEntries[0];
-              const resumeCompany = (latestEntry?.company  || "").trim();
-              const resumeTitle   = (latestEntry?.jobTitle || "").trim();
+              const displayEntry = currentJobEntry || latestEntry;
+              const resumeCompany = (displayEntry?.company  || "").trim();
+              const resumeTitle   = (displayEntry?.jobTitle || "").trim();
               const resumeLabel = [resumeCompany, resumeTitle].filter(Boolean).join(" · ");
 
               const showStrip = !!(applyLabel || resumeLabel);
               strip.style.display = showStrip ? "block" : "none";
 
               if (showStrip) {
-                const resumeMatchesCurrent = mapEntry?.pdf
-                  && latestEntry
-                  && (mapEntry.company || "") === (latestEntry.company || "")
-                  && (mapEntry.jobTitle || "") === (latestEntry.jobTitle || "");
+                // Mismatch = we have a resume but it's NOT for the current job
+                const resumeMatchesCurrent = currentJobEntry
+                  || (latestEntry && applyCompany && resumeCompany.toLowerCase() === applyCompany.toLowerCase()
+                      && applyTitle && resumeTitle.toLowerCase() === applyTitle.toLowerCase());
                 const mismatch = hasPdf && latestEntry && !resumeMatchesCurrent;
                 const rowStyle = "display:flex;align-items:baseline;gap:6px;";
                 const tagStyle = "font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;flex-shrink:0;";
@@ -1583,7 +1587,7 @@ function injectFloatingTrigger(tabId) {
                   ${resumeLabel ? `
                   <div style="${rowStyle}">
                     <span style="${tagStyle}color:${mismatch ? "#DC2626" : "#059669"};">RESUME</span>
-                    <span style="${textStyle}color:${mismatch ? "#DC2626" : "#1F2937"};" title="${resumeLabel}">${resumeLabel}${mismatch ? " ⚠" : ""}</span>
+                    <span style="${textStyle}color:${mismatch ? "#DC2626" : "#1F2937"};" title="${mismatch ? "⚠ This resume was tailored for a different job. Click 'Tailor resume' to generate one for this role." : resumeLabel}">${resumeLabel}${mismatch ? " ⚠ (different job)" : ""}</span>
                   </div>` : ""}
                 `;
               }
