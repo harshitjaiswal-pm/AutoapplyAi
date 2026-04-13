@@ -41,6 +41,31 @@ function UserStoreGuard() {
       });
     }
 
+    // Fetch profile from server and hydrate store if not already loaded
+    const alreadyHasProfile = !!useAppStore.getState().userProfile?.firstName;
+    if (!alreadyHasProfile) {
+      fetch("/api/user/profile")
+        .then((r) => r.json())
+        .then((data) => {
+          const profile = data?.profile;
+          if (!profile) return;
+
+          // Remove server-only fields before hydrating the client store
+          const { savedAt, ...clientProfile } = profile;
+
+          // Hydrate Zustand
+          useAppStore.setState({ userProfile: clientProfile });
+
+          // Hydrate localStorage so the Chrome extension can sync it
+          localStorage.setItem("aa_profile", JSON.stringify(clientProfile));
+
+          // Set onboarding cookie so middleware doesn't redirect to /onboarding
+          document.cookie =
+            "aa_onboarding_complete=true; path=/; max-age=31536000";
+        })
+        .catch((e) => console.warn("AutoApply: Failed to load profile from server", e));
+    }
+
     // Fetch resume from server and hydrate store if not already loaded
     const alreadyHasResume = !!useAppStore.getState().pipelineResumeText;
     if (!alreadyHasResume) {

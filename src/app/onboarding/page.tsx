@@ -203,6 +203,18 @@ function OnboardingContent() {
         veteranStatus: "",
       };
 
+      // Persist profile to server (Redis) so it survives logout/new devices
+      try {
+        await fetch("/api/user/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formData),
+        });
+      } catch (e) {
+        console.warn("AutoApply: Failed to save profile to server", e);
+        // Non-blocking — continue even if server save fails
+      }
+
       // Write to localStorage for extension to sync
       if (typeof window !== "undefined") {
         window.localStorage.setItem(
