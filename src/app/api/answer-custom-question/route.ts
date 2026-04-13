@@ -11,19 +11,31 @@ import Anthropic from "@anthropic-ai/sdk";
  * Body: { question: string, resumeSummary: string, jobTitle: string, company: string }
  * Returns: { answer: string }
  */
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+// Handle CORS preflight
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { question, resumeSummary, jobTitle, company } = await request.json();
 
     if (!question) {
-      return NextResponse.json({ error: "question is required" }, { status: 400 });
+      return NextResponse.json({ error: "question is required" }, { status: 400, headers: CORS_HEADERS });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey || apiKey === "your-api-key-here") {
       return NextResponse.json(
         { error: "Anthropic API key not configured." },
-        { status: 500 }
+        { status: 500, headers: CORS_HEADERS }
       );
     }
 
@@ -58,16 +70,16 @@ Write the answer:`;
       messages: [{ role: "user", content: userContent }],
     });
 
-    const answer = message.content[0].type === "text"
+    const answer = message.content?.[0]?.type === "text"
       ? message.content[0].text.trim()
       : "";
 
-    return NextResponse.json({ answer });
+    return NextResponse.json({ answer }, { headers: CORS_HEADERS });
   } catch (error: unknown) {
     console.error("answer-custom-question error:", error);
     return NextResponse.json(
       { error: "Failed to generate answer." },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }

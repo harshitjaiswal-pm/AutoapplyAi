@@ -153,7 +153,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try { AALog && AALog.state("bg.prepareApplication", { jobTitle: message.job?.jobTitle, company: message.job?.company }); } catch(_){}
     startKeepAlive(); // Keep alive while waiting for new tab + API calls
     chrome.storage.local.set({ pendingApplication: { ...message.job, _queuedAt: Date.now() } }, () => {
-      console.log("AutoApply BG: Stored pending application for", message.job.jobTitle);
+      console.log("AutoApply BG: Stored pending application for", message.job?.jobTitle);
 
       // Start watching for new tabs
       expectingNewTab = true;
@@ -962,7 +962,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From ATS scripts: Application form was filled successfully ── */
   if (message.type === "APPLICATION_COMPLETED") {
-    const job = message.job;
+    const job = message.job || {};
     console.log("AutoApply BG: Application completed for", job.jobTitle, "at", job.company);
 
     // Clear apply tab tracking — this application is done.

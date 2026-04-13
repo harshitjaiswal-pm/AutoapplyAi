@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     clearTimeout(timeout);
 
     let responseText =
-      message.content[0].type === "text" ? message.content[0].text : "";
+      message.content?.[0]?.type === "text" ? message.content[0].text : "";
 
     // Strip markdown code fences if present (Haiku sometimes adds these)
     responseText = responseText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
