@@ -433,7 +433,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From ATS scripts: Download the tailored resume as PDF ── */
   if (message.type === "DOWNLOAD_RESUME") {
-    handleDownloadResume(message.job);
+    handleDownloadResume(message.job, sender.tab?.id);
     sendResponse({ success: true });
     return true;
   }
@@ -2171,6 +2171,7 @@ async function handleTailorAndFill(job) {
       const entryPayload = {
         pdf:        base64,
         filename,
+        resumeKey,                          // self-identifying: stored key matches lookup key
         jobTitle:   job.jobTitle   || "",
         company:    job.company    || "",
         jobUrl:     job.applyUrl   || job.jobUrl || "",
@@ -2356,7 +2357,7 @@ function makeResumeKey(job) {
  * Download the tailored resume PDF to the user's Downloads folder.
  * Uses keyed lookup so batch jobs always download the correct resume.
  */
-async function handleDownloadResume(job) {
+async function handleDownloadResume(job, callerTabId) {
   const resumeKey = makeResumeKey(job);
   const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename", "lastResumeKey"]);
   const map       = stored.tailoredResumeMap || {};
@@ -2399,6 +2400,14 @@ async function handleDownloadResume(job) {
 
   if (!base64) {
     console.warn("AutoApply BG: No PDF to download (key:", resumeKey, ")");
+    // Send user-facing message to the panel so they know to tailor first
+    if (callerTabId) {
+      chrome.tabs.sendMessage(callerTabId, {
+        type: "SHOW_BANNER",
+        message: "⚠️ No tailored resume for this job yet. Click \"Tailor resume\" first, then download.",
+        level: "warn",
+      }).catch(() => {});
+    }
     return;
   }
 

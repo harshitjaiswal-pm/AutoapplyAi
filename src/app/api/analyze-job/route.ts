@@ -29,6 +29,8 @@ export async function POST(request: NextRequest) {
     }
 
     const anthropic = new Anthropic({ apiKey });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     const message = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",  // Haiku — fast & cheap, perfect for extraction
@@ -41,6 +43,7 @@ export async function POST(request: NextRequest) {
         },
       ],
     });
+    clearTimeout(timeout);
 
     let responseText =
       message.content[0].type === "text" ? message.content[0].text : "";
@@ -58,6 +61,20 @@ export async function POST(request: NextRequest) {
     }
 
     const parsedJob = JSON.parse(responseText);
+
+    // Schema guard: ensure we got a usable job object
+    if (!parsedJob || typeof parsedJob !== "object") {
+      return NextResponse.json(
+        { error: "AI returned an empty result. Please try again." },
+        { status: 500 }
+      );
+    }
+    if (!parsedJob.title && !parsedJob.jobTitle && !parsedJob.skills && !parsedJob.requirements) {
+      return NextResponse.json(
+        { error: "AI could not extract job data. Please check the job description and try again." },
+        { status: 422 }
+      );
+    }
 
     return NextResponse.json({ parsedJob });
   } catch (error: unknown) {

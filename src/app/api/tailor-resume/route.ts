@@ -75,6 +75,9 @@ export async function POST(request: NextRequest) {
       ? `\n\n⚠️ MANDATORY EXPERIENCE CONSTRAINT — HIGHEST PRIORITY AFTER RULE ZERO:\nThe candidate's own summary states their experience as "${yearsMatch[1]}".\n- You MUST use this exact figure in the tailored summary — copy it verbatim.\n- Do NOT substitute a different number derived from individual role tenures (e.g. "4+ years at Amazon" is wrong if the source summary says "9+ years").\n- This is the candidate's deliberate self-presentation; do not second-guess it.`
       : "";
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000); // 90s — Sonnet can be slow
+
     const message = await anthropic.messages.create({
       model: modelId,
       max_tokens: 8192,
@@ -86,6 +89,8 @@ export async function POST(request: NextRequest) {
         },
       ],
     });
+
+    clearTimeout(timeout);
 
     // [AutoQA fix 2026-04-07] Added optional chaining — content array could be empty if model returns no text block
     let responseText =
@@ -106,7 +111,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Pre-parse sanity check: response must start with { (avoids confusing SyntaxError messages)
+    if (!responseText || !responseText.trimStart().startsWith("{")) {
+      console.error("Tailor-resume: model returned non-JSON:", responseText.substring(0, 200));
+      return NextResponse.json(
+        { error: "AI returned unexpected format. Please try again." },
+        { status: 500 }
+      );
+    }
+
     const tailoredResult = JSON.parse(responseText);
+
+    // Schema guard: tailored output must have at minimum an experience array and contactInfo
+    if (!tailoredResult || typeof tailoredResult !== "object") {
+      return NextResponse.json(
+        { error: "AI returned an empty tailoring result. Please try again." },
+        { status: 500 }
+      );
+    }
+    if (!tailoredResult.experience && !tailoredResult.tailoredResume) {
+      return NextResponse.json(
+        { error: "AI output is missing required fields. Please try again." },
+        { status: 422 }
+      );
+    }
 
     return NextResponse.json({ tailoredResult });
   } catch (error: unknown) {

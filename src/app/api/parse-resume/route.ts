@@ -25,9 +25,9 @@ export async function POST(request: NextRequest) {
     // Step 1: Get the resume text from the request
     const { resumeText } = await request.json();
 
-    if (!resumeText || resumeText.trim().length < 50) {
+    if (!resumeText || typeof resumeText !== "string" || resumeText.trim().split(/\s+/).length < 20) {
       return NextResponse.json(
-        { error: "Resume text is too short. Please paste your full resume." },
+        { error: "Resume text is too short. Please paste your full resume (at least 20 words)." },
         { status: 400 }
       );
     }
@@ -41,8 +41,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Step 3: Call Claude
+    // Step 3: Call Claude (with 30s timeout)
     const anthropic = new Anthropic({ apiKey });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     const message = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",  // Haiku — fast & cheap, perfect for extraction
@@ -55,6 +57,7 @@ export async function POST(request: NextRequest) {
         },
       ],
     });
+    clearTimeout(timeout);
 
     // Step 4: Extract the text response and clean it
     let responseText =
@@ -72,8 +75,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 5: Parse the JSON
+    // Step 5: Parse and validate the JSON
     const parsedResume = JSON.parse(responseText);
+
+    // Schema guard: ensure we got a usable resume object, not an empty/null result
+    if (!parsedResume || typeof parsedResume !== "object") {
+      return NextResponse.json(
+        { error: "AI returned an empty result. Please try again." },
+        { status: 500 }
+      );
+    }
+    if (!parsedResume.contactInfo && !parsedResume.experience) {
+      return NextResponse.json(
+        { error: "AI could not extract resume data. Please check your resume text and try again." },
+        { status: 422 }
+      );
+    }
 
     return NextResponse.json({ parsedResume });
   } catch (error: unknown) {

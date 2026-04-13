@@ -2919,4 +2919,38 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
       updateStartButton();
     }
   });
+
+  // ── Listen for messages from background.js ──────────────────────────────
+  // background.js may send SHOW_BANNER when a download is blocked or an error
+  // occurs, so we surface it to the user inside the panel.
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "SHOW_BANNER") {
+      const panel = document.getElementById("autoapply-panel");
+      if (!panel) return;
+      // Remove any existing banner first
+      const old = panel.querySelector(".aa-bg-banner");
+      if (old) old.remove();
+      const banner = document.createElement("div");
+      banner.className = "aa-bg-banner";
+      const color = message.level === "warn" ? "#FEF3C7" : message.level === "error" ? "#FEE2E2" : "#D1FAE5";
+      const textColor = message.level === "warn" ? "#92400E" : message.level === "error" ? "#991B1B" : "#065F46";
+      banner.style.cssText = `
+        margin: 8px 12px 0;
+        padding: 8px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        color: ${textColor};
+        background: ${color};
+        border: 1px solid ${color};
+        line-height: 1.4;
+      `;
+      banner.textContent = message.message || "Something went wrong.";
+      // Auto-dismiss after 8 seconds
+      setTimeout(() => banner.remove(), 8000);
+      // Insert at top of panel content area
+      const firstChild = panel.firstChild;
+      panel.insertBefore(banner, firstChild);
+    }
+  });
 })();
