@@ -16,7 +16,7 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
  */
 
 (() => {
-  const SCRIPT_VERSION = "2.4.8-v19-stale-panel-fix";
+  const SCRIPT_VERSION = "2.4.9-v20-listing-page-guard";
 
   // Version-aware injection guard: always re-inject when version changes.
   // If a NEWER version arrives (programmatic injection after manifest cache),

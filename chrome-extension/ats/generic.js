@@ -681,9 +681,17 @@
     );
     const title = titleEl?.innerText?.trim().split("\n")[0] || document.title.replace(/[\-–|].*$/, "").trim();
     if (!title || title.length < 3) return null;
-    // Reject common UI/nav headings that aren't job titles
-    const NON_JOB_TITLES = /^(primary navigation|main navigation|site navigation|skip to|breadcrumb|header|footer|menu|search|sign in|log in|home)$/i;
-    if (NON_JOB_TITLES.test(title.trim())) return null;
+    // Reject common UI/nav headings and listing page headings that aren't actual job titles
+    const NON_JOB_TITLES = /^(primary navigation|main navigation|site navigation|skip to|breadcrumb|header|footer|menu|search|sign in|log in|home|open positions|all jobs|all openings|job openings|career opportunities|careers|current openings|available positions|browse jobs|job listings|our openings|join us|join our team|we.re hiring|work with us)/i;
+    if (NON_JOB_TITLES.test(title.replace(/\s*\(\d+\)\s*$/, "").trim())) return null;
+
+    // Reject if this looks like a listing page (many job links → not a single posting)
+    const jobLinks = document.querySelectorAll('a[href*="/jobs/"], a[href*="/job/"], a[href*="/posting"], a[href*="/position"]');
+    const uniqueJobUrls = new Set(Array.from(jobLinks).map(a => a.href).filter(h => h.includes("/job") || h.includes("/posting") || h.includes("/position")));
+    if (uniqueJobUrls.size > 3) {
+      console.log("AutoApply: Looks like a job listing page (" + uniqueJobUrls.size + " job links) — skipping scrape");
+      return null;
+    }
 
     // Company — try URL path (hosted ATS), DOM selectors, filtered og:site_name, or domain
     const host = location.hostname.toLowerCase();

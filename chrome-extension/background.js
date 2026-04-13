@@ -1465,7 +1465,19 @@ function injectFloatingTrigger(tabId) {
           if (!isLinkedIn) {
             // Scrape job title from page — try common selectors then <title>
             const titleEl = document.querySelector("h1") || document.querySelector("[data-automation-id='jobPostingHeader']");
-            const pageTitle = (titleEl ? titleEl.textContent : document.title || "").trim();
+            let pageTitle = (titleEl ? titleEl.textContent : document.title || "").trim();
+
+            // Reject listing page headings that aren't actual job titles
+            const NON_JOB_TITLES = /^(open positions|all jobs|all openings|job openings|career opportunities|careers|current openings|available positions|browse jobs|job listings|our openings|join us|join our team|we.re hiring|work with us)/i;
+            if (NON_JOB_TITLES.test(pageTitle.replace(/\s*\(\d+\)\s*$/, "").trim())) {
+              pageTitle = "";
+            }
+            // Also reject if page has many job links (listing page, not detail page)
+            const jobLinks = document.querySelectorAll('a[href*="/jobs/"], a[href*="/job/"], a[href*="/posting"], a[href*="/position"]');
+            const uniqueJobUrls = new Set(Array.from(jobLinks).map(a => a.href).filter(h => h.includes("/job") || h.includes("/posting") || h.includes("/position")));
+            if (uniqueJobUrls.size > 3) {
+              pageTitle = "";
+            }
 
             // Extract company name — priority order:
             // 1. Visible page branding (logos, headers)
@@ -1496,12 +1508,15 @@ function injectFloatingTrigger(tabId) {
             // Title-case it
             const company = rawCompany.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 
-            currentPageJob = {
-              jobTitle: pageTitle.slice(0, 80),
-              company: company.slice(0, 40),
-              applyUrl: currentUrl,
-              jobUrl: currentUrl,
-            };
+            // Only build currentPageJob if we got a real job title (not a listing page)
+            if (pageTitle) {
+              currentPageJob = {
+                jobTitle: pageTitle.slice(0, 80),
+                company: company.slice(0, 40),
+                applyUrl: currentUrl,
+                jobUrl: currentUrl,
+              };
+            }
           }
 
           // On external ATS pages, prefer current-page data over stale storage.
