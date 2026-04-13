@@ -112,7 +112,23 @@
   }
 
   async function init() {
-    const stored = await chrome.storage.local.get(["pendingApplication"]);
+    const stored = await chrome.storage.local.get(["pendingApplication", "_aa_scrapeAndTailor"]);
+
+    // If _aa_scrapeAndTailor is set (from "Fill this form" button), self-scrape the current page
+    // instead of relying on potentially stale pendingApplication data.
+    if (stored._aa_scrapeAndTailor) {
+      chrome.storage.local.remove(["_aa_scrapeAndTailor"]);
+      const scraped = scrapeJobInfoFromLeverPage();
+      if (scraped) {
+        LOG("Self-scrape mode: using current page data for", scraped.jobTitle);
+        // Store as pendingApplication so the rest of the flow works normally
+        await new Promise(r => chrome.storage.local.set({ pendingApplication: scraped }, r));
+        stored.pendingApplication = scraped;
+      } else {
+        LOG("Self-scrape mode: could not scrape job info from page");
+      }
+    }
+
     if (!stored.pendingApplication) {
       LOG("No pending application — offering manual re-trigger");
       // Scrape what we can from the page so the user can start from here
@@ -374,7 +390,9 @@
     LOG("Found", questions.length, "custom question containers");
 
     for (const q of questions) {
-      const label = q.querySelector("label, .field-label, legend");
+      // Lever puts question text in .application-label .text (NOT in <label> which is used for radio options)
+      const label = q.querySelector(".application-label .text, .application-label, .field-label, legend")
+                   || q.querySelector("label");
       if (!label) continue;
       const labelText = label.textContent.trim().toLowerCase();
 
@@ -402,8 +420,17 @@
         continue;
       }
 
+      // "Were you referred by an employee?" — Yes/No radio
+      if (labelText.includes("referred by") || labelText.includes("were you referred")) {
+        const radios = q.querySelectorAll('input[type="radio"]');
+        if (radios.length > 0) {
+          fillRadio(radios, user.wasReferred === "yes" ? "Yes" : "No");
+        }
+        continue;
+      }
+
       // How did you hear about us
-      if (labelText.includes("hear about") || labelText.includes("how did you") || labelText.includes("referral")) {
+      if (labelText.includes("hear about") || labelText.includes("how did you") || labelText.includes("referral source")) {
         const input = q.querySelector("input[type='text'], textarea");
         const select = q.querySelector("select");
         const value = user.howDidYouHear || "LinkedIn";
@@ -436,6 +463,15 @@
 
       // Criminal record / background check
       if (labelText.includes("criminal") || labelText.includes("criminal record") || labelText.includes("background check")) {
+        const radios = q.querySelectorAll('input[type="radio"]');
+        const select = q.querySelector("select");
+        if (radios.length > 0) fillRadio(radios, "No");
+        else if (select) fillSelect(select, "No");
+        continue;
+      }
+
+      // Travel impediments / relocation / mobility
+      if (labelText.includes("travel") || labelText.includes("impediment") || labelText.includes("relocation") || labelText.includes("relocate") || labelText.includes("willing to move")) {
         const radios = q.querySelectorAll('input[type="radio"]');
         const select = q.querySelector("select");
         if (radios.length > 0) fillRadio(radios, "No");

@@ -7,7 +7,8 @@ import { validateTailoredResume, ResumeValidationResult } from "@/lib/resumeVali
 async function downloadResume(
   resume: any,
   format: "pdf" | "docx",
-  setExporting: (v: string) => void
+  setExporting: (v: string) => void,
+  company?: string
 ) {
   setExporting(format);
   try {
@@ -21,7 +22,11 @@ async function downloadResume(
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `tailored_resume.${format}`;
+    // Build filename: "tailored_resume_CompanyName.pdf" (sanitise company for safe filenames)
+    const safeName = company
+      ? "_" + company.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_").substring(0, 50)
+      : "";
+    a.download = `tailored_resume${safeName}.${format}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -451,13 +456,13 @@ export default function TailorEngine() {
                   <>
                     <div className="flex items-center gap-2 mb-4">
                       <SmallBtn
-                        onClick={() => downloadResume(tailoredResult.tailoredResume, "pdf", setExporting)}
+                        onClick={() => downloadResume(tailoredResult.tailoredResume, "pdf", setExporting, parsedJob?.company)}
                         disabled={!!exporting}
                         loading={exporting === "pdf"}
                         label="PDF"
                       />
                       <SmallBtn
-                        onClick={() => downloadResume(tailoredResult.tailoredResume, "docx", setExporting)}
+                        onClick={() => downloadResume(tailoredResult.tailoredResume, "docx", setExporting, parsedJob?.company)}
                         disabled={!!exporting}
                         loading={exporting === "docx"}
                         label="Word"
