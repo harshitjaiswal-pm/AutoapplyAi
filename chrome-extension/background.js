@@ -1555,7 +1555,7 @@ function injectFloatingTrigger(tabId) {
                 const mismatch = hasPdf && latestEntry && !resumeMatchesCurrent;
                 const rowStyle = "display:flex;align-items:baseline;gap:6px;";
                 const tagStyle = "font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;flex-shrink:0;";
-                const textStyle = `font-size:11px;font-family:${FONT};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+                const textStyle = `flex:1;min-width:0;font-size:11px;font-family:${FONT};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
 
                 strip.innerHTML = `
                   ${applyLabel ? `
