@@ -373,6 +373,19 @@
     banner.innerHTML = `<div style="display:flex !important;align-items:center !important;gap:8px !important;"><span style="font-size:11px !important;font-weight:600 !important;background:rgba(255,255,255,0.18) !important;border-radius:5px !important;padding:2px 8px !important;letter-spacing:0.2px !important;white-space:nowrap !important;color:#fff !important;">✦ AutoApply</span><span style="font-size:13px !important;font-weight:500 !important;color:#fff !important;">${message}</span></div>`;
   }
 
+  /* ── Main-world bridge: postMessage → content script → background ───── */
+  // Allows the page's main world (e.g. DevTools or Claude automation) to
+  // trigger form fill on ALL open Taleo tabs without needing extension APIs.
+  // Usage: window.postMessage({ type: 'AA_FILL_TALEO' }, '*')
+  window.addEventListener('message', (e) => {
+    if (e.data?.type === 'AA_FILL_TALEO') {
+      LOG("AA_FILL_TALEO received from main world — sending FILL_TALEO_TABS to background");
+      chrome.runtime.sendMessage({ type: "FILL_TALEO_TABS" }, (resp) => {
+        LOG("FILL_TALEO_TABS response:", resp);
+      });
+    }
+  });
+
   /* ── Boot ─────────────────────────────────────────────────────────────── */
 
   function boot() {

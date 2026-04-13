@@ -2309,78 +2309,193 @@
    * Fill Oracle Taleo-specific form fields.
    * Taleo uses predictable flex field IDs (flex_First_Name_1, etc.) and
    * older name-attribute patterns (ftfn, ftln, ftem, ftph).
+   *
+   * Strategy: fillByLabel / fillSelectByLabel first (robust, works across all
+   * Taleo tenants), then fall back to hardcoded selectors.
+   *
    * Returns the count of fields filled.
    */
   function fillTaleoForm(user) {
     let filled = 0;
-    const mappings = [
-      {
-        selectors: [
-          'input[id="flex_First_Name_1"]',
-          'input[name*="ftfn"]',
-          'input[id*="fname" i]',
-          'input[id*="firstname" i]',
-          'input[name*="firstname" i]',
-        ],
-        value: user.firstName,
-      },
-      {
-        selectors: [
-          'input[id="flex_Last_Name_1"]',
-          'input[name*="ftln"]',
-          'input[id*="lname" i]',
-          'input[id*="lastname" i]',
-          'input[name*="lastname" i]',
-        ],
-        value: user.lastName,
-      },
-      {
-        selectors: [
-          'input[id="flex_Email_Address_1"]',
-          'input[name*="ftem"]',
-          'input[id*="email" i]',
-          'input[name*="email" i]',
-          'input[type="email"]',
-        ],
-        value: user.email,
-      },
-      {
-        selectors: [
-          'input[id="flex_Phone_1"]',
-          'input[name*="ftph"]',
-          'input[id*="phone" i]',
-          'input[name*="phone" i]',
-        ],
-        value: user.phone,
-      },
-      {
-        selectors: [
-          'input[id*="address" i]',
-          'input[name*="address" i]',
-        ],
-        value: user.address,
-      },
-      {
-        selectors: [
-          'input[id*="city" i]',
-          'input[name*="city" i]',
-        ],
-        value: user.city || "Vancouver",
-      },
-    ];
 
-    for (const { selectors, value } of mappings) {
-      if (!value) continue;
+    // ── Helper: try a list of CSS selectors, fill with value ──────────────────
+    function trySelectors(selectors, value) {
+      if (!value) return false;
       for (const sel of selectors) {
         try {
-          const input = document.querySelector(sel);
-          if (input && !input.value) {
-            setNativeValue(input, value);
-            filled++;
-            break;
-          }
+          const el = document.querySelector(sel);
+          if (el && !el.value) { setNativeValue(el, value); return true; }
         } catch (_) {}
       }
+      return false;
+    }
+
+    // ── 1. Source Type dropdown ───────────────────────────────────────────────
+    // Taleo typically shows "Internet/Online" as an option; fall back to first
+    // non-empty option if no match.
+    const sourceLabels = ["source type", "source", "how did you hear", "referral source", "heard about us"];
+    if (fillSelectByLabel(sourceLabels, "Internet", document)) {
+      filled++;
+    } else {
+      // Try to find the select by id/name patterns and pick "Internet/Online"
+      const sourceSel = document.querySelector(
+        'select[id*="source" i], select[name*="source" i], select[id*="Source" i]'
+      );
+      if (sourceSel && !sourceSel.value) {
+        // Try common option texts
+        const wanted = ["internet", "online", "job board", "website", "careers page", "other"];
+        let picked = false;
+        for (const w of wanted) {
+          if (fillSelectElement(sourceSel, w)) { filled++; picked = true; break; }
+        }
+        // Last-resort: pick first non-empty option
+        if (!picked) {
+          const firstReal = Array.from(sourceSel.options).find(o => o.value && !o.disabled);
+          if (firstReal) {
+            sourceSel.value = firstReal.value;
+            sourceSel.dispatchEvent(new Event("change", { bubbles: true }));
+            filled++;
+          }
+        }
+      }
+    }
+
+    // ── 2. First Name ─────────────────────────────────────────────────────────
+    if (user.firstName) {
+      const ok = fillByLabel(["first name", "given name", "prénom"], user.firstName)
+        || trySelectors([
+            'input[id="flex_First_Name_1"]',
+            'input[name*="ftfn"]',
+            'input[id*="fname" i]',
+            'input[id*="firstname" i]',
+            'input[name*="firstname" i]',
+          ], user.firstName);
+      if (ok) filled++;
+    }
+
+    // ── 3. Last Name ──────────────────────────────────────────────────────────
+    if (user.lastName) {
+      const ok = fillByLabel(["last name", "surname", "family name", "nom de famille"], user.lastName)
+        || trySelectors([
+            'input[id="flex_Last_Name_1"]',
+            'input[name*="ftln"]',
+            'input[id*="lname" i]',
+            'input[id*="lastname" i]',
+            'input[name*="lastname" i]',
+          ], user.lastName);
+      if (ok) filled++;
+    }
+
+    // ── 4. Email ──────────────────────────────────────────────────────────────
+    if (user.email) {
+      const ok = fillByLabel(["email", "e-mail", "email address", "courriel"], user.email)
+        || trySelectors([
+            'input[id="flex_Email_Address_1"]',
+            'input[name*="ftem"]',
+            'input[id*="email" i]',
+            'input[name*="email" i]',
+            'input[type="email"]',
+          ], user.email);
+      if (ok) filled++;
+    }
+
+    // ── 5. Primary Phone / Primary Number ────────────────────────────────────
+    if (user.phone) {
+      const ok = fillByLabel([
+            "primary number", "primary phone", "phone number", "telephone",
+            "mobile", "cell", "numéro de téléphone",
+          ], user.phone)
+        || trySelectors([
+            'input[id="flex_Phone_1"]',
+            'input[id*="primaryphone" i]',
+            'input[id*="primary_phone" i]',
+            'input[id*="primarynumber" i]',
+            'input[name*="ftph"]',
+            'input[id*="phone" i]',
+            'input[name*="phone" i]',
+          ], user.phone);
+      if (ok) filled++;
+    }
+
+    // ── 6. Street Address line 1 ──────────────────────────────────────────────
+    const streetAddress = user.address || user.street || "";
+    if (streetAddress) {
+      const ok = fillByLabel([
+            "street address", "address line 1", "address 1", "street",
+            "adresse", "address line1",
+          ], streetAddress)
+        || trySelectors([
+            'input[id*="address1" i]',
+            'input[id*="address_1" i]',
+            'input[id*="streetaddress" i]',
+            'input[id*="street_address" i]',
+            'input[name*="address1" i]',
+            'input[name*="streetaddress" i]',
+            'input[id*="address" i]',
+            'input[name*="address" i]',
+          ], streetAddress);
+      if (ok) filled++;
+    }
+
+    // ── 7. City ───────────────────────────────────────────────────────────────
+    const city = user.city || "Vancouver";
+    const ok7 = fillByLabel(["city", "ville", "municipality"], city)
+      || trySelectors([
+          'input[id*="city" i]',
+          'input[name*="city" i]',
+        ], city);
+    if (ok7) filled++;
+
+    // ── 8. Province / State ───────────────────────────────────────────────────
+    const province = user.province || user.state || "BC";
+    if (fillSelectByLabel(
+        ["province", "state", "province or territory", "state or province", "province/territory"],
+        province, document)) {
+      filled++;
+    } else {
+      const ok8 = fillByLabel(["province", "state", "province or territory"], province)
+        || trySelectors([
+            'input[id*="province" i]',
+            'input[id*="state" i]',
+            'input[name*="province" i]',
+            'input[name*="state" i]',
+          ], province);
+      if (ok8) filled++;
+    }
+
+    // ── 9. Postal / Zip Code ──────────────────────────────────────────────────
+    const postal = user.postalCode || user.zipCode || user.zip || "";
+    if (postal) {
+      const ok9 = fillByLabel([
+            "postal code", "zip code", "zip", "postal", "code postal",
+          ], postal)
+        || trySelectors([
+            'input[id*="postal" i]',
+            'input[id*="zipcode" i]',
+            'input[id*="zip" i]',
+            'input[name*="postal" i]',
+            'input[name*="zip" i]',
+          ], postal);
+      if (ok9) filled++;
+    }
+
+    // ── 10. Place of Residence / Country ──────────────────────────────────────
+    const country = user.country || "Canada";
+    if (fillSelectByLabel(
+        ["place of residence", "country", "country of residence", "pays", "résidence"],
+        country, document)) {
+      filled++;
+    } else {
+      const ok10 = fillByLabel([
+            "place of residence", "country", "country of residence",
+          ], country)
+        || trySelectors([
+            'select[id*="country" i]',
+            'select[name*="country" i]',
+            'input[id*="country" i]',
+            'input[name*="country" i]',
+          ], country);
+      if (ok10) filled++;
     }
 
     console.log(`AutoApply: Taleo-specific fill: ${filled} fields`);

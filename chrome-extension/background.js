@@ -1029,6 +1029,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  /* ── Trigger ATS fill on all currently open Taleo tabs ── */
+  if (message.type === "FILL_TALEO_TABS") {
+    chrome.tabs.query({ url: "*://*.taleo.net/*" }, async (tabs) => {
+      for (const tab of tabs) {
+        if (!tab.id || !tab.url) continue;
+        injectedTabIds.delete(tab.id);
+        ownedByJob.delete(tab.id);
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => { window.__autoapply_ats_injected = false; },
+          });
+        } catch (_) {}
+        injectInstantBanner(tab.id);
+        setTimeout(() => injectATSScript(tab.id, tab.url), 400);
+        console.log("AutoApply BG: FILL_TALEO_TABS — injecting into tab", tab.id, tab.url);
+      }
+      sendResponse({ success: true, tabs: tabs.length });
+    });
+    return true; // async
+  }
+
   /* ── From Workday ATS: Click a button-dropdown using CDP trusted click ──
    * Workday button-based dropdowns (Province, Phone Type) check `isTrusted`
    * on click events, so content script clicks don't open them. We use
@@ -2627,6 +2649,32 @@ chrome.runtime.onStartup.addListener(() => {
   expectingNewTab = false;
   clearTimeout(expectingTimeout);
 });
+
+/* ── Also trigger on service worker restart after reload (no onStartup fires) ── */
+(async () => {
+  const stored = await new Promise(r => chrome.storage.local.get(["_fillTaleoOnStartup"], r));
+  if (stored._fillTaleoOnStartup) {
+    await new Promise(r => chrome.storage.local.remove(["_fillTaleoOnStartup"], r));
+    console.log("AutoApply BG: _fillTaleoOnStartup flag detected — injecting into Taleo tabs");
+    setTimeout(async () => {
+      const tabs = await chrome.tabs.query({ url: "*://*.taleo.net/*" });
+      for (const tab of tabs) {
+        if (!tab.id || !tab.url) continue;
+        injectedTabIds.delete(tab.id);
+        ownedByJob.delete(tab.id);
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => { window.__autoapply_ats_injected = false; },
+          });
+        } catch(_) {}
+        injectInstantBanner(tab.id);
+        setTimeout(() => injectATSScript(tab.id, tab.url), 400);
+        console.log("AutoApply BG: Triggered ATS inject on Taleo tab", tab.id, tab.url);
+      }
+    }, 1200);
+  }
+})();
 
 /* ── Programmatic Content Script Injection ──
  * Chrome aggressively caches manifest-based content scripts.
