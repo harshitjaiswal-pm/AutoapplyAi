@@ -1464,14 +1464,36 @@ function injectFloatingTrigger(tabId) {
             // Scrape job title from page — try common selectors then <title>
             const titleEl = document.querySelector("h1") || document.querySelector("[data-automation-id='jobPostingHeader']");
             const pageTitle = (titleEl ? titleEl.textContent : document.title || "").trim();
-            // Try to extract company from page
-            const metaCompany = document.querySelector('meta[property="og:site_name"]')?.content
+
+            // Extract company name — priority order:
+            // 1. Visible page branding (logos, headers)
+            // 2. URL path segment (for hosted ATS like Ashby: jobs.ashbyhq.com/wealthsimple)
+            // 3. og:site_name / meta author
+            // 4. Domain name fallback
+            const host = window.location.hostname.toLowerCase();
+            const pathParts = window.location.pathname.split("/").filter(Boolean);
+
+            // Hosted ATS platforms embed company in URL path (ashbyhq.com/company, lever.co/company)
+            const hostedATS = ["ashbyhq.com", "lever.co", "greenhouse.io", "breezy.hr", "recruitee.com", "pinpointhq.com"];
+            const isHostedATS = hostedATS.some(d => host.includes(d));
+            const pathCompany = isHostedATS && pathParts[0] ? pathParts[0].replace(/[-_]/g, " ") : "";
+
+            // Try og:site_name but skip generic ATS brand names
+            const metaRaw = document.querySelector('meta[property="og:site_name"]')?.content
               || document.querySelector('meta[name="author"]')?.content || "";
-            // Use domain as fallback company name
-            const domainCompany = window.location.hostname.replace(/^(www|jobs|careers|recruit)\./, "")
-              .replace(/\.(com|org|net|io|co|zohorecruit).*/, "")
+            const genericNames = ["ashby", "ashbyhq", "lever", "greenhouse", "workday", "breezy", "recruitee"];
+            const metaCompany = genericNames.includes(metaRaw.toLowerCase().replace(/[^a-z]/g, "")) ? "" : metaRaw;
+
+            // Domain fallback — strip common subdomains and TLDs
+            const domainCompany = host.replace(/^(www|jobs|careers|recruit|apply)\./, "")
+              .replace(/\.(com|org|net|io|co|zohorecruit|ashbyhq|lever|greenhouse).*/, "")
               .replace(/\./g, " ");
-            const company = metaCompany || (domainCompany.charAt(0).toUpperCase() + domainCompany.slice(1));
+
+            // Pick the best company name: path > meta > domain
+            const rawCompany = pathCompany || metaCompany || domainCompany;
+            // Title-case it
+            const company = rawCompany.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
             currentPageJob = {
               jobTitle: pageTitle.slice(0, 80),
               company: company.slice(0, 40),
@@ -1505,27 +1527,24 @@ function injectFloatingTrigger(tabId) {
           // Also check tailoredResumePdf — set by Easy Apply tailoring (separate from map)
           const hasPdf    = !!(mapEntry?.pdf) || !!(stored.tailoredResumePdf);
 
-          // ── Context strip: show current application + last tailored resume ──
-          // [v19 fix] Show full company + job title — no aggressive JS truncation.
-          // Let CSS handle overflow so the user can actually read what job this is.
+          // ── Context strip: current application + last tailored resume ──
+          // Single line per row — company (bold) · job title. CSS ellipsis handles overflow.
           {
             const strip = document.getElementById("aa-context-strip");
             if (strip) {
-              // Row 1: current application — use currentPageJob on external ATS, storage on LinkedIn
               const applyingJob = !isLinkedIn && currentPageJob ? currentPageJob : (pending || lastJob);
               const applyCompany = (applyingJob?.company || "").trim();
               const applyTitle   = (applyingJob?.jobTitle || "").trim();
+              const applyLabel = [applyCompany, applyTitle].filter(Boolean).join(" · ");
 
-              // Row 2: last tailored resume (most recent map entry)
               const allEntries = Object.values(resumeMap).filter(e => e?.pdf);
               allEntries.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
               const latestEntry = allEntries[0];
               const resumeCompany = (latestEntry?.company  || "").trim();
               const resumeTitle   = (latestEntry?.jobTitle || "").trim();
+              const resumeLabel = [resumeCompany, resumeTitle].filter(Boolean).join(" · ");
 
-              const hasApply  = !!(applyCompany || applyTitle);
-              const hasResume = !!(resumeCompany || resumeTitle);
-              const showStrip = hasApply || hasResume;
+              const showStrip = !!(applyLabel || resumeLabel);
               strip.style.display = showStrip ? "block" : "none";
 
               if (showStrip) {
@@ -1534,28 +1553,20 @@ function injectFloatingTrigger(tabId) {
                   && (mapEntry.company || "") === (latestEntry.company || "")
                   && (mapEntry.jobTitle || "") === (latestEntry.jobTitle || "");
                 const mismatch = hasPdf && latestEntry && !resumeMatchesCurrent;
-
-                // Use two-line layout per row: company on top (bold), title below (regular).
-                // No JS truncation — CSS text-overflow handles it if the panel is narrow.
-                const textStyle = "font-size:11px;font-family:" + FONT + ";line-height:1.35;";
-                const overflowStyle = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+                const rowStyle = "display:flex;align-items:baseline;gap:6px;";
+                const tagStyle = "font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;flex-shrink:0;";
+                const textStyle = `font-size:11px;font-family:${FONT};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
 
                 strip.innerHTML = `
-                  ${hasApply ? `
-                  <div style="margin-bottom:${hasResume ? "6px" : "0"};">
-                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:1px;">
-                      <span style="font-size:9px;font-weight:700;color:#6D28D9;text-transform:uppercase;letter-spacing:0.5px;">Applying</span>
-                      <span style="${textStyle}font-weight:600;color:#1F2937;${overflowStyle}">${applyCompany}</span>
-                    </div>
-                    ${applyTitle ? `<div style="${textStyle}color:#4B5563;${overflowStyle}padding-left:58px;">${applyTitle}</div>` : ""}
+                  ${applyLabel ? `
+                  <div style="${rowStyle}margin-bottom:${resumeLabel ? "3px" : "0"};">
+                    <span style="${tagStyle}color:#6D28D9;">APPLYING</span>
+                    <span style="${textStyle}color:#1F2937;" title="${applyLabel}">${applyLabel}</span>
                   </div>` : ""}
-                  ${hasResume ? `
-                  <div>
-                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:1px;">
-                      <span style="font-size:9px;font-weight:700;color:${mismatch ? "#DC2626" : "#059669"};text-transform:uppercase;letter-spacing:0.5px;">Resume</span>
-                      <span style="${textStyle}font-weight:600;color:${mismatch ? "#DC2626" : "#1F2937"};${overflowStyle}">${resumeCompany}${mismatch ? " ⚠" : ""}</span>
-                    </div>
-                    ${resumeTitle ? `<div style="${textStyle}color:${mismatch ? "#DC2626" : "#4B5563"};${overflowStyle}padding-left:58px;">${resumeTitle}</div>` : ""}
+                  ${resumeLabel ? `
+                  <div style="${rowStyle}">
+                    <span style="${tagStyle}color:${mismatch ? "#DC2626" : "#059669"};">RESUME</span>
+                    <span style="${textStyle}color:${mismatch ? "#DC2626" : "#1F2937"};" title="${resumeLabel}">${resumeLabel}${mismatch ? " ⚠" : ""}</span>
                   </div>` : ""}
                 `;
               }
