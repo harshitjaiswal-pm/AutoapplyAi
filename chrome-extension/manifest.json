@@ -74,6 +74,12 @@
       "run_at": "document_idle"
     },
     {
+      "matches": ["https://*.taleo.net/*"],
+      "js": ["logger.js", "ats/generic.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
       "matches": ["<all_urls>"],
       "js": ["logger.js", "ats/universal.js"],
       "run_at": "document_idle",
