@@ -685,8 +685,20 @@
     const NON_JOB_TITLES = /^(primary navigation|main navigation|site navigation|skip to|breadcrumb|header|footer|menu|search|sign in|log in|home)$/i;
     if (NON_JOB_TITLES.test(title.trim())) return null;
 
-    // Company — try meta tags, page content, or domain
-    const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content");
+    // Company — try URL path (hosted ATS), DOM selectors, filtered og:site_name, or domain
+    const host = location.hostname.toLowerCase();
+    const pathParts = location.pathname.split("/").filter(Boolean);
+    const hostedATS = ["ashbyhq.com", "lever.co", "greenhouse.io", "breezy.hr", "recruitee.com", "pinpointhq.com"];
+    const isHostedATS = hostedATS.some(d => host.includes(d));
+    const pathCompany = isHostedATS && pathParts[0]
+      ? pathParts[0].replace(/[-_]/g, " ").split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+      : "";
+
+    const ogRaw = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "";
+    const genericATS = ["ashby", "ashbyhq", "lever", "greenhouse", "workday", "icims", "taleo",
+                        "breezy", "recruitee", "pinpoint", "jobvite", "smartrecruiters", "jazz"];
+    const ogSiteName = genericATS.includes(ogRaw.toLowerCase().replace(/[^a-z]/g, "")) ? "" : ogRaw;
+
     const companyEl  = document.querySelector(
       '[class*="company-name"], [class*="companyName"], [class*="employer"], ' +
       '.posting-categories .sort-by-team, [class*="org-name"]'
@@ -695,8 +707,9 @@
       .replace(/^(jobs\.|careers\.|apply\.)/, "")
       .replace(/\.(com|co|io|net|org|ca)$/, "")
       .split(".")[0];
-    const company = ogSiteName
+    const company = pathCompany
       || companyEl?.innerText?.trim()
+      || ogSiteName
       || (domainCompany ? domainCompany.charAt(0).toUpperCase() + domainCompany.slice(1) : "Company");
 
     // JD — reuse scrapeGenericJD if available, else grab all paragraph text

@@ -97,10 +97,15 @@
     }
     if (!title) title = document.title.split(/[|\-–—]/)[0].trim();
 
-    // Company: try meta tags, structured data, common selectors
+    // Company: try URL path (hosted ATS), DOM selectors, filtered og:site_name, or domain
     let company = "";
-    const metaOrg = document.querySelector('meta[property="og:site_name"], meta[name="author"]');
-    if (metaOrg) company = metaOrg.getAttribute("content") || "";
+    const uHost = window.location.hostname.toLowerCase();
+    const uPathParts = window.location.pathname.split("/").filter(Boolean);
+    const hostedATS = ["ashbyhq.com", "lever.co", "greenhouse.io", "breezy.hr", "recruitee.com", "pinpointhq.com"];
+    const isHostedATS = hostedATS.some(d => uHost.includes(d));
+    if (isHostedATS && uPathParts[0]) {
+      company = uPathParts[0].replace(/[-_]/g, " ").split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    }
 
     if (!company) {
       const companySelectors = [
@@ -113,8 +118,18 @@
       }
     }
     if (!company) {
-      // Derive from hostname (e.g. "airbus.wd3.myworkdayjobs.com" → "Airbus")
-      const host = window.location.hostname.replace(/^www\./, "").split(".")[0];
+      const ogRaw = document.querySelector('meta[property="og:site_name"], meta[name="author"]')?.getAttribute("content") || "";
+      const genericATS = ["ashby", "ashbyhq", "lever", "greenhouse", "workday", "icims", "taleo",
+                          "breezy", "recruitee", "pinpoint", "jobvite", "smartrecruiters", "jazz"];
+      if (ogRaw && !genericATS.includes(ogRaw.toLowerCase().replace(/[^a-z]/g, ""))) {
+        company = ogRaw;
+      }
+    }
+    if (!company) {
+      // Derive from hostname (e.g. "airbus.wd3.myworkdayjobs.com" -> "Airbus")
+      const host = uHost.replace(/^(www|jobs|careers|apply)\./, "")
+        .replace(/\.(ashbyhq|lever|greenhouse|com|co|io|net|org|ca).*/, "")
+        .split(".")[0];
       company = host.charAt(0).toUpperCase() + host.slice(1);
     }
 
