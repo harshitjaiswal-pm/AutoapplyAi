@@ -1490,11 +1490,41 @@
 
     if (candidates.length === 0) return 0;
 
-    // Get the user's resume summary for context
-    const profile = await chrome.storage.local.get(["userProfile"]);
-    const user = profile.userProfile || {};
-    const resumeSummary = tailoredResult?.tailoredResume?.summary ||
-                          user.resumeSummary || "";
+    // Build rich resume context for AI-generated answers.
+    // Pull from multiple sources: tailored resume > parsedResume > userProfile.
+    const storageData = await chrome.storage.local.get(["userProfile", "parsedResume"]);
+    const user = storageData.userProfile || {};
+    const parsed = storageData.parsedResume || {};
+    const tailored = tailoredResult?.tailoredResume || {};
+
+    // Build a comprehensive summary string so the AI has enough context
+    let resumeSummary = tailored.summary || parsed.summary || "";
+
+    // Append experience highlights if summary alone is thin
+    const expSource = tailored.experience || parsed.experience || [];
+    if (expSource.length > 0) {
+      const expLines = expSource.slice(0, 3).map(e => {
+        const bullets = (e.bullets || []).slice(0, 2).join(". ");
+        return `${e.role || ""} at ${e.company || ""} (${e.startDate || ""} - ${e.endDate || "Present"}): ${bullets}`;
+      }).join("\n");
+      resumeSummary += "\n\nRecent experience:\n" + expLines;
+    }
+
+    // Append skills
+    const skillsSource = tailored.skills || parsed.skills || {};
+    if (typeof skillsSource === "object" && !Array.isArray(skillsSource)) {
+      const skillLines = Object.entries(skillsSource)
+        .filter(([, v]) => Array.isArray(v) && v.length > 0)
+        .map(([k, v]) => `${k}: ${v.join(", ")}`)
+        .join(". ");
+      if (skillLines) resumeSummary += "\n\nSkills: " + skillLines;
+    }
+
+    // Append user profile info (name, location)
+    if (user.firstName) {
+      resumeSummary += `\n\nCandidate name: ${user.firstName} ${user.lastName || ""}`;
+      if (user.location) resumeSummary += `, located in ${user.location}`;
+    }
 
     let filled = 0;
     for (const { element, label, isContentEditable } of candidates) {

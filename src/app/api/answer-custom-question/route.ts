@@ -36,6 +36,12 @@ Write a concise, authentic, first-person answer (3-5 sentences) that:
 - Uses specific examples where relevant
 - Sounds natural and human, NOT like a generic template
 - Is appropriate length for a text field in a job application form
+
+CRITICAL RULES:
+- NEVER ask the candidate for more information. You must ALWAYS produce an answer.
+- If the candidate summary is sparse, infer reasonable details from their job title, company, and the question context.
+- Write as if you ARE the candidate — use "I", "my", "we" naturally.
+- NEVER output meta-commentary like "I don't have your background" or "Could you share..." — that would be filled into a form field and is embarrassing.
 Return ONLY the answer text — no preamble, no labels, no quotes.`;
 
     const userContent = `Candidate applying to: ${jobTitle || "a role"} at ${company || "a company"}

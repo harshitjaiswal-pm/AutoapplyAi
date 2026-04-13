@@ -993,84 +993,93 @@
    */
   async function fillBehavioralAnswersGreenhouse(tailoredResult, jobData) {
     try {
-      // Find all unfilled textareas
+      // Build rich resume context for AI answers — pull from tailored, parsed, and profile data
+      const storageData = await chrome.storage.local.get(["userProfile", "parsedResume"]);
+      const user = storageData.userProfile || {};
+      const parsed = storageData.parsedResume || {};
+      const tailored = tailoredResult?.tailoredResume || {};
+
+      let resumeSummary = tailored.summary || parsed.summary || "";
+
+      // Append experience highlights
+      const expSource = tailored.experience || parsed.experience || [];
+      if (expSource.length > 0) {
+        const expLines = expSource.slice(0, 3).map(e => {
+          const bullets = (e.bullets || []).slice(0, 2).join(". ");
+          return `${e.role || ""} at ${e.company || ""} (${e.startDate || ""} - ${e.endDate || "Present"}): ${bullets}`;
+        }).join("\n");
+        resumeSummary += "\n\nRecent experience:\n" + expLines;
+      }
+
+      // Append skills
+      const skillsSource = tailored.skills || parsed.skills || {};
+      if (typeof skillsSource === "object" && !Array.isArray(skillsSource)) {
+        const skillLines = Object.entries(skillsSource)
+          .filter(([, v]) => Array.isArray(v) && v.length > 0)
+          .map(([k, v]) => `${k}: ${v.join(", ")}`)
+          .join(". ");
+        if (skillLines) resumeSummary += "\n\nSkills: " + skillLines;
+      }
+
+      if (user.firstName) {
+        resumeSummary += `\n\nCandidate name: ${user.firstName} ${user.lastName || ""}`;
+        if (user.location) resumeSummary += `, located in ${user.location}`;
+      }
+
+      // Collect all unfilled textareas and contenteditable elements
+      const candidates = [];
       const textareas = document.querySelectorAll("textarea");
       for (const ta of textareas) {
-        if (ta.value?.trim()) continue; // Already filled
-
+        if (ta.value?.trim()) continue;
         const rawLabel = getFieldLabel(ta) || "";
         const label = rawLabel.toLowerCase();
         if (!label || label.length < 5) continue;
-
-        // Skip known question types that shouldn't use AI answers
-        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) {
-          continue;
-        }
-
-        console.log(`AutoApply: Generating behavioral answer for textarea: "${rawLabel.substring(0, 50)}"`);
-        const resumeText = tailoredResult?.tailoredResume
-          ? `${jobData?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
-          : "";
-
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: "GENERATE_BEHAVIORAL_ANSWER",
-            question: rawLabel,
-            jobTitle: jobData?.jobTitle || "",
-            company: jobData?.company || "",
-            jobDescription: jobData?.jobDescription?.substring(0, 500) || "",
-            resumeText: resumeText,
-          });
-
-          if (result?.answer) {
-            setNativeValue(ta, result.answer);
-            ta.dispatchEvent(new Event("input", { bubbles: true }));
-            ta.dispatchEvent(new Event("change", { bubbles: true }));
-            console.log(`AutoApply: Filled behavioral answer (${result.answer.length} chars)`);
-          }
-        } catch (err) {
-          console.log(`AutoApply: Behavioral answer generation failed: ${err.message}`);
-        }
+        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) continue;
+        candidates.push({ element: ta, label: rawLabel, isContentEditable: false });
       }
-
-      // Find unfilled contenteditable elements (rich text editors)
       const editables = document.querySelectorAll("[contenteditable='true']");
       for (const el of editables) {
-        if (el.textContent?.trim()) continue; // Already filled
-
+        if (el.textContent?.trim()) continue;
         const rawLabel = getFieldLabel(el) || "";
         const label = rawLabel.toLowerCase();
         if (!label || label.length < 5) continue;
+        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) continue;
+        candidates.push({ element: el, label: rawLabel, isContentEditable: true });
+      }
 
-        // Skip known question types
-        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) {
-          continue;
-        }
-
-        console.log(`AutoApply: Generating behavioral answer for rich text editor: "${rawLabel.substring(0, 50)}"`);
-        const resumeText = tailoredResult?.tailoredResume
-          ? `${jobData?.jobTitle || ""} experience: ${tailoredResult.tailoredResume}`.substring(0, 200)
-          : "";
-
+      for (const { element, label, isContentEditable } of candidates) {
+        console.log(`AutoApply: Generating answer for: "${label.substring(0, 60)}"`);
         try {
-          const result = await chrome.runtime.sendMessage({
-            type: "GENERATE_BEHAVIORAL_ANSWER",
-            question: rawLabel,
-            jobTitle: jobData?.jobTitle || "",
-            company: jobData?.company || "",
-            jobDescription: jobData?.jobDescription?.substring(0, 500) || "",
-            resumeText: resumeText,
+          const result = await new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(null), 15000);
+            chrome.runtime.sendMessage(
+              {
+                type: "ANSWER_CUSTOM_QUESTION",
+                question: label,
+                resumeSummary,
+                jobTitle: jobData?.jobTitle || "",
+                company: jobData?.company || "",
+              },
+              (r) => { clearTimeout(timer); resolve(r); }
+            );
           });
 
-          if (result?.answer) {
-            el.focus();
-            document.execCommand("insertText", false, result.answer);
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-            console.log(`AutoApply: Filled behavioral answer in rich editor (${result.answer.length} chars)`);
+          const answer = result?.answer;
+          if (answer && answer.length > 10) {
+            if (isContentEditable) {
+              element.focus();
+              document.execCommand("insertText", false, answer);
+              element.dispatchEvent(new Event("input", { bubbles: true }));
+              element.dispatchEvent(new Event("change", { bubbles: true }));
+            } else {
+              setNativeValue(element, answer);
+              element.dispatchEvent(new Event("input", { bubbles: true }));
+              element.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            console.log(`AutoApply: Filled answer (${answer.length} chars)`);
           }
         } catch (err) {
-          console.log(`AutoApply: Rich editor answer generation failed: ${err.message}`);
+          console.log(`AutoApply: Answer generation failed: ${err.message}`);
         }
       }
     } catch (err) {
