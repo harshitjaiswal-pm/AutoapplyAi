@@ -1464,8 +1464,16 @@ function injectFloatingTrigger(tabId) {
           let currentPageJob = null;
           if (!isLinkedIn) {
             // Scrape job title from page — try common selectors then <title>
-            const titleEl = document.querySelector("h1") || document.querySelector("[data-automation-id='jobPostingHeader']");
-            let pageTitle = (titleEl ? titleEl.textContent : document.title || "").trim();
+            const titleEl = document.querySelector("h1")
+              || document.querySelector("h2")
+              || document.querySelector("[data-automation-id='jobPostingHeader']")
+              || document.querySelector("[class*='posting-headline'], [class*='job-title'], [class*='jobTitle']");
+            let pageTitle = (titleEl ? titleEl.textContent : "").trim();
+            // If no DOM element found (or text too short), parse document.title
+            if (!pageTitle || pageTitle.length < 5) {
+              pageTitle = (document.title || "").split(/[\-–|]/).slice(0, -1).join(" - ").trim()
+                || (document.title || "").trim();
+            }
 
             // Reject listing page headings that aren't actual job titles
             const NON_JOB_TITLES = /^(open positions|all jobs|all openings|job openings|career opportunities|careers|current openings|available positions|browse jobs|job listings|our openings|join us|join our team|we.re hiring|work with us)/i;
