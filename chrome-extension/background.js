@@ -1372,7 +1372,7 @@ function injectFloatingTrigger(tabId) {
         "background:#fff", "border-radius:16px",
         "box-shadow:0 8px 40px rgba(0,0,0,0.16),0 2px 12px rgba(79,70,229,0.12)",
         "border:1px solid rgba(79,70,229,0.1)",
-        "width:252px", "overflow:hidden",
+        "width:320px", "overflow:hidden",
         "font-family:" + FONT,
         "transform:translateY(6px)", "opacity:0",
         "transition:opacity 0.15s ease, transform 0.15s ease",
@@ -1405,7 +1405,7 @@ function injectFloatingTrigger(tabId) {
           <span style="font-size:18px;line-height:1;">${emoji}</span>
           <div style="flex:1;min-width:0;">
             <div style="font-size:12px;font-weight:700;color:${color};font-family:${FONT};">${label}</div>
-            ${sublabel ? `<div style="font-size:10px;color:#9CA3AF;font-family:${FONT};margin-top:1px;">${sublabel}</div>` : ""}
+            ${sublabel ? `<div style="font-size:10px;color:#9CA3AF;font-family:${FONT};margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sublabel}</div>` : ""}
           </div>
         `;
         btn.onmouseenter = () => btn.style.background = "#F3F4F6";
@@ -1506,49 +1506,56 @@ function injectFloatingTrigger(tabId) {
           const hasPdf    = !!(mapEntry?.pdf) || !!(stored.tailoredResumePdf);
 
           // ── Context strip: show current application + last tailored resume ──
-          // Gives the user a visual indicator of which job this pill belongs to
-          // and which resume PDF is ready — especially useful in batch mode.
+          // [v19 fix] Show full company + job title — no aggressive JS truncation.
+          // Let CSS handle overflow so the user can actually read what job this is.
           {
             const strip = document.getElementById("aa-context-strip");
             if (strip) {
-              const trunc = (s, n) => s && s.length > n ? s.slice(0, n - 1) + "…" : (s || "");
-
               // Row 1: current application — use currentPageJob on external ATS, storage on LinkedIn
               const applyingJob = !isLinkedIn && currentPageJob ? currentPageJob : (pending || lastJob);
-              const currentLabel = applyingJob
-                ? `${trunc(applyingJob.company || "", 18)}${applyingJob.jobTitle ? " · " + trunc(applyingJob.jobTitle, 20) : ""}`
-                : "";
+              const applyCompany = (applyingJob?.company || "").trim();
+              const applyTitle   = (applyingJob?.jobTitle || "").trim();
 
               // Row 2: last tailored resume (most recent map entry)
               const allEntries = Object.values(resumeMap).filter(e => e?.pdf);
               allEntries.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
               const latestEntry = allEntries[0];
-              const resumeLabel = latestEntry
-                ? `${trunc(latestEntry.company || "", 18)}${latestEntry.jobTitle ? " · " + trunc(latestEntry.jobTitle, 20) : ""}`
-                : "";
+              const resumeCompany = (latestEntry?.company  || "").trim();
+              const resumeTitle   = (latestEntry?.jobTitle || "").trim();
 
-              // Only show strip if we have something useful to display
-              const showStrip = !!(currentLabel || resumeLabel);
+              const hasApply  = !!(applyCompany || applyTitle);
+              const hasResume = !!(resumeCompany || resumeTitle);
+              const showStrip = hasApply || hasResume;
               strip.style.display = showStrip ? "block" : "none";
 
               if (showStrip) {
-                // Highlight mismatch: warn if the resume in the pill is for a different job
                 const resumeMatchesCurrent = mapEntry?.pdf
                   && latestEntry
                   && (mapEntry.company || "") === (latestEntry.company || "")
                   && (mapEntry.jobTitle || "") === (latestEntry.jobTitle || "");
                 const mismatch = hasPdf && latestEntry && !resumeMatchesCurrent;
 
+                // Use two-line layout per row: company on top (bold), title below (regular).
+                // No JS truncation — CSS text-overflow handles it if the panel is narrow.
+                const textStyle = "font-size:11px;font-family:" + FONT + ";line-height:1.35;";
+                const overflowStyle = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+
                 strip.innerHTML = `
-                  ${currentLabel ? `
-                  <div style="display:flex;align-items:center;gap:5px;margin-bottom:${resumeLabel ? "4px" : "0"};">
-                    <span style="font-size:9px;font-weight:600;color:#6D28D9;text-transform:uppercase;letter-spacing:0.4px;min-width:52px;">Applying</span>
-                    <span style="font-size:10px;color:#374151;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${currentLabel}</span>
+                  ${hasApply ? `
+                  <div style="margin-bottom:${hasResume ? "6px" : "0"};">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:1px;">
+                      <span style="font-size:9px;font-weight:700;color:#6D28D9;text-transform:uppercase;letter-spacing:0.5px;">Applying</span>
+                      <span style="${textStyle}font-weight:600;color:#1F2937;${overflowStyle}">${applyCompany}</span>
+                    </div>
+                    ${applyTitle ? `<div style="${textStyle}color:#4B5563;${overflowStyle}padding-left:58px;">${applyTitle}</div>` : ""}
                   </div>` : ""}
-                  ${resumeLabel ? `
-                  <div style="display:flex;align-items:center;gap:5px;">
-                    <span style="font-size:9px;font-weight:600;color:${mismatch ? "#DC2626" : "#059669"};text-transform:uppercase;letter-spacing:0.4px;min-width:52px;">Resume</span>
-                    <span style="font-size:10px;color:${mismatch ? "#DC2626" : "#374151"};font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${resumeLabel}${mismatch ? " ⚠" : ""}</span>
+                  ${hasResume ? `
+                  <div>
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:1px;">
+                      <span style="font-size:9px;font-weight:700;color:${mismatch ? "#DC2626" : "#059669"};text-transform:uppercase;letter-spacing:0.5px;">Resume</span>
+                      <span style="${textStyle}font-weight:600;color:${mismatch ? "#DC2626" : "#1F2937"};${overflowStyle}">${resumeCompany}${mismatch ? " ⚠" : ""}</span>
+                    </div>
+                    ${resumeTitle ? `<div style="${textStyle}color:${mismatch ? "#DC2626" : "#4B5563"};${overflowStyle}padding-left:58px;">${resumeTitle}</div>` : ""}
                   </div>` : ""}
                 `;
               }
@@ -1556,7 +1563,7 @@ function injectFloatingTrigger(tabId) {
           }
 
           // ① Fill this form
-          const fillBtn = makeBtn("→", "Fill this form", jobInfo ? `${jobInfo.jobTitle || ""}${jobInfo.company ? " · " + jobInfo.company : ""}`.slice(0, 34) : "Re-run AutoApply on this page", "#4F46E5", () => {
+          const fillBtn = makeBtn("→", "Fill this form", jobInfo ? `${jobInfo.company || ""}${jobInfo.jobTitle ? " · " + jobInfo.jobTitle : ""}` : "Re-run AutoApply on this page", "#4F46E5", () => {
             setStatus("Filling form…");
             chrome.runtime.sendMessage({ type: "FILL_CURRENT_PAGE" }, (r) => {
               setStatus(r?.success ? "Filling… check the page!" : "Error — try reload");
@@ -2237,14 +2244,13 @@ async function handleTailorAndFill(job) {
       const base64 = arrayBufferToBase64(arrayBuffer);
       // Use data URL — URL.createObjectURL is not available in MV3 service workers
       resumeBlobUrl = `data:application/pdf;base64,${base64}`;
-      // Build numbered filename: e.g. "1_Affirm_Calgary_Senior Product Manager_Resume.pdf"
-      // Truncate to max 60 chars before .pdf to prevent upload rejection from ATS file name limits
-      const jobNumData = await chrome.storage.local.get(["_aa_currentJobNumber"]);
-      const jobNum = jobNumData._aa_currentJobNumber || "";
-      const locationPart = job.location ? `_${job.location.split(",")[0].trim()}` : "";
-      const prefix = jobNum ? `${jobNum}_` : "";
-      const rawFilename = `${prefix}${job.company}${locationPart}_${job.jobTitle}_Resume`;
-      const truncatedFilename = rawFilename.length > 60 ? rawFilename.substring(0, 60) : rawFilename;
+      // [v19 fix] Clean, human-readable filename: "Resume - Company - Job Title.pdf"
+      // No batch numbers or location clutter — just enough to identify which job.
+      // Truncate to 80 chars before .pdf to prevent ATS upload rejection.
+      const safeCompany = (job.company || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "").trim();
+      const safeTitle   = (job.jobTitle || "Role").replace(/[^a-zA-Z0-9 &\-]/g, "").trim();
+      const rawFilename = `Resume - ${safeCompany} - ${safeTitle}`;
+      const truncatedFilename = rawFilename.length > 80 ? rawFilename.substring(0, 80).trim() : rawFilename;
       const filename = `${truncatedFilename}.pdf`;
 
       // ── Keyed resume map: each job gets its own slot (fixes wrong-resume bug) ──
@@ -2483,7 +2489,7 @@ async function handleDownloadResume(job, callerTabId) {
   }
   const base64   = entry?.pdf      || (globalMatchesCurrent ? stored.tailoredResumePdf : null);
   const filename = entry?.filename || (globalMatchesCurrent ? stored.tailoredResumeFilename : null) ||
-    `${job?.company || "Company"}_${job?.jobTitle || "Resume"}_Tailored.pdf`;
+    `Resume - ${(job?.company || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "")} - ${(job?.jobTitle || "Role").replace(/[^a-zA-Z0-9 &\-]/g, "")}.pdf`;
 
   if (!base64) {
     console.warn("AutoApply BG: No PDF to download (key:", resumeKey, ")");
@@ -2501,7 +2507,7 @@ async function handleDownloadResume(job, callerTabId) {
   console.log("AutoApply BG: Downloading resume — key:", resumeKey, "fromMap:", !!entry?.pdf, "filename:", filename);
   chrome.downloads.download({
     url:      `data:application/pdf;base64,${base64}`,
-    filename: filename.replace(/[^a-zA-Z0-9_\-\.]/g, "_"),
+    filename: filename.replace(/[^a-zA-Z0-9 _\-\.]/g, "").replace(/\s+/g, " "),
     saveAs:   false,
   });
 }
