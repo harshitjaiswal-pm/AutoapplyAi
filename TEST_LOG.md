@@ -118,3 +118,38 @@
 3. Live test on Workday — verify numeric field + city typeahead
 4. Verify resume survives browser restart (CF1-1E)
 5. Push all fixes cleanly
+
+## Cycle 1 — CF1 API Tests — Mon 13 Apr 2026 08:14:40 PDT
+CF1-1A parse-resume: See terminal output above
+CF1-1B analyze-job: See terminal output above
+CF1-1C tailor-resume: See terminal output above
+Results: 1 passed / 0 failed
+
+---
+
+## Cycle 2 — Mon 13 Apr 2026, 13:40 PDT — Async Risk Audit
+
+**Trigger:** User was debugging Taleo form fill (Just Energy @ justenergy.taleo.net); found root cause: `*.taleo.net` was missing from manifest `content_scripts`, so `generic.js` never loaded on Taleo pages.
+
+### Bugs Fixed
+| # | Severity | File | Description | Status |
+|---|----------|------|-------------|--------|
+| B11 | CRITICAL | `chrome-extension/manifest.json` | `*.taleo.net` missing from content_scripts — generic.js never ran on Taleo; no Taleo-specific fill logic executed | ✅ FIXED commit `0904540` |
+
+### Deliverable
+**`USER_JOURNEY_RISK_REPORT.md`** written to workspace root. Maps all 14 user-journey stages to traffic-light risk levels. Summary:
+- 🟢 LOW-risk (trust): stages 1, 2, 3, 6, 8, 9, 11 (7 of 14)
+- 🟡 MEDIUM-risk (watch): stages 4, 5, 7, 10, 12, 13 (6 of 14)
+- ✅ Safety invariant (stage 14 — no auto-submit): HOLDS on all platforms
+- 🔴 HIGH/CRITICAL: none
+
+### Open Medium-Risk Items (ranked by lift-for-effort)
+1. **Tailoring date mutation unguarded** — `tailor-resume/route.ts:115-123`. Add post-response validator. ~20 min.
+2. **Batch-mode stale PDF fallback** — `workday.js:64`, `greenhouse.js:64`. Strip `tailoredResumePdf` global fallback. ~30 min.
+3. **Custom Q API missing JD** — `answer-custom-question/route.ts:16-46`. Pass JD text. ~45 min.
+4. **Workday "Use My Last Application"** — force fresh-start path. ~15 min.
+5. **`expectingNewTab` flag loose on custom domains** — `background.js:160-165`. Scope to host. ~20 min.
+6. **Ashby iframe silent timeout** — `generic.js:142-158`. Show user banner on timeout. ~10 min.
+
+### Next Cycle Priority
+Live-verify the Taleo fix on `justenergy.taleo.net` (extension already reloaded). Form should now fill First Name, Last Name, Street Address, Zip/Postal Code, Primary Number. If not, check page DevTools console for `generic.js` log lines.
