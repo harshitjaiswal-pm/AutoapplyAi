@@ -736,12 +736,38 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
     }
 
     if (bestType === "easy_apply") {
+      // [Capability 2026-04-14] Daily-limit detection (from linkedin-apply.skill)
+      // LinkedIn silently caps Easy Apply submissions per day. When the cap is hit,
+      // the page shows a "limit daily submissions" warning and clicking Easy Apply
+      // opens a messaging dialog rather than the application modal. Detect this
+      // upfront so we return a distinct reason and the batch can stop gracefully.
+      const _detailsText = (document.querySelector('.jobs-search__job-details--wrapper, .jobs-details')?.innerText || "").toLowerCase();
+      if (_detailsText.includes("limit daily submissions") || _detailsText.includes("daily application limit")) {
+        console.warn("AutoApply: Daily Easy Apply limit detected — skipping job");
+        try { AALog && AALog.state("linkedin.clickApply.dailyLimit", { company: (document.querySelector('.job-details-jobs-unified-top-card__company-name a')?.textContent?.trim() || "") }); } catch(_){}
+        return "daily_limit";
+      }
+
       // Click the Easy Apply button — the modal will open and handleEasyApply() takes over
       const btnLabel = bestApplyBtn.getAttribute("aria-label") || bestApplyBtn.textContent.trim();
       console.log("AutoApply: Clicking Easy Apply button: " + btnLabel);
       try { AALog && AALog.nav("linkedin.clickApply.easyApply", { label: btnLabel, candidates }); } catch(_){}
       bestApplyBtn.click();
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 1200));
+
+      // Post-click sanity check: if a messaging dialog opened instead of an Easy Apply modal,
+      // we're rate-limited. The skill catches this case explicitly.
+      const _msgDialog = document.querySelector('[aria-label*="essaging"], [aria-label*="message"]');
+      const _easyApplyModal = document.querySelector('[data-test-modal-id="easy-apply-modal"], .jobs-easy-apply-content, [aria-label*="Easy Apply"]');
+      if (_msgDialog && !_easyApplyModal) {
+        console.warn("AutoApply: Easy Apply click opened messaging dialog — daily limit active");
+        try { AALog && AALog.state("linkedin.clickApply.dailyLimitPostClick", {}); } catch(_){}
+        // Close the unintended dialog
+        const closeBtn = _msgDialog.querySelector('button[aria-label*="lose" i], button[aria-label*="ismiss" i]');
+        if (closeBtn) closeBtn.click();
+        return "daily_limit";
+      }
+
       return "easy_apply";
     }
 
@@ -986,6 +1012,14 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
         updateStatus(`Skipped (already applied): ${job.title}`);
         try { AALog && AALog.nav("linkedin.processJob.alreadyApplied", { title: job.title, company: job.company }); } catch(_){}
         return { success: false, reason: "Already applied" };
+      } else if (applyType === "daily_limit") {
+        // [Capability 2026-04-14] LinkedIn's Easy Apply daily cap is hit.
+        // Signal the batch loop to stop — further attempts will all fail until tomorrow.
+        updateJobStatus(job.id, "skipped", "Daily Easy Apply limit reached");
+        skippedCount++;
+        updateStatus(`⚠️ LinkedIn daily Easy Apply limit reached — stopping batch. Resume tomorrow.`, "error");
+        try { AALog && AALog.nav("linkedin.processJob.dailyLimit", { title: job.title, company: job.company }); } catch(_){}
+        return { success: false, reason: "daily_limit_reached", stopBatch: true };
       } else {
         // null — no Apply button found — log the reason clearly
         const reason = "No Apply button found — check extension logs for candidates";
@@ -1478,6 +1512,14 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
         updateJobStatus(job.id, "skipped");
         skippedCount++;
         updateStatus(`Already applied: ${job.title}`);
+      } else if (applyType === "daily_limit") {
+        // [Capability 2026-04-14] Daily Easy Apply cap hit — stop the batch.
+        updateJobStatus(job.id, "skipped", "Daily Easy Apply limit reached");
+        skippedCount++;
+        updateStatus(`⚠️ LinkedIn daily Easy Apply limit reached — stopping batch. Resume tomorrow.`, "error");
+        try { AALog && AALog.nav("linkedin.apply.dailyLimit", { jobId: job.id }); } catch(_){}
+        isApplying = false; // stops the for-loop's `if (!isApplying) break;` gate below
+        break;
       } else {
         updateJobStatus(job.id, "failed", "Apply button not found — may be Easy Apply or already applied");
         try { AALog && AALog.error("linkedin.apply.failed", { jobId: job.id, applyType }); } catch(_){}
@@ -1962,6 +2004,21 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
     for (const ta of modal.querySelectorAll("textarea")) {
       if (!retryPass && ta.value && ta.value.trim().length > 0) continue;
       const label = getInputLabel(modal, ta).toLowerCase();
+
+      // [Capability 2026-04-14] Optional-field skip (learned from linkedin-apply.skill)
+      // Skip textareas marked optional — fewer fields = less surface for validation errors,
+      // and cover letters are frequently optional on LinkedIn Easy Apply.
+      // Detection: "(optional)" in label, not required, not aria-required.
+      const taIsRequired = ta.required
+        || ta.getAttribute("aria-required") === "true"
+        || /\*$|\brequired\b/.test(label);
+      const taIsOptional = /\(optional\)|\boptional\b/.test(label);
+      if (taIsOptional && !taIsRequired) {
+        // Leave empty — skip optional cover letters/open-ended prompts on the first pass.
+        // retryPass still forces a fill if validation fails.
+        if (!retryPass) continue;
+      }
+
       // Cover letter
       if (label.includes("cover") || label.includes("letter") || label.includes("why") || label.includes("motivation")) {
         const cover = buildEasyApplyCoverSnippet(profile, job);
@@ -2247,8 +2304,16 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
       if (!pick("bachelor") && !pick("undergraduate")) pick("degree");
     } else if (label.match(/employ.*type|work type|job type/)) {
       pick("full");
-    } else if (label.match(/willing.*relocat|relocat/)) {
-      pick("no");
+    } else if (label.match(/willing.*relocat|relocat|willing.*commut|commut|willing.*travel|travel|overtime|weekend|shift|hybrid|onsite|on.site|remote|work.from/)) {
+      // [Capability 2026-04-14] Default-Yes for willingness/flexibility selects
+      // — learned from linkedin-apply.skill. Goal: maximize interview rate.
+      // These are soft commitments re-negotiable at offer stage.
+      if (!pick("yes")) pick("willing");
+    } else if (label.match(/background check|drug test|drug screen/)) {
+      pick("yes");
+    } else if (label.match(/start|available|notice/)) {
+      // "When can you start?" → prefer "Immediately" / "Yes"
+      if (!pick("immediate") && !pick("asap") && !pick("two weeks") && !pick("2 weeks")) pick("yes");
     }
     // Leave others at default (first non-empty option)
   }
@@ -2259,20 +2324,36 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
    * Returns "Yes", "No", or null (don't auto-answer).
    */
   function resolveYesNo(text, profile) {
+    const t = (text || "").toLowerCase();
+    // ── Factual guardrails first (must be truthful, not default-Yes) ──
     // Work authorization
-    if (text.match(/legally authorized|authorized to work|work authoriz|eligible to work/)) return "Yes";
-    // Visa sponsorship
-    if (text.match(/visa sponsor|require sponsor|need sponsor|immigration sponsor/)) {
+    if (t.match(/legally authorized|authorized to work|work authoriz|eligible to work|legally eligible/)) return "Yes";
+    // Visa sponsorship (profile-driven, never default-Yes)
+    if (t.match(/visa sponsor|require sponsor|need sponsor|immigration sponsor|sponsorship (now|in the future)/)) {
       return (profile.requireSponsorship === "Yes") ? "Yes" : "No";
     }
-    // Hybrid / remote
-    if (text.match(/hybrid|remote|onsite|on.site|work from/)) return "Yes";
-    // Background check
-    if (text.match(/background check|drug test/)) return "Yes";
+    // ── Default-Yes willingness/flexibility (learned from linkedin-apply.skill) ──
+    // Location formats
+    if (t.match(/hybrid|remote|onsite|on.site|work from|in.office|in.person/)) return "Yes";
+    // Commute / relocate / travel
+    if (t.match(/willing to commute|able to commute|comfortable commut|commute to/)) return "Yes";
+    if (t.match(/willing to relocat|able to relocat|open to relocat|relocate for/)) return "Yes";
+    if (t.match(/willing to travel|able to travel|comfortable.*travel|travel.*required|travel.*percent/)) return "Yes";
+    // Schedule flexibility
+    if (t.match(/overtime|weekend|evening|night shift|shift work|rotating shift|flexible.*hour|flexible.*schedule/)) return "Yes";
+    // Screening checks
+    if (t.match(/background check|drug (test|screen)|credit check|reference check/)) return "Yes";
+    // Start date / availability
+    if (t.match(/start immediate|available.*immediate|can you start|able to start|notice period.*no/)) return "Yes";
+    // Driver's license (common BA/office roles — low verification)
+    if (t.match(/valid driver|driver.s license|driving license/)) return "Yes";
+    // Willingness to learn / train
+    if (t.match(/willing.*learn|willing.*train|willing.*certif|open to learn/)) return "Yes";
+    // ── Factual "No" answers ──
     // Worked here before
-    if (text.match(/previously work|worked (at|here|before|for)|former employee|previously employ/)) return "No";
+    if (t.match(/previously work|worked (at|here|before|for)|former employee|previously employ/)) return "No";
     // Relatives / conflicts
-    if (text.match(/relative|family member|conflict of interest/)) return "No";
+    if (t.match(/relative|family member|conflict of interest/)) return "No";
     return null;
   }
 
