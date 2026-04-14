@@ -6,7 +6,6 @@ import {
   TextRun,
   AlignmentType,
   TabStopType,
-  TabStopPosition,
   LevelFormat,
   BorderStyle,
 } from "docx";
@@ -133,7 +132,10 @@ async function generateDocx(resume: any) {
     experienceChildren.push(
       new Paragraph({
         spacing: { before: 160, after: 40 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+        // Use explicit right margin position (page width 12240 - left/right margin 720 each = 10800)
+        // rather than TabStopPosition.MAX which resolves to 9026 — too short for letter-size pages
+        // and caused the location/year text to sit mid-line instead of the true right edge.
+        tabStops: [{ type: TabStopType.RIGHT, position: 10800 }],
         children: [
           new TextRun({ text: exp.role, bold: true, font: "Arial", size: 22, color: NAVY }),
           ...(exp.location
@@ -163,6 +165,7 @@ async function generateDocx(resume: any) {
         new Paragraph({
           numbering: { reference: "bullets", level: 0 },
           spacing: { after: 40 },
+          alignment: AlignmentType.JUSTIFIED,
           children: [new TextRun({ text: bullet, font: "Arial", size: 20 })],
         })
       );
@@ -175,7 +178,10 @@ async function generateDocx(resume: any) {
     educationChildren.push(
       new Paragraph({
         spacing: { before: 80, after: 40 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+        // Use explicit right margin position (page width 12240 - left/right margin 720 each = 10800)
+        // rather than TabStopPosition.MAX which resolves to 9026 — too short for letter-size pages
+        // and caused the location/year text to sit mid-line instead of the true right edge.
+        tabStops: [{ type: TabStopType.RIGHT, position: 10800 }],
         children: [
           new TextRun({ text: edu.degree, bold: true, font: "Arial", size: 20 }),
           new TextRun({ text: `\t${edu.year}`, font: "Arial", size: 20, color: GRAY }),
@@ -218,6 +224,7 @@ async function generateDocx(resume: any) {
   function sectionHeading(text: string) {
     return new Paragraph({
       spacing: { before: 240, after: 80 },
+      alignment: AlignmentType.CENTER,
       border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
       children: [
         new TextRun({
@@ -334,6 +341,7 @@ async function generateDocx(resume: any) {
                 sectionHeading("Professional Summary"),
                 new Paragraph({
                   spacing: { after: 80 },
+                  alignment: AlignmentType.JUSTIFIED,
                   children: [new TextRun({ text: resume.summary, font: "Arial", size: 20 })],
                 }),
               ]
