@@ -334,9 +334,16 @@
               showBanner("Your turn — download your tailored resume below.", "user", {
                 subtext: "Drag it into the resume field, then review and submit.",
               });
+              // [Fix 2026-04-13 Cycle 6] Always include applyUrl so background.js uses
+              // the URL-based map key (same key used when storing during tailoring).
+              // Without applyUrl it fell back to company+title key which never matched.
               chrome.runtime.sendMessage({
                 type: "DOWNLOAD_RESUME",
-                job: { company: pendingJob.company, jobTitle: pendingJob.jobTitle },
+                job: {
+                  applyUrl:  pendingJob.applyUrl || window.location.href,
+                  company:   pendingJob.company,
+                  jobTitle:  pendingJob.jobTitle,
+                },
               });
             }
 
@@ -1517,7 +1524,7 @@
     };
     const cfg = typeConfig[type] || typeConfig.ai;
 
-    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumeMap", "pendingApplication", "lastTailoredJob"], (result) => {
+    chrome.storage.local.get(["_aa_batchProgress", "tailoredResumeMap", "pendingApplication", "lastTailoredJob", "lastTailoredResult"], (result) => {
       const bp = result._aa_batchProgress;
       const hasBatch = bp && bp.total > 0;
       // Check keyed map first — falls back to global slot for backward compat
@@ -1532,7 +1539,14 @@
         return (co + "_" + ti) || "default";
       }
       const resumeKey = _makeKey(currentJob);
-      const hasPdf = !!(resumeMap[resumeKey]?.pdf) || !!(Object.keys(resumeMap).length > 0);
+      // [Fix 2026-04-13 Cycle 6] hasPdf must only be true when THIS job's PDF
+      // is ready — not when any other job's PDF exists. The old fallback
+      // `|| Object.keys(resumeMap).length > 0` caused the button to appear
+      // for Job B using Job A's stale PDF. Also accept tailored text without
+      // PDF so user can trigger a re-export download.
+      const hasKeyedPdf = !!(resumeMap[resumeKey]?.pdf);
+      const hasTailoredResult = !!(result.lastTailoredResult);
+      const hasPdf = hasKeyedPdf || hasTailoredResult;
 
       const batchTag = hasBatch
         ? `<span style="background:rgba(255,255,255,0.18);border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;">Job ${bp.current} / ${bp.total}</span>`

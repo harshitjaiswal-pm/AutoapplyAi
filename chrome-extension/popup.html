@@ -356,6 +356,58 @@
     <button class="btn" id="open-pipeline">Open AutoApply Dashboard →</button>
     <button class="btn btn-secondary" id="clear-data">Clear session data</button>
 
+    <!-- ── Pro Mode ── -->
+    <div id="pro-mode-card" style="
+      margin-top: 14px; padding: 12px 14px;
+      background: linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%);
+      border: 1px solid #FDE68A; border-radius: 10px;
+    ">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+        <span style="font-size:14px;">✨</span>
+        <strong style="font-size:12px; color:#92400E; flex:1;">Pro Mode</strong>
+        <!-- Toggle switch -->
+        <label style="position:relative; display:inline-block; width:34px; height:18px; flex-shrink:0;">
+          <input type="checkbox" id="pro-mode-toggle" style="opacity:0; width:0; height:0;" />
+          <span id="pro-mode-slider" style="
+            position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0;
+            background:#D1D5DB; border-radius:18px; transition:background 0.15s;
+          "></span>
+          <span id="pro-mode-knob" style="
+            position:absolute; top:2px; left:2px; width:14px; height:14px;
+            background:white; border-radius:50%; transition:transform 0.15s;
+            box-shadow:0 1px 3px rgba(0,0,0,0.2); pointer-events:none;
+          "></span>
+        </label>
+      </div>
+      <p style="font-size:11px; color:#92400E; line-height:1.45; margin:0;">
+        When on, AutoApply will <strong>create accounts</strong> on career sites
+        that require one (Workday, iCIMS, etc.) so you can go from "Apply" to
+        "Submitted" without stopping.
+      </p>
+      <div id="pro-mode-extras" style="display:none; margin-top:10px;">
+        <div class="form-group" style="margin-bottom:8px;">
+          <label for="pro-password" style="display:block;font-size:11px;color:#92400E;font-weight:500;margin-bottom:3px;">
+            Default password for new accounts
+          </label>
+          <input id="pro-password" type="password" placeholder="••••••••••" style="
+            width:100%; padding:7px 10px; font-size:12px;
+            border:1px solid #FDE68A; border-radius:6px; color:#111;
+            background:white; font-family:inherit;
+          " />
+          <p style="font-size:10px;color:#92400E;opacity:0.75;margin-top:3px;line-height:1.35;">
+            Must meet typical requirements (8+ chars, letters + numbers). Stored
+            locally in your browser, never sent to any server.
+          </p>
+        </div>
+        <button id="pro-mode-save" class="btn" style="padding:7px;font-size:12px;margin-top:4px;">
+          Save Pro Mode settings
+        </button>
+        <div class="save-feedback" id="pro-mode-feedback" style="margin-top:4px;">
+          ✓ Pro Mode settings saved
+        </div>
+      </div>
+    </div>
+
     <div class="help-text">
       <strong>How to use:</strong><br>
       1. Go to any LinkedIn jobs search page<br>

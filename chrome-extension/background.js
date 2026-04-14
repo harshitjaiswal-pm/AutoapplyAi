@@ -2538,24 +2538,33 @@ async function handleDownloadResume(job, callerTabId, opts) {
   // Handles case where lastFilledJob.applyUrl differs from the map's stored key.
   // [v19 fix] Use fuzzy matching — scraped company from DOM ("Kraken") may differ
   // from stored company ("Kraken Digital Asset Exchange"). Use includes() for partial match.
-  if (!entry?.pdf && job) {
+  // [Fix 2026-04-13 Cycle 4] Gate both fuzzy + single-entry fallbacks behind
+  // !noGlobalFallback. When ATS form page requests the resume for auto-fill,
+  // only exact-key match is acceptable — cross-job fallbacks are contamination.
+  // Require BOTH company AND title to non-emptily match (empty side no longer counts).
+  if (!entry?.pdf && job && !noGlobalFallback) {
     const co = (job.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     const ti = (job.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    entry = Object.values(map).find(e => {
-      if (!e?.pdf) return false;
-      const eCo = (e.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const eTi = (e.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      // Fuzzy: either direction includes works (stored may be longer or shorter)
-      const coMatch = !co || eCo.includes(co) || co.includes(eCo);
-      const tiMatch = !ti || eTi.includes(ti) || ti.includes(eTi);
-      return coMatch && tiMatch;
-    }) || null;
-    if (entry?.pdf) console.log("AutoApply BG [handleDownloadResume] found entry via fuzzy company+title fallback");
+    if (co && ti) {
+      entry = Object.values(map).find(e => {
+        if (!e?.pdf) return false;
+        const eCo = (e.company  || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const eTi = (e.jobTitle || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (!eCo || !eTi) return false;
+        const coMatch = eCo.includes(co) || co.includes(eCo);
+        const tiMatch = eTi.includes(ti) || ti.includes(eTi);
+        return coMatch && tiMatch;
+      }) || null;
+      if (entry?.pdf) console.log("AutoApply BG [handleDownloadResume] found entry via fuzzy company+title fallback");
+    }
   }
 
   // [v19 fix] Last resort: if we still don't have an entry and there's only one PDF
   // in the map, just use it — user clearly wants to download the only resume they have.
-  if (!entry?.pdf) {
+  // [Fix 2026-04-13 Cycle 4] Never apply single-entry fallback on ATS form pages
+  // (noGlobalFallback=true) — user could be on a second, un-tailored job and the
+  // single leftover PDF belongs to a different job.
+  if (!entry?.pdf && !noGlobalFallback) {
     const allPdfs = Object.values(map).filter(e => e?.pdf);
     if (allPdfs.length === 1) {
       entry = allPdfs[0];
@@ -2587,9 +2596,62 @@ async function handleDownloadResume(job, callerTabId, opts) {
       "noGlobalFallback:", noGlobalFallback
     );
   }
-  const base64   = entry?.pdf      || (globalMatchesCurrent ? stored.tailoredResumePdf : null);
-  const filename = entry?.filename || (globalMatchesCurrent ? stored.tailoredResumeFilename : null) ||
+  let base64   = entry?.pdf      || (globalMatchesCurrent ? stored.tailoredResumePdf : null);
+  let filename = entry?.filename || (globalMatchesCurrent ? stored.tailoredResumeFilename : null) ||
     `Resume - ${(job?.company || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "")} - ${(job?.jobTitle || "Role").replace(/[^a-zA-Z0-9 &\-]/g, "")}.pdf`;
+
+  // [Fix 2026-04-13 Cycle 6] Recovery: if PDF export failed during tailoring, the
+  // tailoredResumeMap entry won't have a PDF but lastTailoredResult still has the
+  // tailored text. Re-export the PDF on-the-fly so the download succeeds.
+  if (!base64) {
+    const recovery = await chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob", "autoapplyUrl"]);
+    const ltr      = recovery.lastTailoredResult;
+    const ltj      = recovery.lastTailoredJob;
+    const ltjKey   = makeResumeKey(ltj);
+    const jobMatchesLast = ltj && (
+      ltjKey === resumeKey ||
+      (ltj.applyUrl && ltj.applyUrl === (job?.applyUrl || "")) ||
+      (ltj.company  && job?.company  && ltj.company.toLowerCase()  === (job.company  || "").toLowerCase()) ||
+      (ltj.jobTitle && job?.jobTitle && ltj.jobTitle.toLowerCase() === (job.jobTitle || "").toLowerCase())
+    );
+    if (ltr?.tailoredResume && jobMatchesLast) {
+      console.log("AutoApply BG [handleDownloadResume] No PDF in map — re-exporting from lastTailoredResult for key:", resumeKey);
+      if (callerTabId) {
+        chrome.tabs.sendMessage(callerTabId, {
+          type: "SHOW_BANNER",
+          message: "⏳ Generating your PDF…",
+          level: "ai",
+        }).catch(() => {});
+      }
+      try {
+        const apiUrl = recovery.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+        const pdfRes = await fetch(`${apiUrl}/api/export-resume`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resume: ltr.tailoredResume, format: "pdf" }),
+        });
+        if (pdfRes.ok) {
+          const ab    = await pdfRes.arrayBuffer();
+          base64      = arrayBufferToBase64(ab);
+          const safeC = ((ltj?.company   || job?.company   || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "")).trim();
+          const safeT = ((ltj?.jobTitle  || job?.jobTitle  || "Role"   ).replace(/[^a-zA-Z0-9 &\-]/g, "")).trim();
+          filename    = `Resume - ${safeC} - ${safeT}.pdf`.slice(0, 85);
+          // Store so next download is instant
+          const mapUpdate = await chrome.storage.local.get(["tailoredResumeMap"]);
+          const rMap      = mapUpdate.tailoredResumeMap || {};
+          const payload   = { pdf: base64, filename, company: safeC, jobTitle: safeT, jobUrl: ltj?.applyUrl || "", resumeKey, createdAt: Date.now() };
+          rMap[resumeKey] = payload;
+          if (ltjKey && ltjKey !== resumeKey) rMap[ltjKey] = payload;
+          await chrome.storage.local.set({ tailoredResumeMap: rMap, tailoredResumePdf: base64, tailoredResumeFilename: filename, lastResumeKey: resumeKey });
+          console.log("AutoApply BG [handleDownloadResume] Re-exported PDF stored under key:", resumeKey);
+        } else {
+          console.warn("AutoApply BG [handleDownloadResume] Re-export failed:", pdfRes.status);
+        }
+      } catch (reExportErr) {
+        console.warn("AutoApply BG [handleDownloadResume] Re-export error:", reExportErr.message);
+      }
+    }
+  }
 
   if (!base64) {
     console.warn("AutoApply BG: No PDF to download (key:", resumeKey, ")");

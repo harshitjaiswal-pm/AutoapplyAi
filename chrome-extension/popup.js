@@ -7,11 +7,69 @@ const LOG_STORAGE_KEY = "_aa_logs";
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initDashboard();
+  initProMode();
   initHistory();
   initProfile();
   initLogs();
   initPopupChat();
 });
+
+/* ─────────────── PRO MODE ─────────────── */
+// Pro Mode allows AutoApply to create accounts on career sites that require one
+// (Workday, iCIMS, etc.) so applications can run end-to-end without stopping at
+// a sign-in wall. When enabled, the user stores a default password locally
+// (chrome.storage.local only — never sent to any server) and workday.js /
+// icims.js use it to register a new account when they hit a gating page.
+function initProMode() {
+  const toggle   = document.getElementById("pro-mode-toggle");
+  const slider   = document.getElementById("pro-mode-slider");
+  const knob     = document.getElementById("pro-mode-knob");
+  const extras   = document.getElementById("pro-mode-extras");
+  const pwInput  = document.getElementById("pro-password");
+  const saveBtn  = document.getElementById("pro-mode-save");
+  const feedback = document.getElementById("pro-mode-feedback");
+  if (!toggle || !slider || !knob) return; // popup.html may not have the card yet
+
+  const applyVisualState = (on) => {
+    slider.style.background = on ? "#10B981" : "#D1D5DB";
+    knob.style.transform    = on ? "translateX(16px)" : "translateX(0)";
+    extras.style.display    = on ? "block" : "none";
+  };
+
+  // Load saved state
+  chrome.storage.local.get(["_aa_proMode", "_aa_proPassword"], (r) => {
+    const on = !!r._aa_proMode;
+    toggle.checked = on;
+    if (r._aa_proPassword && pwInput) pwInput.value = r._aa_proPassword;
+    applyVisualState(on);
+  });
+
+  // Toggle handler — flip storage immediately so the state is never lost even
+  // if the user closes the popup before hitting Save
+  toggle.addEventListener("change", () => {
+    const on = toggle.checked;
+    applyVisualState(on);
+    chrome.storage.local.set({ _aa_proMode: on });
+  });
+
+  // Save button — persists the password
+  saveBtn?.addEventListener("click", () => {
+    const pw = (pwInput?.value || "").trim();
+    if (!pw || pw.length < 8) {
+      alert("Password must be at least 8 characters long.");
+      return;
+    }
+    chrome.storage.local.set(
+      { _aa_proMode: toggle.checked, _aa_proPassword: pw },
+      () => {
+        if (feedback) {
+          feedback.classList.add("show");
+          setTimeout(() => feedback.classList.remove("show"), 2500);
+        }
+      }
+    );
+  });
+}
 
 /* ─────────────── TAB MANAGEMENT ─────────────── */
 

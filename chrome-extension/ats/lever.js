@@ -353,11 +353,23 @@
   async function fillBasicFieldsOnly() {
     const stored = await chrome.storage.local.get(["userProfile"]);
     const user = stored.userProfile || {};
+    // [Cycle 5 fix 2026-04-13] Diagnostic + resilience: log what we have and
+    // surface a user-visible error if userProfile is unusable, so Lever direct-visit
+    // flows don't silently claim "Basic fields filled" while every selector no-ops.
+    const profileKeys = Object.keys(user);
+    LOG("fillBasicFieldsOnly userProfile keys:", profileKeys.length ? profileKeys : "(empty)",
+        "hasName:", !!(user.firstName || user.lastName),
+        "hasEmail:", !!user.email, "hasPhone:", !!user.phone);
+    if (!user.firstName && !user.lastName && !user.email) {
+      showBanner("No profile data — open the AutoApply app and finish onboarding, then retry.", "error");
+      return;
+    }
     const fullName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
 
-    fillInput('input[name="name"]', fullName);
-    fillInput('input[name="email"]', user.email || "");
-    fillInput('input[name="phone"]', user.phone || "");
+    const nameFilled = fillInput('input[name="name"]', fullName);
+    const emailFilled = fillInput('input[name="email"]', user.email || "");
+    const phoneFilled = fillInput('input[name="phone"]', user.phone || "");
+    LOG("fillBasicFieldsOnly results — name:", nameFilled, "email:", emailFilled, "phone:", phoneFilled);
     fillInput('input[name*="linkedin"], input[name*="urls[LinkedIn]"], input[name*="urls[0]"]', user.linkedin || "");
 
     // Current company / org
@@ -669,11 +681,13 @@
   /* ── Field Helpers ── */
 
   function fillInput(selector, value) {
-    if (!value) return;
+    if (!value) return false;
     const el = document.querySelector(selector);
     if (el) {
       fillInputEl(el, value);
+      return true;
     }
+    return false;
   }
 
   function fillInputEl(el, value) {
