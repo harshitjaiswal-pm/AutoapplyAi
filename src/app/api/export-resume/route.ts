@@ -224,7 +224,7 @@ async function generateDocx(resume: any) {
   function sectionHeading(text: string) {
     return new Paragraph({
       spacing: { before: 240, after: 80 },
-      alignment: AlignmentType.CENTER,
+      alignment: AlignmentType.LEFT,
       border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
       children: [
         new TextRun({
