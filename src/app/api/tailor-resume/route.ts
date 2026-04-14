@@ -76,11 +76,15 @@ export async function POST(request: NextRequest) {
       : "";
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000); // 90s — Sonnet can be slow
+    // 45s hard cap — Haiku (fast mode) should finish in 10-20s; Sonnet in 30-40s.
+    // Signal is passed to the SDK so the in-flight Anthropic request actually cancels.
+    const timeout = setTimeout(() => controller.abort(), 45000);
 
     const message = await anthropic.messages.create({
       model: modelId,
-      max_tokens: 8192,
+      // 4096 tokens is plenty for a tailored resume JSON (typical output: 2000-3500 tokens).
+      // Halving from 8192 cuts worst-case generation time by ~40%.
+      max_tokens: 4096,
       system: RESUME_TAILOR_SYSTEM,
       messages: [
         {
@@ -88,7 +92,7 @@ export async function POST(request: NextRequest) {
           content: `Here is the candidate's resume:\n${JSON.stringify(parsedResume, null, 2)}\n\nHere is the target job description:\n${JSON.stringify(parsedJob, null, 2)}${locationWarning}${experienceConstraint}\n\nTailor the resume for this job.`,
         },
       ],
-    });
+    }, { signal: controller.signal });
 
     clearTimeout(timeout);
 

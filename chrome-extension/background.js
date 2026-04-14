@@ -2398,7 +2398,7 @@ async function handleTailorAndFill(job) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(tailorRequestBody),
-      signal: apiTimeout(28000),
+      signal: apiTimeout(38000),
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => "");

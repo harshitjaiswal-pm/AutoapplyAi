@@ -30,7 +30,9 @@ export async function POST(request: NextRequest) {
 
     const anthropic = new Anthropic({ apiKey });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    // 20s hard cap — Haiku typically finishes in 3-8s for job analysis.
+    // Signal is passed to the SDK so the in-flight request actually cancels.
+    const timeout = setTimeout(() => controller.abort(), 20000);
 
     const message = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",  // Haiku — fast & cheap, perfect for extraction
@@ -42,7 +44,7 @@ export async function POST(request: NextRequest) {
           content: `Analyze this job description:\n\n${jobDescription}`,
         },
       ],
-    });
+    }, { signal: controller.signal });
     clearTimeout(timeout);
 
     let responseText =
