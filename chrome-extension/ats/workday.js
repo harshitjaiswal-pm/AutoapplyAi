@@ -2302,16 +2302,23 @@
         }
       }
 
-      // Role Description — try textarea first, then contenteditable
+      // Role Description — build from description string OR bullets array (parsed resume uses bullets)
+      const roleDesc = exp.description ||
+        (Array.isArray(exp.bullets) && exp.bullets.length > 0
+          ? exp.bullets.map(b => `• ${b}`).join('\n')
+          : '');
+
+      // Try textarea first, then contenteditable
       const textarea = container.querySelector("textarea");
-      if (textarea && !textarea.value?.trim() && exp.description) {
-        setWorkdayValue(textarea, exp.description);
+      if (textarea && !textarea.value?.trim() && roleDesc) {
+        LOG(`Filling role description for ${exp.role || exp.title}: ${roleDesc.length} chars`);
+        setWorkdayValue(textarea, roleDesc);
         await sleep(100);
-      } else if (!textarea && exp.description) {
+      } else if (!textarea && roleDesc) {
         const ce = container.querySelector('[contenteditable="true"]');
         if (ce && !ce.textContent?.trim()) {
           ce.focus();
-          document.execCommand("insertText", false, exp.description);
+          document.execCommand("insertText", false, roleDesc);
           await sleep(100);
         }
       }
@@ -2347,10 +2354,16 @@
 
     const exp = workExp[0];
     const jobTitle = exp.role || exp.title || "";
+    const roleDesc = exp.description ||
+      (Array.isArray(exp.bullets) && exp.bullets.length > 0
+        ? exp.bullets.map(b => `• ${b}`).join('\n')
+        : '');
     const inputs = Array.from(weSection.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"])'));
     if (inputs[0] && !inputs[0].value?.trim()) { setWorkdayValue(inputs[0], jobTitle); await sleep(80); }
     if (inputs[1] && !inputs[1].value?.trim()) { setWorkdayValue(inputs[1], exp.company || ""); await sleep(80); }
-    LOG(`fillWorkExperienceDirectScan: filled ${inputs.length} inputs`);
+    const ta = weSection.querySelector('textarea');
+    if (ta && !ta.value?.trim() && roleDesc) { setWorkdayValue(ta, roleDesc); await sleep(80); }
+    LOG(`fillWorkExperienceDirectScan: filled ${inputs.length} inputs + role description`);
   }
 
   /**
