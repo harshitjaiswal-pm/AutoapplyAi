@@ -1537,8 +1537,16 @@ function injectFloatingTrigger(tabId) {
 
             // Reject listing page headings that aren't actual job titles
             const NON_JOB_TITLES = /^(open positions|all jobs|all openings|job openings|career opportunities|careers|current openings|available positions|browse jobs|job listings|our openings|join us|join our team|we.re hiring|work with us)/i;
-            if (NON_JOB_TITLES.test(pageTitle.replace(/\s*\(\d+\)\s*$/, "").trim())) {
-              pageTitle = "";
+            // Also reject generic ATS application form headings (h2 on Greenhouse forms says "Apply for this job")
+            const GENERIC_FORM_HEADING = /^(apply(\s+for\s+(this\s+)?job)?|submit\s+(your\s+)?application|job\s+application|apply\s+now|application\s+form|start\s+your\s+application)$/i;
+            if (NON_JOB_TITLES.test(pageTitle.replace(/\s*\(\d+\)\s*$/, "").trim()) || GENERIC_FORM_HEADING.test(pageTitle.trim())) {
+              // Fall back to document.title which usually contains the real job title
+              // e.g. "Job Application for Associate Product Manager at Hootsuite" → "Associate Product Manager"
+              const fromDocTitle = document.title
+                .replace(/^Job Application for\s*/i, "")
+                .split(/\s+at\s+/i)[0].trim();
+              pageTitle = (fromDocTitle && fromDocTitle.length > 3 && !GENERIC_FORM_HEADING.test(fromDocTitle))
+                ? fromDocTitle : "";
             }
             // Also reject if page has many job links (listing page, not detail page)
             const jobLinks = document.querySelectorAll('a[href*="/jobs/"], a[href*="/job/"], a[href*="/posting"], a[href*="/position"]');
