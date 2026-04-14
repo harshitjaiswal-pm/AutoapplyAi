@@ -153,3 +153,36 @@ Results: 1 passed / 0 failed
 
 ### Next Cycle Priority
 Live-verify the Taleo fix on `justenergy.taleo.net` (extension already reloaded). Form should now fill First Name, Last Name, Street Address, Zip/Postal Code, Primary Number. If not, check page DevTools console for `generic.js` log lines.
+
+---
+
+## Cycle 3 — Mon 13 Apr 2026, 14:15 PDT — Autonomous Medium-Risk Fix Sweep
+
+**Trigger:** User away for 2 hours; instruction was "fix everything you can". All 6 medium-risk items from Cycle 2's report were addressed.
+
+### Bugs Fixed (all in commit `5d86ab8`)
+| # | Severity | File(s) | Description | Status |
+|---|----------|---------|-------------|--------|
+| M1 | MEDIUM | `src/app/api/tailor-resume/route.ts` | Runtime date-mutation validator — diffs startDate/endDate of every experience entry vs input; returns 422 if AI altered any date (RULE ZERO enforcement) | ✅ |
+| M2 | MEDIUM | `chrome-extension/ats/workday.js`, `ats/greenhouse.js`, `background.js` | Stripped `tailoredResumePdf` global fallback on keyed-map miss; ATS scripts now pass `noGlobalFallback: true`; banner "Tailor Resume first" shown instead of serving stale PDF | ✅ |
+| M3 | MEDIUM | `src/app/api/answer-custom-question/route.ts`, `ats/generic.js`, `background.js` | JD now plumbed end-to-end to custom-Q API (generic.js → background → route); trimmed to 1500 chars for grounding; eliminates stale-context answers | ✅ |
+| M4 | MEDIUM | `chrome-extension/ats/workday.js` | Removed "Use My Last Application" click path; always forces fresh application; warning banner if "Apply Manually" unavailable | ✅ |
+| M5 | MEDIUM | `chrome-extension/background.js` | `expectingNewTab` now host-scoped via captured `expectingNewTabHost`; rejects new-tab injection if host doesn't match (same-origin or subdomain) | ✅ |
+| M6 | MEDIUM | `chrome-extension/ats/generic.js` | Ashby iframe timeout now renders amber in-frame banner: "Application form didn't load — please refresh" instead of silent failure | ✅ |
+
+### Validation
+- `npx tsc --noEmit` → exit 0 (clean)
+- `node -c` on every modified JS file → clean
+- 6 files changed, 188 insertions (+), 25 deletions (-)
+
+### Post-Fix Risk Status
+- 🟢 LOW: 13 of 14 stages (up from 7)
+- 🟡 MEDIUM: 1 of 14 (stage 10: generic/Taleo/iCIMS label-match fuzziness on non-standard ATS field labels — inherent to arbitrary-ATS design)
+- ✅ Stop-before-Submit safety invariant: HOLDS
+- 🔴 HIGH/CRITICAL: none
+
+### Still Pending (for user on return)
+- Push `5d86ab8` to GitHub (sandbox can't push — user runs `PUSH_NOW.command` via Finder double-click)
+- Live-verify Taleo fix on `justenergy.taleo.net`
+- End-to-end live run: LinkedIn → Easy Apply → Tailor → Download → Fill (not yet exercised this session)
+- Stress test batch mode with 10+ concurrent jobs

@@ -118,6 +118,7 @@ function DashboardPage() {
 
   /* ── resume preview modal ─────────────────────────────────────────────── */
   const [resumeModalOpen, setResumeModalOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"idle" | "done" | "error">("idle");
 
   /* ── panel state ──────────────────────────────────────────────────────── */
   const [addPanelOpen, setAddPanelOpen] = useState(false);
@@ -617,15 +618,43 @@ function DashboardPage() {
               <div className="pt-1">
                 <button
                   onClick={() => {
+                    const resumeData = pipelineParsedResume;
                     const profile = userProfile;
+
+                    // Write to localStorage with correct keys that pipeline-bridge.js reads
+                    if (resumeData) {
+                      localStorage.setItem("autoapply-parsed-resume", JSON.stringify(resumeData));
+                    }
                     if (profile) {
-                      localStorage.setItem("aa_profile", JSON.stringify(profile));
-                      window.dispatchEvent(new Event("aa-profile-updated"));
+                      localStorage.setItem("autoapply-user-profile", JSON.stringify(profile));
+                    }
+
+                    // Dispatch the event that pipeline-bridge.js content script listens for
+                    // This writes both parsedResume + userProfile into chrome.storage.local
+                    window.dispatchEvent(new CustomEvent("autoapply-sync-resume", {
+                      detail: {
+                        parsedResume: resumeData || undefined,
+                        userProfile: profile || undefined,
+                      }
+                    }));
+
+                    if (resumeData || profile) {
+                      setSyncStatus("done");
+                      setTimeout(() => setSyncStatus("idle"), 3000);
+                    } else {
+                      setSyncStatus("error");
+                      setTimeout(() => setSyncStatus("idle"), 3000);
                     }
                   }}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
+                  className={`w-full text-white text-xs font-semibold py-2 rounded-lg transition-colors ${
+                    syncStatus === "done" ? "bg-emerald-600" :
+                    syncStatus === "error" ? "bg-red-500" :
+                    "bg-indigo-600 hover:bg-indigo-700"
+                  }`}
                 >
-                  Sync to Extension
+                  {syncStatus === "done" ? "✓ Synced to Extension!" :
+                   syncStatus === "error" ? "⚠ Nothing to sync yet" :
+                   "Sync to Extension"}
                 </button>
                 <a
                   href="/autoapply-extension.zip"

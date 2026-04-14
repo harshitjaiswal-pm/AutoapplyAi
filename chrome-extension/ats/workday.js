@@ -28,6 +28,16 @@
 
   const LOG = (msg, ...args) => console.log(`AutoApply Workday: ${msg}`, ...args);
 
+  // Module-level timer state — declared near the top of the IIFE because
+  // showBanner() is called very early (line ~122) during initialization and
+  // references these bindings. If they lived further down the file, accessing
+  // them would hit the Temporal Dead Zone and throw "Cannot access
+  // 'aaTimerIntervalId' before initialization", crashing the content script
+  // before anything runs. (Cycle 6 BCAA Workday fix.)
+  let aaTimerStart = null;
+  let aaTimerIntervalId = null;
+  let aaPdfPollIntervalId = null; // polls for tailoredResumePdf until it arrives
+
   /** Download the tailored resume for the CURRENT page using its URL as the primary key. */
   function _downloadResumeForPage() {
     chrome.storage.local.get(["tailoredResumeMap"], (r) => {
@@ -117,6 +127,22 @@
     if (e.data.__aa_cmd === "RESUME") {
       chrome.storage.local.set({ _aa_paused: false }, () => LOG("Resumed via bridge"));
     }
+    if (e.data.__aa_cmd === "GET_ALL_STORAGE") {
+      // Dump all chrome.storage.local keys to page context for debugging
+      chrome.storage.local.get(null, (all) => {
+        // Truncate large PDF blobs so the result is readable
+        const safe = {};
+        for (const [k, v] of Object.entries(all)) {
+          if (typeof v === 'string' && v.length > 500) safe[k] = v.substring(0, 200) + '…[truncated]';
+          else if (typeof v === 'object' && v !== null) {
+            try { safe[k] = JSON.parse(JSON.stringify(v, (_, val) => typeof val === 'string' && val.length > 500 ? val.substring(0, 200) + '…[trunc]' : val)); } catch { safe[k] = '(non-serializable)'; }
+          }
+          else safe[k] = v;
+        }
+        window.__aa_all_storage = safe;
+        window.dispatchEvent(new CustomEvent("__aa_all_storage_ready", { detail: safe }));
+      });
+    }
   });
 
   // Show banner immediately — user sees feedback before the init delay fires
@@ -133,11 +159,18 @@
     const stored = await chrome.storage.local.get(["pendingApplication"]);
     let pendingJob = stored.pendingApplication;
 
-    // Issue #1: If no pendingApplication and we're on a form page, try to extract job info from DOM
+    // Issue #1 (expanded in Cowork Test Run 1): If no pendingApplication, try to
+    // extract job info from the DOM regardless of whether we're on the job posting
+    // OR the form. Reason: when the user lands on a Workday URL directly (e.g. from
+    // a LinkedIn "Apply on company site" link that opens a new window), there is no
+    // pendingApplication set — the content script used to bail out here with
+    // "watching for Apply button". That left the user on the job posting with zero
+    // automation. We now self-scrape the JD on the posting page too, which gives
+    // the tailor pipeline everything it needs to run end-to-end.
     if (!pendingJob) {
       const page = detectPage();
-      if (page === "form") {
-        LOG("No pendingApplication found but detected form page — attempting to extract job info from DOM");
+      if (page === "form" || page === "jobPosting" || page === "modal") {
+        LOG(`No pendingApplication found on ${page} page — self-scraping job info from DOM`);
         pendingJob = extractJobInfoFromPage();
         if (pendingJob) {
           LOG("Extracted job info from page:", pendingJob);
@@ -148,7 +181,7 @@
     }
 
     if (!pendingJob) {
-      LOG("No pending application found — watching for Apply button if user navigates");
+      LOG("No pending application found and could not self-scrape — watching for Apply button if user navigates");
       return;
     }
 
@@ -354,10 +387,182 @@
     await sleep(2000); // Wait for form page to load
   }
 
+  /* ═══════════════════ PRO MODE — ACCOUNT CREATION ═══════════════════ */
+
+  /**
+   * Pro Mode: Create a new Workday account on the sign-in / create-account
+   * gating page so the application flow can continue without user intervention.
+   *
+   * Strategy:
+   *  1. If the page is currently in "Sign In" mode, click the "Create Account"
+   *     link/tab to switch to the signup form.
+   *  2. Fill the email field with the user's profile email.
+   *  3. Fill password + verify-password with the stored Pro Mode password.
+   *  4. Check any "I agree to terms" / acknowledgement checkbox.
+   *  5. Click the Create Account submit button.
+   *  6. Wait for Workday to navigate to the application form.
+   *
+   * Returns true on success (form left the login page), false otherwise.
+   */
+  async function createWorkdayAccount(userProfile, password) {
+    if (!userProfile?.email) {
+      LOG("Pro Mode: no email in profile — cannot create account");
+      showBanner("Pro Mode: your profile has no email. Please fill it in.", "error");
+      return false;
+    }
+    if (!password || password.length < 8) {
+      LOG("Pro Mode: password missing or too short");
+      return false;
+    }
+
+    LOG("Pro Mode: starting Workday account creation for", userProfile.email);
+
+    // Step 1: Ensure we're on the Create Account form, not the Sign In form.
+    // Workday's gating page has both — switch via the "Create Account" link
+    // if we only see one password field (sign-in mode).
+    const ensureCreateAccountMode = async () => {
+      // If we already see a verifyPassword field, we're in create mode
+      const alreadySignup =
+        document.querySelector('input[data-automation-id="verifyPassword"]') ||
+        document.querySelectorAll('input[type="password"]').length >= 2;
+      if (alreadySignup) return true;
+
+      // Otherwise look for a "Create Account" button / link to switch
+      const candidates = Array.from(document.querySelectorAll(
+        'button, a, [role="button"], [data-automation-id*="createAccount"]'
+      ));
+      const switchBtn = candidates.find((el) => {
+        const t = (el.textContent || "").trim().toLowerCase();
+        return t === "create account" || t === "create an account" ||
+               t === "sign up" || t === "register";
+      });
+      if (switchBtn) {
+        LOG("Pro Mode: clicking 'Create Account' link to switch form mode");
+        switchBtn.click();
+        await sleep(1200);
+        return true;
+      }
+      // Some Workday pages default straight to Create Account form — check again
+      return !!(
+        document.querySelector('input[data-automation-id="verifyPassword"]') ||
+        document.querySelectorAll('input[type="password"]').length >= 2
+      );
+    };
+
+    const ready = await ensureCreateAccountMode();
+    if (!ready) {
+      LOG("Pro Mode: could not switch to Create Account form");
+      return false;
+    }
+
+    // Step 2: Find the email input. Workday typically uses either
+    // data-automation-id="email" or a plain input[type="email"].
+    const emailInput =
+      document.querySelector('input[data-automation-id="email"]') ||
+      document.querySelector('input[type="email"]') ||
+      document.querySelector('input[name="email" i]');
+
+    if (!emailInput) {
+      LOG("Pro Mode: no email field found on account creation page");
+      return false;
+    }
+    setWorkdayValue(emailInput, userProfile.email);
+    await sleep(300);
+
+    // Step 3: Find password + verify password fields.
+    // Prefer automation IDs, fall back to generic password inputs.
+    let passwordInput =
+      document.querySelector('input[data-automation-id="password"]') ||
+      document.querySelectorAll('input[type="password"]')[0];
+    let verifyInput =
+      document.querySelector('input[data-automation-id="verifyPassword"]') ||
+      document.querySelectorAll('input[type="password"]')[1];
+
+    if (!passwordInput) {
+      LOG("Pro Mode: no password field found");
+      return false;
+    }
+
+    setWorkdayValue(passwordInput, password);
+    await sleep(200);
+    if (verifyInput && verifyInput !== passwordInput) {
+      setWorkdayValue(verifyInput, password);
+      await sleep(200);
+    }
+
+    // Step 4: Tick any acknowledgement / agreement checkbox.
+    // Common ids: createAccountCheckbox, legalNoticeCheckbox.
+    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of checkboxes) {
+      if (!cb.checked) {
+        try { cb.click(); } catch (_) { /* ignore */ }
+      }
+    }
+
+    // Step 5: Find + click the Create Account submit button.
+    const submitBtn =
+      document.querySelector('[data-automation-id="createAccountSubmitButton"]') ||
+      document.querySelector('[data-automation-id="click_filter"]') ||
+      Array.from(document.querySelectorAll('button, [role="button"]')).find((b) => {
+        const t = (b.textContent || "").trim().toLowerCase();
+        return t === "create account" || t === "submit" || t === "register";
+      });
+
+    if (!submitBtn) {
+      LOG("Pro Mode: no Create Account submit button found");
+      return false;
+    }
+
+    LOG("Pro Mode: submitting account creation form");
+    submitBtn.click();
+
+    // Step 6: Wait for the page to leave the login gate.
+    // We consider success when getCurrentStep() returns something OTHER than "login".
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const step = getCurrentStep();
+      if (step !== "login") {
+        LOG("Pro Mode: account creation succeeded — now on step", step);
+        // Persist a marker so we know this employer has an account on file
+        chrome.storage.local.get(["_aa_proAccounts"], (r) => {
+          const accounts = r._aa_proAccounts || {};
+          try {
+            const host = new URL(window.location.href).hostname;
+            accounts[host] = { email: userProfile.email, createdAt: Date.now() };
+            chrome.storage.local.set({ _aa_proAccounts: accounts });
+          } catch (_) {}
+        });
+        return true;
+      }
+      // Surface validation errors if Workday shows any
+      const errors = collectErrorTexts?.() || [];
+      if (errors.length) {
+        LOG("Pro Mode: Workday rejected account creation —", errors.join(" | "));
+        showBanner("Pro Mode: Workday rejected signup — " + errors[0], "error",
+          { subtext: "Try a stronger password, or sign in manually." });
+        return false;
+      }
+    }
+
+    LOG("Pro Mode: timed out waiting for account creation to complete");
+    return false;
+  }
+
   /* ═══════════════════ STEP PROCESSING ═══════════════════ */
 
   async function processCurrentStep(pendingJob) {
     try {
+      // [Fix: BCAA Run 1] Wait for Workday's React SPA to finish rendering before
+      // inspecting the step. On a fresh route transition (clicking Apply Manually)
+      // the progress bar DOM element may not exist yet, so getCurrentStep() would
+      // fall through to the URL-based "applymanually → 1" fallback and misidentify
+      // the Create Account gating page as Step 1. Waiting for the progressBarActiveStep
+      // element (up to 5 s) gives React time to paint the correct step name.
+      await waitForElement('[data-automation-id="progressBarActiveStep"]', 5000).catch(() => null);
+      // Extra settle time for React event listeners to bind after the element appears
+      await sleep(600);
+
       const step = getCurrentStep();
       LOG("Current step:", step);
 
@@ -390,11 +595,43 @@
 
       if (step === "login") {
         // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
-        // Stop here and prompt the user to sign in, then click Retry.
+        //
+        // Pro Mode: if the user has enabled Pro Mode and stored a default password,
+        // AutoApply will attempt to CREATE the account automatically so the flow
+        // doesn't break mid-application. Otherwise we fall back to prompting the
+        // user to sign in and click Retry.
+        const proCfg = await new Promise((resolve) =>
+          chrome.storage.local.get(["_aa_proMode", "_aa_proPassword", "userProfile"], resolve)
+        );
+        if (proCfg._aa_proMode && proCfg._aa_proPassword) {
+          showBanner(
+            "Pro Mode: creating your Workday account…",
+            "ai",
+            { subtext: "We'll sign you up so the application can continue without stopping." }
+          );
+          const ok = await createWorkdayAccount(
+            proCfg.userProfile || {},
+            proCfg._aa_proPassword
+          );
+          if (ok) {
+            // Account created / signed in — re-run the state machine now that we
+            // should be on the actual form. Give Workday a moment to navigate.
+            await sleep(2500);
+            showBanner("Account created ✓ — resuming your application…", "ai");
+            return processCurrentStep(pendingJob);
+          }
+          // Fallthrough: creation failed, show manual banner
+          showBanner(
+            "Couldn't create the account automatically — please sign in or create one, then click Retry.",
+            "user",
+            { subtext: "Pro Mode hit a snag on this Workday instance. AutoApply will resume after you sign in." }
+          );
+          return;
+        }
         showBanner(
           "Login required — create an account or sign in, then click Retry.",
           "user",
-          { subtext: "Workday requires an account for this employer. AutoApply will resume after you sign in." }
+          { subtext: "Workday requires an account for this employer. Tip: enable Pro Mode in the AutoApply popup to have us create the account for you." }
         );
         return; // don't spin waiting for a step that will never arrive
 
@@ -829,19 +1066,15 @@
   }
 
   function getCurrentStep() {
-    // Detect Workday "Create Account / Sign In" gating page BEFORE anything else
-    const h2Text = (document.querySelector('h2')?.textContent || "").toLowerCase();
-    if (
-      h2Text.includes("create account") || h2Text.includes("sign in") ||
-      document.querySelector('input[type="password"]')
-    ) {
-      return "login"; // special sentinel — handled in processCurrentStep
-    }
-
-    // Try progress bar active step — match by step NAME (Workday uses names, not "step N")
+    // Detect Workday "Create Account / Sign In" gating page BEFORE anything else.
+    // Check the progress bar FIRST (most reliable when the page has fully rendered),
+    // then fall back to h2 text and password-field sniffing for cases where the
+    // progress bar hasn't rendered yet (SPA route transition timing).
     const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
     if (activeStep) {
       const text = (activeStep.textContent || "").toLowerCase();
+      // "Create Account/Sign In" is the gating step name on BCAA and most Workday instances
+      if (text.includes("create account") || text.includes("sign in")) return "login";
       if (text.includes("my information")) return 1;
       if (text.includes("my experience")) return 2;
       if (text.includes("application questions")) return 3;
@@ -1080,8 +1313,31 @@
    * Companies like Airbus add custom questions here (e.g. "Have you already worked for Airbus?").
    */
   function answerStep1RadioQuestions() {
+    // ── Direct automation-ID overrides (company-specific required fields) ──────
+    // BCAA uses formField-candidateIsPreviousWorker with Yes/No radios
+    const idOverrides = [
+      { id: "formField-candidateIsPreviousWorker", answer: "no" },
+    ];
+    for (const override of idOverrides) {
+      const container = document.querySelector(`[data-automation-id="${override.id}"]`);
+      if (!container) continue;
+      const radios = Array.from(container.querySelectorAll('input[type="radio"]'));
+      for (const radio of radios) {
+        const lbl = (
+          radio.closest("label")?.textContent ||
+          document.querySelector(`label[for="${radio.id}"]`)?.textContent ||
+          radio.value || ""
+        ).trim().toLowerCase();
+        if (lbl.includes(override.answer)) {
+          if (!radio.checked) { radio.click(); LOG(`Step 1 ID override: ${override.id} → ${override.answer}`); }
+          break;
+        }
+      }
+    }
+
     const negativeKeywords = [
       "already worked for", "previously worked for", "have you worked for",
+      "have you worked with",  // BCAA: "Have you worked with BCAA or any one of it's affiliates?"
       "former employee", "currently employed by", "ever worked at",
       "have you ever worked", "previously employed",
       // "Have you worked with us before?" variants
@@ -1180,11 +1436,14 @@
       }
     }
 
-    // Retry failed fields
+    // Retry failed fields — force-fill even if DOM shows a value (React state may differ)
     if (failedFields.length > 0) {
       await sleep(200);
       for (const fieldDef of failedFields) {
-        fillFormField(fieldDef.id, fieldDef.value);
+        const field = document.querySelector(`[data-automation-id="${fieldDef.id}"]`);
+        if (!field) continue;
+        const input = field.querySelector('input[type="text"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea');
+        if (input) setWorkdayValue(input, fieldDef.value); // force-fill ignoring existing DOM value
       }
       await sleep(300);
     }
@@ -3156,13 +3415,10 @@
 
   /* ═══════════════════ UI BANNER ═══════════════════ */
 
-  // Module-level timer state — avoids closure-capture race when showBanner is
-  // called multiple times before the first async chrome.storage callback fires.
-  // Previously timerStart was captured per-call inside the async closure, causing
-  // multiple intervals to run when rapid showBanner calls overlapped.
-  let aaTimerStart = null;
-  let aaTimerIntervalId = null;
-  let aaPdfPollIntervalId = null; // polls for tailoredResumePdf until it arrives
+  // Module-level timer state — declarations moved to the top of the IIFE
+  // to avoid the Temporal Dead Zone crash that occurs when showBanner() is
+  // called early in initialization (see the declarations near the top of
+  // this file). Keeping just this comment here for reference.
 
   /**
    * showBanner(message, type, opts)
