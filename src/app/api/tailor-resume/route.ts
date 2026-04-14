@@ -136,66 +136,96 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // [Fix 2026-04-13] RULE ZERO runtime guard: Claude occasionally normalizes
-    // dates (e.g. "Present" → "2026-04", or rounds months). RULE ZERO in the
-    // system prompt forbids this, but without a runtime check a slip produces
-    // a downloaded PDF with wrong employment dates — a silent correctness bug.
-    // Compare every startDate/endDate between input and output; if ANY field
-    // changed, reject the response and force a retry rather than serve a
-    // tailored resume with mutated dates.
-    const normalize = (s: unknown): string =>
-      typeof s === "string" ? s.trim().toLowerCase() : "";
-    const inputExp: unknown[] = Array.isArray(parsedResume?.experience)
-      ? parsedResume.experience
-      : [];
-    const outputExp: unknown[] = Array.isArray(tailoredResult.experience)
-      ? tailoredResult.experience
-      : Array.isArray(tailoredResult.tailoredResume?.experience)
-      ? tailoredResult.tailoredResume.experience
-      : [];
-    if (inputExp.length > 0 && outputExp.length > 0) {
-      // Match output entries to input entries by company+title fuzzy match,
-      // since AI may reorder. For each matched pair, compare dates.
-      const mutatedDates: string[] = [];
-      for (const out of outputExp as Record<string, unknown>[]) {
-        const outCompany = normalize(out?.company);
-        const outTitle = normalize(out?.title);
-        const match = (inputExp as Record<string, unknown>[]).find(
-          (inp) =>
-            normalize(inp?.company) === outCompany ||
-            (outCompany && normalize(inp?.company).includes(outCompany)) ||
-            (outTitle && normalize(inp?.title) === outTitle)
+    // ── RULE ZERO ENFORCEMENT (server-side date & identity sanitization) ──
+    // [AutoQA fix 2026-04-13] Rather than rejecting Claude's output when it
+    // alters immutable fields, we overwrite those fields with the source
+    // values. This makes RULE ZERO physically unviolatable and prevents
+    // the "AI altered employment dates" error from ever surfacing to users.
+    // Matching strategy: company + title (case-insensitive, whitespace-
+    // normalized). Falls back to position-index match if no key match.
+    const sanitizeRuleZero = (tailored: Record<string, unknown>) => {
+      if (!tailored || typeof tailored !== "object") return tailored;
+
+      const norm = (s: unknown) =>
+        String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+      // 1) Contact info — name, email, phone must never change
+      if (parsedResume.contactInfo && tailored.contactInfo) {
+        const srcC = parsedResume.contactInfo;
+        const tgtC = tailored.contactInfo as Record<string, unknown>;
+        if (srcC.name) tgtC.name = srcC.name;
+        if (srcC.email) tgtC.email = srcC.email;
+        if (srcC.phone) tgtC.phone = srcC.phone;
+      }
+
+      // 2) Experience dates, company, title — copy verbatim from source
+      const srcExp: Array<Record<string, unknown>> = Array.isArray(
+        parsedResume.experience
+      )
+        ? parsedResume.experience
+        : [];
+      const tgtExp: Array<Record<string, unknown>> = Array.isArray(tailored.experience)
+        ? (tailored.experience as Array<Record<string, unknown>>)
+        : [];
+
+      for (let i = 0; i < tgtExp.length; i++) {
+        const t = tgtExp[i];
+        // Find matching source role: company + title match, else position
+        let match = srcExp.find(
+          (s) =>
+            norm(s.company) === norm(t.company) && norm(s.title) === norm(t.title)
         );
-        if (!match) continue;
-        const inStart = normalize(match?.startDate);
-        const inEnd = normalize(match?.endDate);
-        const outStart = normalize(out?.startDate);
-        const outEnd = normalize(out?.endDate);
-        if (inStart && outStart && inStart !== outStart) {
-          mutatedDates.push(
-            `${outCompany}: startDate "${inStart}" → "${outStart}"`
-          );
+        if (!match) {
+          match = srcExp.find((s) => norm(s.company) === norm(t.company));
         }
-        if (inEnd && outEnd && inEnd !== outEnd) {
-          mutatedDates.push(
-            `${outCompany}: endDate "${inEnd}" → "${outEnd}"`
-          );
+        if (!match && srcExp[i]) {
+          match = srcExp[i];
+        }
+        if (match) {
+          // Dates are SACRED — copy verbatim
+          t.startDate = match.startDate;
+          t.endDate = match.endDate;
+          // Company name is SACRED
+          if (match.company) t.company = match.company;
+          // Title is SACRED — Claude may not rename it
+          if (match.title) t.title = match.title;
+          // Location is SACRED
+          if (match.location) t.location = match.location;
         }
       }
-      if (mutatedDates.length > 0) {
-        console.error(
-          "Tailor-resume: RULE ZERO violated — dates mutated:",
-          mutatedDates
-        );
-        return NextResponse.json(
-          {
-            error:
-              "AI altered employment dates (RULE ZERO violation). Please retry.",
-            details: mutatedDates,
-          },
-          { status: 422 }
-        );
+
+      // 3) Education dates and degrees — copy verbatim
+      const srcEdu: Array<Record<string, unknown>> = Array.isArray(parsedResume.education)
+        ? parsedResume.education
+        : [];
+      const tgtEdu: Array<Record<string, unknown>> = Array.isArray(tailored.education)
+        ? (tailored.education as Array<Record<string, unknown>>)
+        : [];
+      for (let i = 0; i < tgtEdu.length; i++) {
+        const t = tgtEdu[i];
+        const match =
+          srcEdu.find(
+            (s) =>
+              norm(s.institution) === norm(t.institution) &&
+              norm(s.degree) === norm(t.degree)
+          ) ||
+          srcEdu.find((s) => norm(s.institution) === norm(t.institution)) ||
+          srcEdu[i];
+        if (match) {
+          if (match.startDate) t.startDate = match.startDate;
+          if (match.endDate) t.endDate = match.endDate;
+          if (match.degree) t.degree = match.degree;
+          if (match.institution) t.institution = match.institution;
+        }
       }
+
+      return tailored;
+    };
+
+    if (tailoredResult.tailoredResume) {
+      tailoredResult.tailoredResume = sanitizeRuleZero(tailoredResult.tailoredResume);
+    } else if (tailoredResult.experience) {
+      sanitizeRuleZero(tailoredResult);
     }
 
     return NextResponse.json({ tailoredResult });
