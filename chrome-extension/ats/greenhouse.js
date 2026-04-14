@@ -608,6 +608,11 @@
       { labels: ["github", "github url", "github profile"], value: user.github },
       { labels: ["twitter", "x profile", "twitter url"], value: user.twitter },
       { labels: ["name pronunciation"], value: "" }, // leave blank
+      // Location fields
+      { labels: ["city", "location (city)", "location city", "current city", "city of residence"], value: user.city || "Vancouver" },
+      { labels: ["country", "country of residence"], value: user.country || "Canada" },
+      { labels: ["address", "street address"], value: user.address || "" },
+      { labels: ["zip", "postal code", "zip code"], value: user.postalCode || user.zip || "" },
     ];
 
     // Fill label fields synchronously
@@ -681,6 +686,15 @@
       console.log("AutoApply: Filled", weCount, "work experience field(s)");
     }
 
+    // ── Education section ──
+    const edu = tailoredResult?.education?.[0] || tailoredResult?.education;
+    const parsedEdu = Array.isArray(edu) ? edu[0] : edu;
+    if (parsedEdu) {
+      const eduCount = fillEducationFields(parsedEdu);
+      filled += eduCount;
+      console.log("AutoApply: Filled", eduCount, "education field(s)");
+    }
+
     // ── Select / dropdown fields ──
     // Greenhouse uses React Select v5. Dropdowns are filled via main world,
     // then text fields are re-filled after React re-renders (faster timing).
@@ -688,7 +702,7 @@
       // [AutoQA fix 2026-04-07] Removed hardcoded "He/Him" default — only fill pronouns if user has set them explicitly
       { labels: ["pronouns"],                                                  value: user.pronouns },
       { labels: ["sponsorship", "immigration", "require immigration"],         value: user.requireSponsorship === "No" ? "No" : (user.requireSponsorship || "No") },
-      { labels: ["state", "province", "reside in"],                           value: user.province || "Ontario" },
+      { labels: ["state", "province", "reside in"],                           value: user.province || user.state || "British Columbia" },
       { labels: ["how did you", "hear about", "learn about", "first learn"],  value: user.howDidYouHear || "LinkedIn" },
       // Issue #8: Diversity preferences — default to "Prefer not to disclose" if not set
       { labels: ["gender"],                                                    value: user.gender || "Prefer not to disclose" },
@@ -864,6 +878,52 @@
     }
 
     console.log("AutoApply: Filled", filled, "work experience field(s)");
+    return filled;
+  }
+
+  /* ─────────────── EDUCATION FILLING ─────────────── */
+
+  /**
+   * Fill the education section on Greenhouse forms.
+   * Handles school, degree, discipline/field of study, start/end dates.
+   */
+  function fillEducationFields(edu) {
+    if (!edu) return 0;
+    let filled = 0;
+
+    const school = edu.school || edu.institution || edu.university || "";
+    const degree = edu.degree || edu.qualification || "";
+    const discipline = edu.fieldOfStudy || edu.discipline || edu.major || edu.field || "";
+    const startYear = edu.startYear || edu.startDate?.toString()?.substring(0, 4) || "";
+    const endYear = edu.endYear || edu.graduationYear || edu.endDate?.toString()?.substring(0, 4) || "";
+
+    // Map label patterns to values
+    const eduFields = [
+      { labels: ["school", "university", "institution", "college", "school or university", "school name"], value: school },
+      { labels: ["degree", "degree type", "degree level", "qualification"], value: degree },
+      { labels: ["discipline", "field of study", "major", "area of study", "concentration"], value: discipline },
+      { labels: ["start date year", "start year"], value: startYear },
+      { labels: ["end date year", "end year", "graduation year", "year of graduation"], value: endYear },
+    ];
+
+    for (const { labels, value } of eduFields) {
+      if (value && fillByLabel(labels, value)) filled++;
+    }
+
+    // Handle select/dropdown for start/end date month (leave as default if not specified)
+    const startMonth = edu.startMonth || edu.startDate?.toString()?.split("-")?.[1] || "";
+    const endMonth = edu.endMonth || edu.endDate?.toString()?.split("-")?.[1] || "";
+
+    if (startMonth) {
+      const startMonthSel = document.querySelector('select[name*="start_date_month"], select[id*="start_date_month"]');
+      if (startMonthSel) { startMonthSel.value = startMonth; startMonthSel.dispatchEvent(new Event("change", {bubbles:true})); filled++; }
+    }
+    if (endMonth) {
+      const endMonthSel = document.querySelector('select[name*="end_date_month"], select[id*="end_date_month"]');
+      if (endMonthSel) { endMonthSel.value = endMonth; endMonthSel.dispatchEvent(new Event("change", {bubbles:true})); filled++; }
+    }
+
+    console.log("AutoApply: Education fill — school:", school, "degree:", degree, "discipline:", discipline);
     return filled;
   }
 
@@ -1561,9 +1621,20 @@
       }
 
       // Wire up action buttons
-      document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
+      // [Cycle 5 fix 2026-04-13] Fill again must work even when pendingApplication was
+      // already consumed: set _aa_scrapeAndTailor so init() takes the self-scrape path
+      // using the current URL + DOM-scraped JD. Without this flag, re-init short-circuits
+      // with "No pending application found" when the user clicks Fill again after a
+      // direct-visit flow (the common Greenhouse case).
+      document.getElementById("aa-btn-retry")?.addEventListener("click", async () => {
         removeBanner();
         window.__autoapply_ats_injected = false;
+        try {
+          await new Promise(resolve => chrome.storage.local.get(["pendingApplication"], (d) => {
+            if (d && d.pendingApplication) { resolve(); return; }
+            chrome.storage.local.set({ _aa_scrapeAndTailor: true }, resolve);
+          }));
+        } catch (_) { /* noop */ }
         setTimeout(() => init(), 500);
       });
       document.getElementById("aa-btn-reload-resume")?.addEventListener("click", async () => {
