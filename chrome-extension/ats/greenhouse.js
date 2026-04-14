@@ -1245,91 +1245,116 @@
 
   async function attemptResumeUpload() {
     try {
-      // Use keyed lookup so batch jobs always upload the correct resume
+      // Use keyed lookup — prefer URL-based key so correct resume is always uploaded
       const pendingData = await chrome.storage.local.get(["pendingApplication", "lastTailoredJob"]);
       const job = pendingData.pendingApplication || pendingData.lastTailoredJob;
+      // Always include page URL so background finds the right keyed entry
+      const jobForLookup = { applyUrl: window.location.href, ...( job || {}) };
       const pdfResult = await new Promise(resolve =>
-        chrome.runtime.sendMessage({ type: "GET_RESUME_PDF", job: job || {} }, resolve)
+        chrome.runtime.sendMessage({ type: "GET_RESUME_PDF", job: jobForLookup }, resolve)
       );
       if (!pdfResult?.pdf) {
-        console.log("AutoApply: No tailored resume PDF — skipping programmatic upload");
-        return;
+        LOG("No tailored resume PDF available — skipping programmatic upload");
+        return false;
       }
 
-      // Find a VISIBLE file input. Greenhouse wraps the native <input type="file">
-      // inside a custom React widget that hides it (display:none / opacity:0 / width:0).
-      // Manipulating a hidden input via Object.defineProperty corrupts React's internal
-      // component state and causes the upload widget to re-render as a blank oval strip.
-      // We only attempt upload on inputs that are actually visible and interactable.
-      const allFileInputs = document.querySelectorAll('input[type="file"]');
-      let fileInput = null;
-      for (const inp of allFileInputs) {
-        const style = window.getComputedStyle(inp);
-        const rect = inp.getBoundingClientRect();
-        const isHidden = style.display === "none"
-          || style.visibility === "hidden"
-          || style.opacity === "0"
-          || parseFloat(style.opacity) < 0.1
-          || rect.width < 2
-          || inp.getAttribute("tabindex") === "-1"
-          || inp.hasAttribute("aria-hidden");
-        if (!isHidden) { fileInput = inp; break; }
-      }
-
-      if (!fileInput) {
-        // All file inputs are hidden (Greenhouse uses a custom React widget).
-        // Leave the widget untouched — the banner already instructs the user to
-        // upload the downloaded PDF manually.
-        console.log("AutoApply: All file inputs are hidden — skipping upload to avoid breaking Greenhouse widget");
-        return;
-      }
-
-      console.log("AutoApply: Attempting programmatic resume file upload on visible input... (key:", pdfResult.fromKey ? "matched" : "fallback", ")");
-
-      // Build the File object from stored base64
+      // Build the File object from stored base64, using the real tailored filename
       const base64Data = pdfResult.pdf;
       const binaryString = atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      const file = new File([bytes], "tailored_resume.pdf", { type: "application/pdf" });
+      for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+      const filename = pdfResult.filename || `Resume - ${job?.company || "Company"} - ${job?.jobTitle || "Role"}.pdf`;
+      const file = new File([bytes], filename, { type: "application/pdf" });
+      LOG("Built resume File:", filename, "size:", bytes.length, "bytes");
 
-      // Strategy 1: React's onChange handler (preferred — doesn't mutate the DOM node)
-      const reactPropsKey = Object.keys(fileInput).find(k => k.startsWith("__reactProps$"));
-      if (reactPropsKey && fileInput[reactPropsKey]?.onChange) {
+      const allFileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+
+      // ── Strategy 1: React __reactProps$ onChange on ANY file input (incl. hidden) ──
+      // Calling React's own synthetic handler is safe even on hidden inputs — it doesn't
+      // touch the DOM node's `files` property, so it won't corrupt the React reconciler.
+      for (const inp of allFileInputs) {
+        const reactKey = Object.keys(inp).find(k => k.startsWith("__reactProps$") || k.startsWith("__reactFiber$"));
+        const propsKey  = Object.keys(inp).find(k => k.startsWith("__reactProps$"));
+        if (propsKey && inp[propsKey]?.onChange) {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          inp[propsKey].onChange({
+            target: { files: dt.files },
+            currentTarget: { files: dt.files },
+            preventDefault: () => {},
+            stopPropagation: () => {},
+            nativeEvent: new Event("change"),
+            type: "change",
+            bubbles: true,
+          });
+          LOG("Resume uploaded via React onChange on file input (key matched:", !!pdfResult.fromKey, ")");
+          await new Promise(r => setTimeout(r, 600));
+          // Verify it worked — Greenhouse sets aria-label or shows filename somewhere
+          return true;
+        }
+      }
+
+      // ── Strategy 2: Drop event on the Greenhouse upload dropzone ──
+      // Greenhouse renders a visible drag-and-drop zone that listens to native drop events.
+      // Find it by text content (the zone always mentions "resume" or "attach").
+      const findDropzone = () => {
+        // Try data-testid / known class patterns first
+        const byAttr = document.querySelector(
+          '[data-testid*="resume"], [data-testid*="upload"], ' +
+          '[class*="resumeUpload"], [class*="resume-upload"], ' +
+          '[class*="attachment"][class*="drop"], .drop-zone'
+        );
+        if (byAttr) return byAttr;
+        // Fall back to innerText scan — find smallest element that mentions resume/attach/upload
+        let best = null;
+        let bestLen = Infinity;
+        for (const el of document.querySelectorAll('div, label, section, li')) {
+          const txt = (el.innerText || "").trim().toLowerCase();
+          if (txt.length > 5 && txt.length < bestLen &&
+              (txt.includes("resume") || txt.includes("attach") || txt.includes("drag") || txt.includes("upload"))) {
+            best = el;
+            bestLen = txt.length;
+          }
+        }
+        return best;
+      };
+      const dropzone = findDropzone();
+      if (dropzone) {
+        LOG("Trying drop event on dropzone:", dropzone.tagName, dropzone.className.slice(0,60));
         const dt = new DataTransfer();
         dt.items.add(file);
-        const fakeEvent = {
-          target: { files: dt.files },
-          currentTarget: { files: dt.files },
-          preventDefault: () => {},
-          stopPropagation: () => {},
-          nativeEvent: new Event("change"),
-          type: "change",
-          bubbles: true,
-        };
-        fileInput[reactPropsKey].onChange(fakeEvent);
-        console.log("AutoApply: Resume uploaded via React onChange handler");
-        return;
+        dropzone.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dt, bubbles: true, cancelable: true }));
+        dropzone.dispatchEvent(new DragEvent("dragover",  { dataTransfer: dt, bubbles: true, cancelable: true }));
+        dropzone.dispatchEvent(new DragEvent("drop",      { dataTransfer: dt, bubbles: true, cancelable: true }));
+        LOG("Drop event dispatched on dropzone");
+        await new Promise(r => setTimeout(r, 600));
+        return true;
       }
 
-      // Strategy 2: DataTransfer + native events (only if input is truly interactable).
-      // We deliberately avoid Object.defineProperty here because redefining the `files`
-      // property on a visible input can still corrupt React's reconciler.
-      // Instead, use DataTransfer and dispatch events — safer for non-React inputs.
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
-      // Attempt to assign via descriptor if the property is writable
-      const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
-      if (desc && desc.set) {
-        desc.set.call(fileInput, dataTransfer.files);
+      // ── Strategy 3: Visible file input — native DataTransfer (last resort) ──
+      for (const inp of allFileInputs) {
+        const style = window.getComputedStyle(inp);
+        const rect  = inp.getBoundingClientRect();
+        const hidden = style.display === "none" || style.visibility === "hidden"
+          || parseFloat(style.opacity || "1") < 0.1 || rect.width < 2
+          || inp.getAttribute("tabindex") === "-1" || inp.hasAttribute("aria-hidden");
+        if (!hidden) {
+          const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          if (desc?.set) desc.set.call(inp, dt.files);
+          inp.dispatchEvent(new Event("change", { bubbles: true }));
+          inp.dispatchEvent(new Event("input",  { bubbles: true }));
+          LOG("Resume upload via native events on visible input");
+          return true;
+        }
       }
-      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-      fileInput.dispatchEvent(new Event("input", { bubbles: true }));
-      console.log("AutoApply: Resume upload attempted via native events");
+
+      LOG("All upload strategies exhausted — user must attach resume manually");
+      return false;
     } catch (err) {
       console.error("AutoApply: Resume upload error:", err);
+      return false;
     }
   }
 
