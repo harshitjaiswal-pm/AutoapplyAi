@@ -3,7 +3,7 @@
   "name": "AutoApply AI — Automated Job Applications",
   "version": "3.0.0",
   "description": "Automatically apply to jobs from LinkedIn. Scrapes JD, tailors your resume with AI, and fills application forms on external career sites.",
-  "permissions": ["activeTab", "storage", "downloads", "scripting", "tabs", "alarms", "debugger"],
+  "permissions": ["activeTab", "storage", "downloads", "scripting", "tabs", "alarms", "debugger", "notifications"],
   "host_permissions": [
     "https://*/*",
     "http://localhost:3000/*"

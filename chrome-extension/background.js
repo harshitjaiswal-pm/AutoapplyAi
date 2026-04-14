@@ -454,6 +454,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* ── Show a Chrome system notification ── */
+  if (message.type === "SHOW_NOTIFICATION") {
+    try {
+      chrome.notifications.create(`aa-notif-${Date.now()}`, {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png") || "icons/icon128.png",
+        title: message.title || "AutoApply",
+        message: message.message || "",
+        priority: 2,
+      });
+    } catch(e) { console.warn("AutoApply BG: notification error:", e.message); }
+    sendResponse({ success: true });
+    return false;
+  }
+
   /* ── Download a specific resume by map key (triggered from dashboard) ── */
   if (message.type === "DOWNLOAD_RESUME_BY_KEY") {
     (async () => {
@@ -1744,13 +1759,14 @@ function injectFloatingTrigger(tabId) {
 
             let elapsed = 0;
 
-            // Phase labels help the user understand what's happening
+            // Phase labels help the user understand what's happening (~20-35s total)
             const phases = [
-              { after: 0,  label: "Reading job description…" },
-              { after: 5,  label: "Matching your experience…" },
-              { after: 12, label: "Tailoring bullet points…"  },
-              { after: 22, label: "Generating PDF…"           },
-              { after: 35, label: "Almost ready…"             },
+              { after: 0,  label: "Reading job description…"   },
+              { after: 4,  label: "Matching your experience…"  },
+              { after: 10, label: "Tailoring bullet points…"   },
+              { after: 18, label: "Generating PDF…"            },
+              { after: 28, label: "Almost ready…"              },
+              { after: 38, label: "Taking a bit longer — almost there…" },
             ];
 
             sublabelEl.innerHTML = `
@@ -1843,13 +1859,26 @@ function injectFloatingTrigger(tabId) {
                   break;
                 }
               }
-              // Try to extract job title from page h1 / title tag when it looks stale
+              // Try to extract job title from page h1 / title tag when it looks stale.
+              // Skip generic ATS form headings that are not real job titles.
+              const GENERIC_H1 = /^(apply(\s+for\s+(this\s+)?job)?|submit\s+(your\s+)?application|job\s+application|apply\s+now|application\s+form)$/i;
               const pageH1 = (document.querySelector('h1')?.innerText || "").trim().slice(0, 100);
-              if (pageH1.length > 5) {
+              if (pageH1.length > 5 && !GENERIC_H1.test(pageH1)) {
                 const storedTitle = (jobForTailor.jobTitle || "").toLowerCase();
                 if (!pageH1.toLowerCase().includes(storedTitle.slice(0, 10)) && storedTitle.length > 3) {
                   console.log(`AutoApply: Re-tailor — overriding title from page h1: "${jobForTailor.jobTitle}" → "${pageH1}"`);
                   jobForTailor.jobTitle = pageH1;
+                }
+              }
+              // Fallback: if jobTitle is still blank or a generic string, parse from document.title
+              // e.g. "Job Application for Associate Product Manager at Hootsuite" → "Associate Product Manager"
+              if (!jobForTailor.jobTitle || GENERIC_H1.test(jobForTailor.jobTitle)) {
+                const titleParsed = document.title
+                  .replace(/^Job Application for\s*/i, "")
+                  .split(/\s+at\s+/i)[0].trim().slice(0, 100);
+                if (titleParsed && titleParsed.length > 3 && !GENERIC_H1.test(titleParsed)) {
+                  console.log(`AutoApply: Re-tailor — extracted title from document.title: "${titleParsed}"`);
+                  jobForTailor.jobTitle = titleParsed;
                 }
               }
             } catch (domErr) {
@@ -1868,15 +1897,64 @@ function injectFloatingTrigger(tabId) {
                 delete btn.dataset.counting;
                 setTimeout(() => { sublabelEl.textContent = "Generate a tailored PDF for this role"; setStatus(""); }, 4000);
               } else {
-                if (phaseEl) phaseEl.textContent = "Done! Downloading…";
+                if (phaseEl) phaseEl.textContent = "Done! ✓";
                 if (timeEl) timeEl.textContent = elapsed + "s";
-                setStatus(`✓ Resume ready — downloading!`);
+                setStatus(`✓ Resume ready!`);
                 // Trigger the download now that we have the PDF
                 chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobForTailor });
                 btn.style.opacity = "";
                 btn.style.pointerEvents = "";
                 delete btn.dataset.counting;
                 setTimeout(() => { sublabelEl.textContent = "Your AI-customised resume PDF"; setStatus(""); }, 5000);
+
+                // ── Visual toast notification ──────────────────────────────
+                // Show a prominent on-page toast so the user can't miss it
+                try {
+                  const toastId = "aa-resume-ready-toast";
+                  const existing = document.getElementById(toastId);
+                  if (existing) existing.remove();
+                  const styleTag = document.createElement("style");
+                  styleTag.textContent = `
+                    @keyframes aa-toast-in  { from { opacity:0; transform:translate(-50%,-20px); } to { opacity:1; transform:translate(-50%,0); } }
+                    @keyframes aa-toast-out { from { opacity:1; } to { opacity:0; } }
+                    #${toastId} { animation: aa-toast-in 0.35s cubic-bezier(.22,.68,0,1.2) forwards; }
+                    #${toastId}.aa-hiding { animation: aa-toast-out 0.4s ease forwards; }
+                  `;
+                  document.head.appendChild(styleTag);
+                  const toast = document.createElement("div");
+                  toast.id = toastId;
+                  toast.style.cssText = [
+                    "position:fixed", "top:72px", "left:50%", "transform:translateX(-50%)",
+                    "background:linear-gradient(135deg,#059669,#047857)",
+                    "color:#fff", "padding:14px 28px 14px 20px",
+                    "border-radius:14px", "font-size:15px", "font-weight:700",
+                    "z-index:2147483647", "box-shadow:0 8px 40px rgba(0,0,0,0.28)",
+                    "display:flex", "align-items:center", "gap:10px",
+                    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+                    "white-space:nowrap", "cursor:default",
+                  ].join(";");
+                  toast.innerHTML = `<span style="font-size:22px">✅</span>
+                    <span>
+                      <div style="font-size:15px;font-weight:800;letter-spacing:-0.2px">Resume ready — check your Downloads!</div>
+                      <div style="font-size:12px;font-weight:500;opacity:0.85;margin-top:2px">Tailored for ${jobForTailor.company || "this job"} · ${jobForTailor.jobTitle || ""}</div>
+                    </span>`;
+                  document.body.appendChild(toast);
+                  // Auto-dismiss after 6s
+                  setTimeout(() => {
+                    toast.classList.add("aa-hiding");
+                    setTimeout(() => { toast.remove(); styleTag.remove(); }, 450);
+                  }, 6000);
+                } catch (toastErr) { console.warn("AutoApply: toast error:", toastErr.message); }
+
+                // ── Chrome system notification ─────────────────────────────
+                try {
+                  chrome.runtime.sendMessage({
+                    type: "SHOW_NOTIFICATION",
+                    title: "✅ Resume Ready!",
+                    message: `Tailored for ${jobForTailor.company || "this job"} — check your Downloads folder.`,
+                  });
+                } catch(_) {}
+
                 // Rebuild panel so the ↓ Download button replaces this Tailor button
                 setTimeout(() => buildPanel(), 1000);
               }
@@ -2219,7 +2297,7 @@ async function injectATSScript(tabId, url) {
  * Retry a function up to maxAttempts times with a delay between attempts.
  * On final failure, re-throws the last error.
  */
-async function withRetry(fn, maxAttempts = 3, delayMs = 2000, label = "operation") {
+async function withRetry(fn, maxAttempts = 3, delayMs = 1000, label = "operation") {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -2232,6 +2310,15 @@ async function withRetry(fn, maxAttempts = 3, delayMs = 2000, label = "operation
     }
   }
   throw lastErr;
+}
+
+/** Create an AbortSignal that times out after ms milliseconds. */
+function apiTimeout(ms = 25000) {
+  try { return AbortSignal.timeout(ms); } catch(_) {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(new Error(`Timed out after ${ms}ms`)), ms);
+    return ctrl.signal;
+  }
 }
 
 /**
@@ -2247,7 +2334,7 @@ async function handleTailorAndFill(job) {
 
   // Run Step 1 and storage fetch in parallel (Step 1 doesn't depend on stored data)
   const [analyzeRes, stored] = await Promise.all([
-    withRetry(() => fetch_analyze_job(job), 3, 2000, "analyzeJob"),
+    withRetry(() => fetch_analyze_job(job), 2, 1000, "analyzeJob"),
     chrome.storage.local.get(["parsedResume", "autoapplyUrl", "userProfile"]),
   ]);
 
@@ -2311,6 +2398,7 @@ async function handleTailorAndFill(job) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(tailorRequestBody),
+      signal: apiTimeout(28000),
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => "");
@@ -2334,6 +2422,7 @@ async function handleTailorAndFill(job) {
         resume: tailoredResult.tailoredResume,
         format: "pdf",
       }),
+      signal: apiTimeout(15000),
     });
 
     if (pdfRes.ok) {
@@ -2480,6 +2569,7 @@ async function fetch_analyze_job(job) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobDescription: job.jobDescription }),
+      signal: apiTimeout(20000),
     });
     return res;
   } catch (fetchErr) {
