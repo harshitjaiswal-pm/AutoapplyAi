@@ -711,11 +711,16 @@
       { labels: ["sponsorship", "immigration", "require immigration"],         value: user.requireSponsorship === "No" ? "No" : (user.requireSponsorship || "No") },
       { labels: ["state", "province", "reside in"],                           value: user.province || user.state || "British Columbia" },
       { labels: ["how did you", "hear about", "learn about", "first learn"],  value: user.howDidYouHear || "LinkedIn" },
-      // Issue #8: Diversity preferences — default to "Prefer not to disclose" if not set
-      { labels: ["gender"],                                                    value: user.gender || "Prefer not to disclose" },
-      { labels: ["race", "ethnicity"],                                         value: user.ethnicity || "Prefer not to disclose" },
-      { labels: ["veteran"],                                                   value: user.veteranStatus || "Prefer not to disclose" },
-      { labels: ["disability"],                                                value: user.disabilityStatus || "Prefer not to disclose" },
+      // [Fix 2026-04-13 Cycle 6] Diversity / EEO fields: ONLY fill if user has EXPLICITLY
+      // set a value in their profile. Never use a fallback default ("Prefer not to disclose")
+      // because the fuzzy dropdown matcher can match short words ("to" in "Prefer not to
+      // disclose" → hits "Latino" / "Latinx" → selects wrong ethnicity option).
+      // If the user hasn't set these, skip them entirely — leaving them blank is safer
+      // than guessing or selecting an incorrect EEO category.
+      { labels: ["gender"],      value: user.gender           || "" },
+      { labels: ["race", "ethnicity"], value: user.ethnicity  || "" },
+      { labels: ["veteran"],     value: user.veteranStatus    || "" },
+      { labels: ["disability"],  value: user.disabilityStatus || "" },
       { labels: ["previously been employed", "worked here", "employed at", "worked at", "worked for", "worked before", "ever worked", "previously work", "former employee"], value: "No" },
     ];
 

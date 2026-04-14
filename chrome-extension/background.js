@@ -603,8 +603,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               }
             }
             // Fuzzy match for city/state combos: "Vancouver, BC, CA" → find option containing "vancouver"
-            if (!match && vl.length > 2) {
-              var parts = vl.split(/[,\s]+/).filter(function(p) { return p.length > 1; });
+            // [Fix 2026-04-13] Raise minimum part length to 4 chars to prevent short words
+            // ("to", "or", "at", "by") from creating false positive matches.
+            // Root cause: "Prefer not to disclose" → split → "to" → matched "Latino" in
+            // "Hispanic or Latino" → wrong EEO ethnicity selected.
+            if (!match && vl.length > 3) {
+              var parts = vl.split(/[,\s]+/).filter(function(p) { return p.length >= 4; });
               for (var i = 0; i < options.length; i++) {
                 var ol = (options[i].label || "").toLowerCase().trim();
                 // Check if option contains any of the significant parts
