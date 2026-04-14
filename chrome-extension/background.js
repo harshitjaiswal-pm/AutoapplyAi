@@ -1809,22 +1809,34 @@ function injectFloatingTrigger(tabId) {
                 jobForTailor.jobDescription = jdText;
                 console.log("AutoApply: ALWAYS overriding JD from page DOM for re-tailor, length:", jdText.length);
               }
-              // Also override company from ATS subdomain when stored company looks wrong.
+              // Also override company from ATS URL when stored company looks wrong.
               // E.g. "luxoft.taleo.net" → company = "Luxoft" even if stored says something else.
+              // Special case: Greenhouse hosted jobs use "job-boards.greenhouse.io/{company}/jobs/{id}"
+              // so the company is in the URL PATH, not the subdomain.
               const hostname = window.location.hostname.toLowerCase();
               const atsMap = { "taleo.net": true, "greenhouse.io": true, "lever.co": true,
                 "ashbyhq.com": true, "smartrecruiters.com": true, "icims.com": true };
               for (const [atsDomain] of Object.entries(atsMap)) {
                 if (hostname.endsWith("." + atsDomain)) {
                   const sub = hostname.slice(0, hostname.length - atsDomain.length - 1);
-                  if (sub && sub.length >= 2) {
-                    const derivedCompany = sub.replace(/[-_]/g, " ")
+                  let derivedCompany = "";
+                  // Greenhouse hosted jobs: subdomain is "job-boards", company is first path segment
+                  if (sub === "job-boards" && atsDomain === "greenhouse.io") {
+                    const pathParts = window.location.pathname.split("/").filter(Boolean);
+                    if (pathParts.length > 0) {
+                      derivedCompany = pathParts[0].replace(/[-_]/g, " ")
+                        .replace(/\b\w/g, c => c.toUpperCase());
+                    }
+                  } else if (sub && sub.length >= 2) {
+                    derivedCompany = sub.replace(/[-_]/g, " ")
                       .replace(/\b\w/g, c => c.toUpperCase());
-                    // Only override if stored company clearly doesn't match this page's host
+                  }
+                  if (derivedCompany) {
+                    // Only override if stored company clearly doesn't match derived company
                     const storedCo = (jobForTailor.company || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-                    const subClean = sub.replace(/[^a-z0-9]/g, "");
-                    if (!storedCo.includes(subClean) && !subClean.includes(storedCo)) {
-                      console.log(`AutoApply: Re-tailor — overriding company from subdomain: "${jobForTailor.company}" → "${derivedCompany}"`);
+                    const derivedClean = derivedCompany.toLowerCase().replace(/[^a-z0-9]/g, "");
+                    if (!storedCo.includes(derivedClean) && !derivedClean.includes(storedCo)) {
+                      console.log(`AutoApply: Re-tailor — overriding company from ATS URL: "${jobForTailor.company}" → "${derivedCompany}"`);
                       jobForTailor.company = derivedCompany;
                     }
                   }
