@@ -8,7 +8,8 @@ async function downloadResume(
   resume: any,
   format: "pdf" | "docx",
   setExporting: (v: string) => void,
-  company?: string
+  company?: string,
+  role?: string
 ) {
   setExporting(format);
   try {
@@ -22,11 +23,44 @@ async function downloadResume(
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    // Build filename: "tailored_resume_CompanyName.pdf" (sanitise company for safe filenames)
-    const safeName = company
-      ? "_" + company.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_").substring(0, 50)
+    // Build filename: "<INITIALS>_<Company>_<RoleAbbrev>.<ext>"
+    // Example: Kiran Shahi → Veeva → Senior Business Analyst  =>  KS_Veeva_SBA.pdf
+    const sanitize = (s: string) =>
+      s.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_").substring(0, 50);
+
+    // 1) Initials from applicant name (first letter of first two tokens, uppercased)
+    const fullName = (resume?.contactInfo?.name || "").trim();
+    const initials = fullName
+      ? fullName
+          .split(/\s+/)
+          .slice(0, 3)
+          .map((w: string) => w.charAt(0))
+          .join("")
+          .toUpperCase()
+          .replace(/[^A-Z]/g, "") || "Resume"
+      : "Resume";
+
+    // 2) Company — use first token only to keep names short (e.g. "Veeva Systems Inc" → "Veeva")
+    const companyPart = company ? sanitize(company.split(/[\s,.-]+/)[0] || company) : "";
+
+    // 3) Role abbreviation — first letter of each significant word, uppercased
+    //    "Senior Business Analyst" → "SBA", "Product Manager" → "PM"
+    const STOPWORDS = new Set([
+      "of","and","the","for","to","in","on","at","a","an","with","by","or","&",
+    ]);
+    const roleAbbrev = role
+      ? role
+          .replace(/[^a-zA-Z\s]/g, " ")
+          .split(/\s+/)
+          .filter((w) => w && !STOPWORDS.has(w.toLowerCase()))
+          .slice(0, 5)
+          .map((w) => w.charAt(0).toUpperCase())
+          .join("")
       : "";
-    a.download = `tailored_resume${safeName}.${format}`;
+
+    const parts = [initials, companyPart, roleAbbrev].filter(Boolean);
+    const filename = parts.join("_") || "tailored_resume";
+    a.download = `${filename}.${format}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -456,13 +490,13 @@ export default function TailorEngine() {
                   <>
                     <div className="flex items-center gap-2 mb-4">
                       <SmallBtn
-                        onClick={() => downloadResume(tailoredResult.tailoredResume, "pdf", setExporting, parsedJob?.company)}
+                        onClick={() => downloadResume(tailoredResult.tailoredResume, "pdf", setExporting, parsedJob?.company, parsedJob?.title)}
                         disabled={!!exporting}
                         loading={exporting === "pdf"}
                         label="PDF"
                       />
                       <SmallBtn
-                        onClick={() => downloadResume(tailoredResult.tailoredResume, "docx", setExporting, parsedJob?.company)}
+                        onClick={() => downloadResume(tailoredResult.tailoredResume, "docx", setExporting, parsedJob?.company, parsedJob?.title)}
                         disabled={!!exporting}
                         loading={exporting === "docx"}
                         label="Word"

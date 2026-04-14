@@ -373,6 +373,10 @@ async function generateDocx(resume: any) {
             : []),
 
           // Certifications
+          // [Fix 2026-04-14] Claude sometimes returns certs as objects like
+          // {name: "AWS", issuer: "Amazon", year: 2023} instead of plain strings.
+          // Array.join() on objects produces "[object Object]" in the exported
+          // resume. Normalize every entry to a display string before joining.
           ...(resume.certifications?.length
             ? [
                 sectionHeading("Certifications"),
@@ -380,7 +384,25 @@ async function generateDocx(resume: any) {
                   spacing: { after: 40 },
                   children: [
                     new TextRun({
-                      text: resume.certifications.join("  |  "),
+                      text: (resume.certifications as unknown[])
+                        .map((c) => {
+                          if (!c) return "";
+                          if (typeof c === "string") return c;
+                          if (typeof c === "object") {
+                            const obj = c as Record<string, unknown>;
+                            const name =
+                              obj.name || obj.title || obj.certification || obj.cert || "";
+                            const issuer = obj.issuer || obj.organization || obj.org || "";
+                            const year = obj.year || obj.date || obj.issued || "";
+                            const parts = [name, issuer, year]
+                              .map((p) => (p == null ? "" : String(p).trim()))
+                              .filter(Boolean);
+                            return parts.join(" — ");
+                          }
+                          return String(c);
+                        })
+                        .filter(Boolean)
+                        .join("  |  "),
                       font: "Arial",
                       size: 20,
                     }),
