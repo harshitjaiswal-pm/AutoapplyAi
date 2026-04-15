@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { validateTailoredResume, ResumeValidationResult } from "@/lib/resumeValidation";
+import { buildResumeFilename } from "@/lib/buildFilename";
 
 async function downloadResume(
   resume: any,
@@ -23,43 +24,14 @@ async function downloadResume(
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    // Build filename: "<INITIALS>_<Company>_<RoleAbbrev>.<ext>"
-    // Example: Kiran Shahi → Veeva → Senior Business Analyst  =>  KS_Veeva_SBA.pdf
-    const sanitize = (s: string) =>
-      s.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_").substring(0, 50);
-
-    // 1) Initials from applicant name (first letter of first two tokens, uppercased)
-    const fullName = (resume?.contactInfo?.name || "").trim();
-    const initials = fullName
-      ? fullName
-          .split(/\s+/)
-          .slice(0, 3)
-          .map((w: string) => w.charAt(0))
-          .join("")
-          .toUpperCase()
-          .replace(/[^A-Z]/g, "") || "Resume"
-      : "Resume";
-
-    // 2) Company — use first token only to keep names short (e.g. "Veeva Systems Inc" → "Veeva")
-    const companyPart = company ? sanitize(company.split(/[\s,.-]+/)[0] || company) : "";
-
-    // 3) Role abbreviation — first letter of each significant word, uppercased
-    //    "Senior Business Analyst" → "SBA", "Product Manager" → "PM"
-    const STOPWORDS = new Set([
-      "of","and","the","for","to","in","on","at","a","an","with","by","or","&",
-    ]);
-    const roleAbbrev = role
-      ? role
-          .replace(/[^a-zA-Z\s]/g, " ")
-          .split(/\s+/)
-          .filter((w) => w && !STOPWORDS.has(w.toLowerCase()))
-          .slice(0, 5)
-          .map((w) => w.charAt(0).toUpperCase())
-          .join("")
-      : "";
-
-    const parts = [initials, companyPart, roleAbbrev].filter(Boolean);
-    const filename = parts.join("_") || "tailored_resume";
+    // Shared naming logic — identical output to /api/build-filename and the
+    // linkedin-apply Cowork skill, so files land with the same name regardless
+    // of whether they're produced in the web app or by the skill directly.
+    const filename = buildResumeFilename({
+      applicantName: resume?.contactInfo?.name,
+      company,
+      role,
+    });
     a.download = `${filename}.${format}`;
     document.body.appendChild(a);
     a.click();
