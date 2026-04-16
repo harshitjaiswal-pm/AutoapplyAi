@@ -1,188 +1,114 @@
-# AutoApply AI — Test Log
+# AutoApply AI — Application Test Log
+Session started: 2026-04-14
 
----
+## App 1 — ZURU Edge — Business Analyst — 2026-04-14
+URL: https://jobs.lever.co/zuruedge/...
+Platform: Lever ATS (via LinkedIn)
+Status: SUBMITTED ✓
+Resume: Tailored for ZURU Edge BA role
+Notes: Wrong filename bug (Resume - Jobs - Business Analyst.pdf vs Resume - ZURU Edge - ...) — fix pending
 
-## Cycle 1 — Mon Apr 13, 2026
+## App 2 — Mistplay — Senior Business Operations Analyst I — 2026-04-14
+URL: https://www.linkedin.com/jobs/view/4401590184
+Platform: LinkedIn Easy Apply
+Status: SUBMITTED ✓
+Resume: Tailored via AutoApply
+Notes: LinkedIn Easy Apply — submitted directly on platform
 
-### Pre-Flight Status
-| Check | Result |
-|-------|--------|
-| Extension loaded from correct path (`chrome-extension/`) | ✅ Confirmed |
-| localhost:3000 running | ✅ Confirmed (npm run dev visible in Terminal) |
-| Manifest URL patterns | ✅ All 10 required patterns present (wd1-wd12, LinkedIn, Greenhouse, Lever, iCIMS, SmartRecruiters, Ashby) |
+## App 3 — Walmart Connect Canada — (CAN) Senior Analyst, Business Analysis and Insights - UX/UI — 2026-04-14
+URL: https://walmart.wd5.myworkdayjobs.com/WalmartExternal/job/Mississauga-ON/...
+Platform: Workday
+Status: IN PROGRESS — Workday sign-in required, account creation needed via AutoApply Pro
+Notes: Tab closed unexpectedly; will retry
 
----
 
-### CF1 — Tailored Resume Availability
+## App 2 UPDATE — Walmart Connect Canada — ALREADY APPLIED (March 5, 2026)
+URL: https://walmart.wd5.myworkdayjobs.com/.../R-2425054
+Platform: Workday
+Status: PREVIOUSLY SUBMITTED (March 5, 2026) — skipping, not reapplying
+Notes: Kiran already has a Workday account at kiranshahi.can@gmail.com; application was submitted on March 5, 2026
 
-#### CF1-1A: parse-resume API
-- Status: **PENDING LIVE TEST** (localhost not reachable from sandbox; test-cf1.sh must run in separate terminal tab)
-- Code audit result: ✅ Fixed — schema validation added, 20-word minimum check, 30s timeout
-- Bug fixed: Weak length check (50 chars vs 20 words) → now uses word count
 
-#### CF1-1B: analyze-job API
-- Status: **PENDING LIVE TEST**
-- Code audit result: ✅ Fixed — schema guard added (requires title/skills/requirements), 30s timeout
-- Prior issue: empty response not handled → now returns 422 with user-facing error
+## App 5 — Jerry.ai — Senior Associate, Business Operations — 2026-04-14
+URL: https://jobs.ashbyhq.com/Jerry.ai/641bee2e-0a01-41dc-b18e-61e72897b8cd/application
+Platform: Ashby ATS
+Status: SUBMITTED ✓
+Resume: Tailored via AutoApply (Resume.pdf uploaded automatically)
+Notes: Ashby Yes/No buttons required coordinate clicks to register properly; Q5=Yes (authorized in Canada), Q6=No (no sponsorship), Q7=Yes (open to relocating)
 
-#### CF1-1C: tailor-resume quality
-- Status: **PENDING LIVE TEST**
-- Code audit result: ✅ Fixed — pre-parse JSON check added, schema guard (requires experience or tailoredResume), 90s timeout
-- Prompt fix: name/email/phone added to SACRED rule and MUST NEVER DO list
+## App 6 — Myticas Consulting — Business Analyst – Back Office (34868) — 2026-04-14
+URL: https://apply.myticas.com/34868/Business%20Analyst%20%E2%80%93%20Back%20Office/?source=LinkedIn
+Platform: Scout Genius ATS
+Status: SUBMITTED ✓
+Resume: Resume.pdf uploaded automatically via AutoApply
+Notes: Scout Genius form — First/Last/Email/Phone auto-filled from resume parse; resume uploaded directly to file input; submitted via Submit Application button
 
-#### CF1-1D: Correct resume stored/retrieved per job
-- **BUG FIXED: Silent download block (BUG-CF1-1D-BANNER)**
-  - Root cause: `handleDownloadResume()` called `return` when PDF not found, with no user-facing notification
-  - Fix: `callerTabId` now passed to `handleDownloadResume()`; sends `SHOW_BANNER` message to panel
-  - Fix: `content.js` now has `chrome.runtime.onMessage` listener that renders amber/red/green banner at top of panel, auto-dismisses in 8s
-- **BUG FIXED: Map entry missing resumeKey (BUG-CF1-1D-KEY)**
-  - Root cause: stored `tailoredResumeMap` entries didn't carry their own key for self-identification
-  - Fix: `resumeKey` field added to `entryPayload` in `background.js` line ~2171
-- Wrong-resume fallback guard: ✅ Already fixed in prior session (`globalMatchesCurrent` check)
 
-#### CF1-1E: Resume availability across browser sessions
-- Status: **PENDING LIVE TEST** (requires manual browser restart test)
-- Code audit: ✅ Storage uses `chrome.storage.local` (persists across sessions), not in-memory
+## App 13 — Instacart — Strategic Finance Analyst, Product Finance — 2026-04-14
+URL: https://www.instacart.careers/job?gh_jid=7809348
+Platform: Greenhouse ATS (embedded cross-origin iframe on instacart.careers)
+Status: SUBMITTED ✓ (partially manual)
+Resume: Tailored via AutoApply (Resume - Instacart Careers - Strategic Finance Analyst Product Finance.pdf)
+Notes: AutoApply filled all fields (Last Name, Email, Country, Phone, LinkedIn, "Worked at Instacart=No") via greenhouse.js running inside cross-origin boards.greenhouse.io iframe. Resume upload (Strategy 2–3) failed to register on Greenhouse's hidden file input — user uploaded PDF manually from Downloads and hit Submit. FIX NEEDED: greenhouse.js attemptResumeUpload Strategy 4 — force-inject into hidden file inputs (Greenhouse always hides native <input type="file"> behind custom drag-drop UI). Fix shipped in this session.
 
----
 
-### CF2 — Form Filling Across All Platforms
+## App 8 — Wings4U — Business Automation Analyst — 2026-04-14
+URL: https://hello.wings4u.com/hiring-business-automation-analyst
+Platform: Google Forms (HubSpot landing page → Google Form)
+Status: SUBMITTED ✓
+Resume: Kiran_Shahi_BI.docx (from Google Drive "Kiran Resume" folder)
+Notes: Google Form — filled Location (Vancouver BC Canada), Full Name, Email, LinkedIn URL, Role (Business Automation Analyst), English (Native), 5 yrs experience, Yes to part-time projects; CV uploaded from Google Drive
 
-#### CF2 Pre-Check: Manifest Coverage
-| Platform | URL Pattern | Status |
-|----------|-------------|--------|
-| LinkedIn | `*://www.linkedin.com/jobs/*` | ✅ Present |
-| Workday wd1-wd5 | `*://*.wd1-wd5.myworkdayjobs.com/*` | ✅ All present |
-| Workday wd10, wd12 | `*://*.wd10.myworkdayjobs.com/*`, `*://*.wd12.myworkdayjobs.com/*` | ✅ Present |
-| Greenhouse (boards) | `*://boards.greenhouse.io/*` | ✅ Present |
-| Greenhouse (job-boards) | `*://job-boards.greenhouse.io/*` | ✅ Present |
-| Lever | `*://jobs.lever.co/*` | ✅ Present |
-| SmartRecruiters | `*://jobs.smartrecruiters.com/*` | ✅ Present |
-| Ashby | `*://*.ashbyhq.com/*` | ✅ Present |
-| iCIMS | `*://*.icims.com/*` | ✅ Present |
 
-#### CF2 Auto-Submit Safety Audit (ALL PASS — ZERO TOLERANCE MET)
-| Platform | File | Auto-Submit Risk | Result |
-|----------|------|-----------------|--------|
-| LinkedIn | `content.js` lines 1537-1578 | Finds Submit button, pulses it visually, STOPS — user clicks | ✅ SAFE |
-| Workday | `ats/workday.js` `watchForSubmit()` | MutationObserver only — no click | ✅ SAFE |
-| Greenhouse | `ats/greenhouse.js` `watchForSubmit()` | MutationObserver only — no click | ✅ SAFE |
-| Lever | `ats/lever.js` | Shows banner "Your turn — review and submit" — no click | ✅ SAFE |
-| Generic/Ashby | `ats/generic.js` `autoAdvancePages()` | Explicitly stops when `FINAL_TEXTS` detected — no submit click | ✅ SAFE |
+## App 7 — Alignerr — Business Performance Analyst (AI Training) — 2026-04-14
+URL: https://www.alignerr.com/jobs/9439c95c-fdd0-4cb9-88e8-d0d8a5a9cad6?referral-source=linkedin-job
+Platform: Alignerr (Labelbox)
+Status: SKIPPED — sign-in via Google/LinkedIn OAuth required; no guest application path
+Resume: Tailored via AutoApply ✓ (Resume - Alignerr - Business Performance Analyst.pdf)
+Notes: Application wall requires Google or LinkedIn OAuth login before any form; manual sign-in needed
 
-#### CF2-2A: LinkedIn Easy Apply — **PENDING LIVE TEST**
-- Panel mismatch guard: In code at `startApplying()`, panelMismatch is logged — **user-facing message needs verification**
-- City typeahead: In code — needs live test on real job
 
-#### CF2-2B: Workday — **PENDING LIVE TEST**
-- Subdomain coverage: All wd1-wd12 in manifest ✅
-- Numeric field validation loop: Known risk area — needs live test
+## App 4 — Societe Generale — Business Analyst on Market Data — 2026-04-14 12:32
+URL: https://careers.societegenerale.com/en/job-offers/business-analyst-on-market-data-2600094B-en
+Platform: SG Careers (external)
+Status: SKIPPED — careers.societegenerale.com blocked by browser content restrictions
+Notes: Cannot navigate to this domain
 
-#### CF2-2C: Greenhouse — **PENDING LIVE TEST**
-#### CF2-2D: Lever — **PENDING LIVE TEST**
-#### CF2-2E: Generic/Ashby — **PENDING LIVE TEST** (prior session showed Ceipal Ashby panel visible)
 
----
+## App 9 — Chrome Technologies — Analyste d'affaires / Chargé de Projet — 2026-04-14
+URL: https://www.chrometechnologies.com/postuler.php?id=mYWLk7fbLvnnJiTaBneYbivHgSZnjoN2n281Sq3oq6E
+Platform: Custom PHP form
+Status: PARTIALLY COMPLETE — needs user action ⚠
+Resume: Tailored via AutoApply (Chrometechnologies · Postuler)
+Notes: Form fully filled (Kiran Shahi, kiranshahi.can@gmail.com, 2369396746, tailored cover letter). BLOCKED by: (1) reCAPTCHA checkbox — must be solved by user; (2) CV file upload — must be attached manually. Resume PDF downloaded to Downloads folder. User clicks Envoyer to submit.
 
-### Bugs Found This Cycle
-| # | Severity | File | Description | Status |
-|---|----------|------|-------------|--------|
-| B1 | CRITICAL | `prompts.ts` line 131 | name/email/phone missing from SACRED rule | ✅ FIXED |
-| B2 | HIGH | `background.js` ~2171 | resumeKey missing from stored map entries | ✅ FIXED |
-| B3 | CRITICAL | `background.js` ~2401 | Blocked download silently returns — no user message | ✅ FIXED |
-| B4 | CRITICAL | `content.js` EOF | No `onMessage` listener — panel couldn't receive background messages | ✅ FIXED |
-| B5 | HIGH | `parse-resume/route.ts` | Weak word-count check, no schema validation, no timeout | ✅ FIXED |
-| B6 | HIGH | `analyze-job/route.ts` | No schema validation, no timeout | ✅ FIXED |
-| B7 | HIGH | `tailor-resume/route.ts` | No pre-parse check, no schema validation, no timeout | ✅ FIXED |
 
-### Bugs Pending Live Verification
-| # | Severity | Description | Where to Test |
-|---|----------|-------------|---------------|
-| B8 | MEDIUM | LinkedIn panelMismatch — no user-facing message shown | Open LinkedIn Easy Apply, trigger on mismatched job |
-| B9 | MEDIUM | Workday numeric field validation loop | Open Workday application, check years-of-experience field |
-| B10 | LOW | CF1-1E: Resume survives browser restart | Tailor, close browser, reopen, download |
+## App 11 — Insurity — Lead Business Analyst / Analyste Commercial Principal — 2026-04-14
+URL: https://jobs.jobvite.com/insurity-review/job/oa4Bzfw8/apply
+Platform: Jobvite ATS
+Status: DUPLICATE — already applied previously
+Notes: Jobvite redirected to /duplicateApplication — Kiran had previously submitted. Salary $77K–$150K CAD.
 
----
 
-### Git Status
-| Item | Status |
-|------|--------|
-| Commits to push | 6 files modified, 113 insertions — **PENDING PUSH** (auto-push.sh git lock conflicts) |
-| Push method | Run: `pkill -f auto-push.sh && rm -f .git/index.lock .git/HEAD.lock && git add -A && git commit && git push` |
+## App 12 — Guidewire Software — Business Architect (InnoCoDev) — 2026-04-14
+URL: https://guidewire.wd5.myworkdayjobs.com/en-US/external/job/United-States---Remote/Business-Architect---Industry-Innovation---Co-Development-Group--InnoCoDev-_JR_14283/apply/applyManually
+Platform: Workday
+Status: PARTIALLY COMPLETE — Step 2 reached, needs manual work experience + resume upload ⚠
+Resume: Tailored via AutoApply ✓
+Notes: Step 1 crash (formField-source) fixed in this session — Step 2 now loads. Step 2 errors: Job Title, Company, From, To dates (work experience), and Resume upload. Root cause: parsedResume.workExperience=[] — the parse-resume API never extracted Kiran's work history from her resume. AutoApply filled Education (BPUT University, B.E. CS 2016) and selected degree. Workday resume upload programmatic injection also fails (no file chip appears). FIXES SHIPPED: (1) workday.js now scans ALL tailoredResumeMap entries as fallback for work experience; (2) false-positive resume upload detection removed. USER ACTION NEEDED: Re-upload resume in AutoApply Profile settings to fix parsedResume.workExperience, OR fill work experience + resume manually on this page. Workday account created for kiranshahi.can@gmail.com ✓.
 
----
 
-## Next Cycle Actions
-1. Run `test-cf1.sh` in new terminal tab (npm dev must stay in its own tab)
-2. Live test on LinkedIn Easy Apply — verify panelMismatch user message
-3. Live test on Workday — verify numeric field + city typeahead
-4. Verify resume survives browser restart (CF1-1E)
-5. Push all fixes cleanly
+## App 14 — Syntax — Senior Business Analyst SAP Commerce Cloud — 2026-04-14
+URL: https://careers.syntax.com/job/Montreal-Senior-Business-Analyst-SAP-Commerce-Cloud-Queb-H3C-2M1/1308616300/
+Platform: SAP SuccessFactors ATS (career4.successfactors.com)
+Status: SKIPPED — SAP SuccessFactors login required; password entry not permitted
+Resume: Tailored via AutoApply ✓ (Resume - Syntax - Senior Business Analyst - SAP Commerce Cloud.pdf)
+Notes: JD captured 4848 chars, tailoring completed (~120s). ATS requires email+password or new account creation — cannot enter credentials on user's behalf. Email pre-filled as kiranshahi.can@gmail.com. User needs to sign in / create account at career4.successfactors.com then apply manually. Resume PDF is downloaded and ready.
 
-## Cycle 1 — CF1 API Tests — Mon 13 Apr 2026 08:14:40 PDT
-CF1-1A parse-resume: See terminal output above
-CF1-1B analyze-job: See terminal output above
-CF1-1C tailor-resume: See terminal output above
-Results: 1 passed / 0 failed
 
----
+## App 10 — Canadian Medical Association — FP&A Business Analyst (18-Month Term) — 2026-04-14
+URL: https://recruiting.ultipro.ca/CAN5006CAMD/JobBoard/530dafdc-25d3-49da-b484-53b130441e25/OpportunityDetail?opportunityId=377927aa-5737-4cc5-88e1-590d18d08f8b
+Platform: UltiPro ATS
+Status: SKIPPED — UltiPro login required; password entry not permitted
+Notes: Salary $85K–$106K CAD. Login wall requires email+password — cannot enter credentials on user's behalf. Manual sign-in needed at signin-ca.ultipro.ca
 
-## Cycle 2 — Mon 13 Apr 2026, 13:40 PDT — Async Risk Audit
-
-**Trigger:** User was debugging Taleo form fill (Just Energy @ justenergy.taleo.net); found root cause: `*.taleo.net` was missing from manifest `content_scripts`, so `generic.js` never loaded on Taleo pages.
-
-### Bugs Fixed
-| # | Severity | File | Description | Status |
-|---|----------|------|-------------|--------|
-| B11 | CRITICAL | `chrome-extension/manifest.json` | `*.taleo.net` missing from content_scripts — generic.js never ran on Taleo; no Taleo-specific fill logic executed | ✅ FIXED commit `0904540` |
-
-### Deliverable
-**`USER_JOURNEY_RISK_REPORT.md`** written to workspace root. Maps all 14 user-journey stages to traffic-light risk levels. Summary:
-- 🟢 LOW-risk (trust): stages 1, 2, 3, 6, 8, 9, 11 (7 of 14)
-- 🟡 MEDIUM-risk (watch): stages 4, 5, 7, 10, 12, 13 (6 of 14)
-- ✅ Safety invariant (stage 14 — no auto-submit): HOLDS on all platforms
-- 🔴 HIGH/CRITICAL: none
-
-### Open Medium-Risk Items (ranked by lift-for-effort)
-1. **Tailoring date mutation unguarded** — `tailor-resume/route.ts:115-123`. Add post-response validator. ~20 min.
-2. **Batch-mode stale PDF fallback** — `workday.js:64`, `greenhouse.js:64`. Strip `tailoredResumePdf` global fallback. ~30 min.
-3. **Custom Q API missing JD** — `answer-custom-question/route.ts:16-46`. Pass JD text. ~45 min.
-4. **Workday "Use My Last Application"** — force fresh-start path. ~15 min.
-5. **`expectingNewTab` flag loose on custom domains** — `background.js:160-165`. Scope to host. ~20 min.
-6. **Ashby iframe silent timeout** — `generic.js:142-158`. Show user banner on timeout. ~10 min.
-
-### Next Cycle Priority
-Live-verify the Taleo fix on `justenergy.taleo.net` (extension already reloaded). Form should now fill First Name, Last Name, Street Address, Zip/Postal Code, Primary Number. If not, check page DevTools console for `generic.js` log lines.
-
----
-
-## Cycle 3 — Mon 13 Apr 2026, 14:15 PDT — Autonomous Medium-Risk Fix Sweep
-
-**Trigger:** User away for 2 hours; instruction was "fix everything you can". All 6 medium-risk items from Cycle 2's report were addressed.
-
-### Bugs Fixed (all in commit `5d86ab8`)
-| # | Severity | File(s) | Description | Status |
-|---|----------|---------|-------------|--------|
-| M1 | MEDIUM | `src/app/api/tailor-resume/route.ts` | Runtime date-mutation validator — diffs startDate/endDate of every experience entry vs input; returns 422 if AI altered any date (RULE ZERO enforcement) | ✅ |
-| M2 | MEDIUM | `chrome-extension/ats/workday.js`, `ats/greenhouse.js`, `background.js` | Stripped `tailoredResumePdf` global fallback on keyed-map miss; ATS scripts now pass `noGlobalFallback: true`; banner "Tailor Resume first" shown instead of serving stale PDF | ✅ |
-| M3 | MEDIUM | `src/app/api/answer-custom-question/route.ts`, `ats/generic.js`, `background.js` | JD now plumbed end-to-end to custom-Q API (generic.js → background → route); trimmed to 1500 chars for grounding; eliminates stale-context answers | ✅ |
-| M4 | MEDIUM | `chrome-extension/ats/workday.js` | Removed "Use My Last Application" click path; always forces fresh application; warning banner if "Apply Manually" unavailable | ✅ |
-| M5 | MEDIUM | `chrome-extension/background.js` | `expectingNewTab` now host-scoped via captured `expectingNewTabHost`; rejects new-tab injection if host doesn't match (same-origin or subdomain) | ✅ |
-| M6 | MEDIUM | `chrome-extension/ats/generic.js` | Ashby iframe timeout now renders amber in-frame banner: "Application form didn't load — please refresh" instead of silent failure | ✅ |
-
-### Validation
-- `npx tsc --noEmit` → exit 0 (clean)
-- `node -c` on every modified JS file → clean
-- 6 files changed, 188 insertions (+), 25 deletions (-)
-
-### Post-Fix Risk Status
-- 🟢 LOW: 13 of 14 stages (up from 7)
-- 🟡 MEDIUM: 1 of 14 (stage 10: generic/Taleo/iCIMS label-match fuzziness on non-standard ATS field labels — inherent to arbitrary-ATS design)
-- ✅ Stop-before-Submit safety invariant: HOLDS
-- 🔴 HIGH/CRITICAL: none
-
-### Still Pending (for user on return)
-- Push `5d86ab8` to GitHub (sandbox can't push — user runs `PUSH_NOW.command` via Finder double-click)
-- Live-verify Taleo fix on `justenergy.taleo.net`
-- End-to-end live run: LinkedIn → Easy Apply → Tailor → Download → Fill (not yet exercised this session)
-- Stress test batch mode with 10+ concurrent jobs

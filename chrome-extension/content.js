@@ -1,6 +1,6 @@
-/** @version 2026-04-12-v17-city-fix */
+/** @version 2026-04-14-v18-auto-approve */
 // Version stamp visible from page JS via data attribute
-document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
+document.documentElement.dataset.aaContentVersion = '2026-04-14-v18-auto-approve';
 /**
  * CONTENT SCRIPT — Runs on LinkedIn job search pages.
  *
@@ -16,7 +16,7 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
  */
 
 (() => {
-  const SCRIPT_VERSION = "2.5.0-v21-h2-title-fallback";
+  const SCRIPT_VERSION = "2.5.0-v22-auto-approve";
 
   // Version-aware injection guard: always re-inject when version changes.
   // If a NEWER version arrives (programmatic injection after manifest cache),
@@ -1117,6 +1117,12 @@ document.documentElement.dataset.aaContentVersion = '2026-04-12-v17-city-fix';
    * hasPrevious — if true, the ← Back button is shown so user can go back.
    */
   function showConfirmation(jobNumber, totalJobs, job, tailoredResult, jobDescription, hasPrevious = false) {
+    // Auto-approve mode: skip review modal and proceed directly with "apply"
+    if (window._aaAutoApprove) {
+      console.log(`[AA-AUTO] Auto-approving job ${jobNumber}/${totalJobs}: ${job.title} @ ${job.company}`);
+      updateStatus(`Auto-applying ${jobNumber}/${totalJobs}: ${job.title} @ ${job.company}`);
+      return Promise.resolve("apply");
+    }
     return new Promise((resolve) => {
       const modal = createConfirmationModal();
       modal.style.display = "flex";

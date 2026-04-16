@@ -331,6 +331,7 @@
     <button class="tab-btn active" data-tab="dashboard">Overview</button>
     <button class="tab-btn" data-tab="history">History</button>
     <button class="tab-btn" data-tab="profile">Profile</button>
+    <button class="tab-btn" data-tab="vault">Vault 🔒</button>
     <button class="tab-btn" data-tab="logs">Activity</button>
     <button class="tab-btn" data-tab="chat">Chat ✦</button>
   </div>
@@ -607,6 +608,66 @@
     <div class="save-btn-row">
       <button class="btn" id="save-profile">Save Profile</button>
       <div class="save-feedback" id="save-feedback">✓ Profile saved</div>
+    </div>
+  </div>
+
+  <!-- Vault Tab — encrypted credentials for password-gated ATS sites -->
+  <div id="vault" class="tab-content">
+    <div id="vault-status-banner" style="
+      padding:10px 12px; border-radius:8px; font-size:12px;
+      margin-bottom:12px; background:#FEF3C7; color:#92400E;
+      border:1px solid #FCD34D;
+    ">Loading vault status…</div>
+
+    <!-- First-time setup -->
+    <div id="vault-init-panel" style="display:none;">
+      <p style="font-size:12px; color:#4B5563; margin:0 0 10px;">
+        Set a master passphrase to create your credential vault. It's never
+        stored on disk — losing it means wiping the vault.
+      </p>
+      <input id="vault-init-pass" type="password" placeholder="Master passphrase (8+ chars)"
+        style="width:100%; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-size:12px; margin-bottom:8px;" />
+      <input id="vault-init-pass2" type="password" placeholder="Confirm passphrase"
+        style="width:100%; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-size:12px; margin-bottom:8px;" />
+      <button class="btn" id="vault-init-btn" style="width:100%;">Create vault</button>
+      <div id="vault-init-err" style="color:#DC2626; font-size:11px; margin-top:6px;"></div>
+    </div>
+
+    <!-- Unlock -->
+    <div id="vault-unlock-panel" style="display:none;">
+      <p style="font-size:12px; color:#4B5563; margin:0 0 10px;">
+        Enter your master passphrase to unlock the vault.
+      </p>
+      <input id="vault-unlock-pass" type="password" placeholder="Master passphrase"
+        style="width:100%; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-size:12px; margin-bottom:8px;" />
+      <button class="btn" id="vault-unlock-btn" style="width:100%;">Unlock</button>
+      <div id="vault-unlock-err" style="color:#DC2626; font-size:11px; margin-top:6px;"></div>
+      <button class="btn btn-danger" id="vault-destroy-btn" style="width:100%; margin-top:14px; font-size:11px;">
+        Forgot passphrase — wipe vault
+      </button>
+    </div>
+
+    <!-- Unlocked: manage entries -->
+    <div id="vault-manage-panel" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span style="font-size:12px; color:#059669;">🔓 Unlocked</span>
+        <button class="btn btn-secondary" id="vault-lock-btn" style="padding:4px 10px; font-size:11px;">Lock</button>
+      </div>
+
+      <div id="vault-entries-list" style="margin-bottom:12px;"></div>
+
+      <h4 style="font-size:12px; margin:14px 0 6px; color:#374151;">Add / update entry</h4>
+      <input id="vault-entry-host" type="text" placeholder="Host (e.g. brainhunter.com)"
+        style="width:100%; padding:7px; border:1px solid #D1D5DB; border-radius:6px; font-size:11px; margin-bottom:6px;" />
+      <input id="vault-entry-user" type="text" placeholder="Username / email"
+        style="width:100%; padding:7px; border:1px solid #D1D5DB; border-radius:6px; font-size:11px; margin-bottom:6px;" />
+      <input id="vault-entry-pass" type="password" placeholder="Password"
+        style="width:100%; padding:7px; border:1px solid #D1D5DB; border-radius:6px; font-size:11px; margin-bottom:6px;" />
+      <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#4B5563; margin-bottom:8px;">
+        <input id="vault-entry-auto" type="checkbox" /> Auto-click submit after fill
+      </label>
+      <button class="btn" id="vault-entry-save" style="width:100%;">Save entry</button>
+      <div id="vault-entry-feedback" style="font-size:11px; margin-top:6px;"></div>
     </div>
   </div>
 

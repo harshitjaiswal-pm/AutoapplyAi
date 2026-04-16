@@ -21,3 +21,24 @@ npm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Claude session state
+.claude/
+
+# Personal documents (resumes, etc.)
+Kiran_Shahi_Resume.pdf
+
+# Local utility scripts
+*.command
+*.sh
+push-fix.sh
+pull-latest.command
+
+# Office temp files
+~$*
+
+# Skill files (local to Cowork)
+*.skill
+
+# Guide docs (local only)
+RESUME_UPLOAD_GUIDE.md

@@ -80,6 +80,25 @@
       "all_frames": true
     },
     {
+      "matches": [
+        "https://*.successfactors.com/*",
+        "https://*.successfactors.eu/*"
+      ],
+      "js": ["logger.js", "ats/successfactors.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://*.brainhunter.com/*",
+        "https://brainhunter.com/*",
+        "https://jobs.phsa.ca/*"
+      ],
+      "js": ["logger.js", "ats/brainhunter.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
       "matches": ["<all_urls>"],
       "js": ["logger.js", "ats/universal.js"],
       "run_at": "document_idle",

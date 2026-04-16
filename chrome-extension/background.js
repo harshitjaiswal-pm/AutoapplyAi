@@ -12,6 +12,11 @@
 // Load the unified logger so AALog is available in the service worker too.
 try { importScripts("logger.js"); } catch (e) { console.error("AALog importScripts failed", e); }
 
+// Credential Vault — encrypted credentials for password-gated ATS sites.
+// Loads self.AAVault with { status, init, unlock, lock, setEntry, getEntry,
+// listEntries, deleteEntry, destroy }. See ats/credential-vault.js.
+try { importScripts("ats/credential-vault.js"); } catch (e) { console.error("AAVault importScripts failed", e); }
+
 // Handle log batches forwarded from content scripts / popup. We persist them
 // via AALog's background write queue so all log writes are serialized in one
 // place. Must be registered before any other message handlers so it wins the
@@ -154,6 +159,61 @@ chrome.storage.onChanged.addListener((changes) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  /* ── Credential Vault routing ──────────────────────────────────────── */
+  if (message && typeof message.type === "string" && message.type.startsWith("VAULT_")) {
+    const V = self.AAVault;
+    if (!V) {
+      sendResponse({ ok: false, error: "vault module not loaded" });
+      return false;
+    }
+    (async () => {
+      try {
+        switch (message.type) {
+          case "VAULT_STATUS":
+            sendResponse(await V.status());
+            return;
+          case "VAULT_INIT":
+            sendResponse(await V.init(message.passphrase));
+            return;
+          case "VAULT_UNLOCK":
+            sendResponse(await V.unlock(message.passphrase));
+            return;
+          case "VAULT_LOCK":
+            sendResponse(V.lock());
+            return;
+          case "VAULT_SET":
+            sendResponse(await V.setEntry({
+              host: message.host,
+              username: message.username,
+              password: message.password,
+              autoSubmit: message.autoSubmit,
+              notes: message.notes,
+            }));
+            return;
+          case "VAULT_GET":
+            sendResponse(await V.getEntry(message.host));
+            return;
+          case "VAULT_LIST":
+            sendResponse(await V.listEntries());
+            return;
+          case "VAULT_DELETE":
+            sendResponse(await V.deleteEntry(message.host));
+            return;
+          case "VAULT_DESTROY":
+            sendResponse(await V.destroy());
+            return;
+          default:
+            sendResponse({ ok: false, error: "unknown vault message: " + message.type });
+            return;
+        }
+      } catch (err) {
+        console.error("AutoApply BG: vault handler error", err);
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      }
+    })();
+    return true; // async response
+  }
 
   /* ── From LinkedIn content.js: Store job data before Apply click ── */
   if (message.type === "PREPARE_APPLICATION") {
@@ -483,6 +543,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const safeFilename = (entry.filename || `${entry.company}_${entry.jobTitle}_Resume.pdf`).replace(/[^a-zA-Z0-9_\-\.]/g, "_");
       chrome.downloads.download({ url: `data:application/pdf;base64,${entry.pdf}`, filename: safeFilename, saveAs: false });
       sendResponse({ success: true });
+    })();
+    return true;
+  }
+
+  /* ── Save tailored resume to fixed Downloads path for AI-assisted upload ── */
+  // Triggered by window.postMessage({ type: 'AA_SAVE_RESUME_TO_DOWNLOADS' }) via universal.js bridge.
+  if (message.type === "SAVE_RESUME_TO_FIXED_PATH") {
+    (async () => {
+      const stored = await chrome.storage.local.get(["tailoredResumePdf", "tailoredResumeMap", "lastResumeKey"]);
+      const map    = stored.tailoredResumeMap || {};
+      const entries = Object.values(map).filter(e => e && e.pdf).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      const base64  = entries[0]?.pdf || stored.tailoredResumePdf || null;
+      if (!base64) {
+        sendResponse({ success: false, error: "no_resume", path: null });
+        return;
+      }
+      const id = await saveResumeToFixedPath(base64);
+      sendResponse({
+        success: !!id,
+        path:    'AutoApply_TailoredResume.pdf',   // relative to Downloads folder
+        downloadId: id,
+      });
     })();
     return true;
   }
@@ -1845,10 +1927,17 @@ function injectFloatingTrigger(tabId) {
                   const sub = hostname.slice(0, hostname.length - atsDomain.length - 1);
                   let derivedCompany = "";
                   // Greenhouse hosted jobs: subdomain is "job-boards", company is first path segment
-                  if (sub === "job-boards" && atsDomain === "greenhouse.io") {
+                  // Ashby hosted jobs: subdomain is "jobs" (jobs.ashbyhq.com/{Company}/...),
+                  //   company is first path segment e.g. "Jerry.ai"
+                  // Lever hosted jobs: subdomain is "jobs" (jobs.lever.co/{company}/...),
+                  //   company is first path segment
+                  const PATH_SUBDOMAIN_ATS = new Set(["job-boards", "jobs", "boards", "careers"]);
+                  if (PATH_SUBDOMAIN_ATS.has(sub)) {
                     const pathParts = window.location.pathname.split("/").filter(Boolean);
                     if (pathParts.length > 0) {
-                      derivedCompany = pathParts[0].replace(/[-_]/g, " ")
+                      // Preserve dots for domains like "Jerry.ai", replace hyphens/underscores with spaces
+                      derivedCompany = pathParts[0]
+                        .replace(/[-_]/g, " ")
                         .replace(/\b\w/g, c => c.toUpperCase());
                     }
                   } else if (sub && sub.length >= 2) {
@@ -2484,6 +2573,11 @@ async function handleTailorAndFill(job) {
       });
       console.log("AutoApply BG: Step 3 done. PDF stored in map key:", resumeKey);
       try { AALog && AALog.api("bg.api.exportResume.done", { filename, sizeBytes: arrayBuffer.byteLength, resumeKey }); } catch(_){}
+
+      // ── Auto-save a fixed-name copy to Downloads so the AI can always
+      // reference it at ~/Downloads/AutoApply_TailoredResume.pdf via file_upload.
+      // This runs silently alongside the user-facing download — no dialog shown.
+      saveResumeToFixedPath(base64);
     } else {
       const errBody = await pdfRes.text().catch(() => "");
       console.warn(`AutoApply BG: PDF export failed: ${pdfRes.status} — ${errBody.substring(0, 200)}`);
@@ -2638,6 +2732,36 @@ function makeResumeKey(job) {
 }
 
 /**
+ * Save the tailored resume as a FIXED-NAME file so the AI can always find it at
+ * a predictable location: ~/Downloads/AutoApply_TailoredResume.pdf
+ *
+ * Called automatically on every PDF generation AND on demand via
+ * SAVE_RESUME_TO_FIXED_PATH message (from AA_SAVE_RESUME_TO_DOWNLOADS postMessage).
+ *
+ * Returns the downloadId (or null on failure).
+ */
+function saveResumeToFixedPath(base64) {
+  if (!base64) return null;
+  const FIXED_FILENAME = 'AutoApply_TailoredResume.pdf';
+  return new Promise((resolve) => {
+    chrome.downloads.download({
+      url:            `data:application/pdf;base64,${base64}`,
+      filename:       FIXED_FILENAME,
+      saveAs:         false,
+      conflictAction: 'overwrite',
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.warn("AutoApply BG [saveResumeToFixedPath] failed:", chrome.runtime.lastError.message);
+        resolve(null);
+      } else {
+        console.log("AutoApply BG [saveResumeToFixedPath] saved as", FIXED_FILENAME, "id:", downloadId);
+        resolve(downloadId);
+      }
+    });
+  });
+}
+
+/**
  * Download the tailored resume PDF to the user's Downloads folder.
  * Uses keyed lookup so batch jobs always download the correct resume.
  */
@@ -2780,11 +2904,46 @@ async function handleDownloadResume(job, callerTabId, opts) {
     return;
   }
 
-  console.log("AutoApply BG: Downloading resume — key:", resumeKey, "fromMap:", !!entry?.pdf, "filename:", filename);
+  const safeFilename = filename.replace(/[^a-zA-Z0-9 _\-\.]/g, "").replace(/\s+/g, " ").trim() || "Resume.pdf";
+  console.log("AutoApply BG: Downloading resume — key:", resumeKey, "fromMap:", !!entry?.pdf, "filename:", safeFilename);
+
+  // Also keep the fixed-name copy fresh so the AI always has a predictable path to use.
+  saveResumeToFixedPath(base64);
+
   chrome.downloads.download({
     url:      `data:application/pdf;base64,${base64}`,
-    filename: filename.replace(/[^a-zA-Z0-9 _\-\.]/g, "").replace(/\s+/g, " "),
+    filename: safeFilename,
     saveAs:   false,
+  }, (downloadId) => {
+    if (chrome.runtime.lastError) {
+      console.error("AutoApply BG: Download failed:", chrome.runtime.lastError.message);
+      // Surface error to the user visually via a Chrome notification
+      chrome.notifications.create({
+        type:    "basic",
+        iconUrl: chrome.runtime.getURL("icon128.png"),
+        title:   "⚠️ Resume Download Failed",
+        message: `Could not save ${safeFilename}. Error: ${chrome.runtime.lastError.message}`,
+      });
+      // Also notify the triggering tab if we have it
+      if (callerTabId) {
+        chrome.tabs.sendMessage(callerTabId, {
+          type:    "SHOW_BANNER",
+          message: `⚠️ Download failed: ${chrome.runtime.lastError.message} — try clicking ↓ Resume again.`,
+          level:   "warn",
+        }).catch(() => {});
+      }
+    } else {
+      console.log("AutoApply BG: Download started, id:", downloadId, "filename:", safeFilename);
+      // Success notification so user knows to check Downloads
+      try {
+        chrome.notifications.create({
+          type:    "basic",
+          iconUrl: chrome.runtime.getURL("icon128.png"),
+          title:   "✅ Resume Downloaded!",
+          message: `Saved as: ${safeFilename}`,
+        });
+      } catch(_) {}
+    }
   });
 }
 
