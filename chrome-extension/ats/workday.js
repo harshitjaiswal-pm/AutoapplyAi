@@ -112,6 +112,17 @@
         window.dispatchEvent(new CustomEvent("__aa_resume_ready", { detail: r.parsedResume || {} }));
       });
     }
+    if (e.data.__aa_cmd === "GET_RESUME_MAP") {
+      chrome.storage.local.get(["tailoredResumeMap"], (r) => {
+        const map = r.tailoredResumeMap || {};
+        // Strip PDF blobs for size, only return metadata + structured tailoredResult
+        const slim = {};
+        for (const [k, v] of Object.entries(map)) {
+          slim[k] = { filename: v.filename, hasPdf: !!v.pdf, tailoredResult: v.tailoredResult };
+        }
+        window.dispatchEvent(new CustomEvent("__aa_resume_map_ready", { detail: slim }));
+      });
+    }
     if (e.data.__aa_cmd === "SET_PENDING_APPLICATION") {
       // Allows QA / dev tooling to inject a pendingApplication without going
       // through the normal AutoApply button flow. The payload should contain
@@ -154,6 +165,7 @@
 
   async function startStateMachine() {
     // Always clear stale pause state — a page reload means a fresh session
+    window.__aa_isPaused = false;
     await new Promise(resolve => chrome.storage.local.set({ _aa_paused: false }, resolve));
 
     const stored = await chrome.storage.local.get(["pendingApplication"]);
@@ -229,6 +241,16 @@
       await processCurrentStep(pendingJob);
 
     } catch (err) {
+      // Pause: user clicked Pause mid-fill — clean stop, show Continue button
+      if (err && err.isPauseError) {
+        LOG("startStateMachine: Fill interrupted by Pause");
+        window.__aa_isPaused = true;
+        showBanner("Paused — click Continue when ready.", "user", {
+          subtext: "AutoApply stopped filling. Click Continue to pick up from this step.",
+          showResume: true,
+        });
+        return;
+      }
       LOG("Error:", err);
       showBanner(`Error — please apply manually.`, "error", { subtext: err.message });
     }
@@ -640,11 +662,15 @@
         showBanner("Filling in your details…", "ai", { subtext: "Tailoring resume in background…" });
         await fillStep1(null, pendingJob);
 
-        // Advance to Step 2 — fail fast if errors
-        const advanced = await advanceToStep(2);
+        // Advance to Step 2 — if validation errors, wait for user to fix then retry
+        let advanced = await advanceToStep(2);
         if (!advanced) {
-          showBanner("Please fix the form errors and we'll continue.", "user");
-          return;
+          showBanner("Please fix any highlighted fields — then click Continue.", "user", {
+            subtext: "AutoApply will carry on from Step 2 when you're ready.",
+            showResume: true,
+          });
+          // Wait for user to manually advance (they click Next themselves or use Continue)
+          await waitForStep(2, 300000);
         }
 
         // Now we're on Step 2 — wait for tailoring (likely already done by now)
@@ -704,6 +730,16 @@
         watchForSubmit(pendingJob);
       }
     } catch (err) {
+      // Pause: user clicked Pause mid-fill — clean stop, show Continue button
+      if (err && err.isPauseError) {
+        LOG("Fill interrupted by Pause");
+        window.__aa_isPaused = true;
+        showBanner("Paused — click Continue when ready.", "user", {
+          subtext: "AutoApply stopped filling. Click Continue to pick up from this step.",
+          showResume: true,
+        });
+        return;
+      }
       // Issue #13: Wrap state machine in try/catch to prevent silent failures
       LOG("Error in processCurrentStep:", err.message, err.stack);
       showBanner("An error occurred — please try again or apply manually.", "error",
@@ -923,13 +959,9 @@
         }
       }
 
-      // Also check: did the file input get a file attached?
-      const fileInput = document.querySelector('[data-automation-id="file-upload-input-ref"]') ||
-                        document.querySelector('input[type="file"]');
-      if (fileInput && fileInput.files && fileInput.files.length > 0) {
-        LOG("Resume upload detected via file input files list");
-        return true;
-      }
+      // NOTE: Do NOT check fileInput.files.length here — we set that programmatically
+      // via DataTransfer in handleResumeUpload() and it's always truthy after our attempt,
+      // producing false positives. Only trust visual DOM confirmation (chip or text).
 
       // Check for "Successfully Uploaded" text in the upload area
       const uploadArea = document.querySelector('[data-automation-id="fileUploader"]') ||
@@ -1154,6 +1186,7 @@
           await sleep(200);
           LOG(`Checked checkbox: "${labelText.substring(0, 60) || "(no label)"}"`);
         } catch (e) {
+          if (e && e.isPauseError) throw e; // propagate pause up
           cb.click(); // Fallback to plain click
           await sleep(200);
         }
@@ -1551,6 +1584,7 @@
       }
 
     } catch (err) {
+      if (err && err.isPauseError) throw err; // propagate pause up
       LOG(`Resume upload error: ${err.message}`);
       return false;
     }
@@ -1807,6 +1841,7 @@
         setWorkdayValue(textarea, result.answer);
       }
     } catch (err) {
+      if (err && err.isPauseError) throw err; // propagate pause up
       LOG(`Error generating behavioral answer: ${err.message}`);
       // Graceful degradation — if AI generation fails, just skip this field
     }
@@ -1923,9 +1958,25 @@
 
     // If parsedResume has no work experience, fall back to tailoredResult (the AI-tailored copy
     // of the resume). This covers cases where the original parsing missed the work history.
-    const workExp = resume.workExperience?.length > 0
+    // Final fallback: scan ALL entries in tailoredResumeMap for any that have work experience.
+    let workExp = resume.workExperience?.length > 0
       ? resume.workExperience
       : (tailoredResult?.workExperience || []);
+
+    if (workExp.length === 0) {
+      // Last-resort: search ALL previously tailored resumes for work history
+      const mapData = await chrome.storage.local.get(["tailoredResumeMap"]);
+      const resumeMap = mapData.tailoredResumeMap || {};
+      for (const [key, entry] of Object.entries(resumeMap)) {
+        const we = entry.tailoredResult?.workExperience;
+        if (we?.length > 0) {
+          workExp = we;
+          LOG(`fillMyExperiencePage: Using work experience from tailoredResumeMap entry "${key}" (${we.length} jobs)`);
+          break;
+        }
+      }
+    }
+
     const education = resume.education?.length > 0
       ? resume.education
       : (tailoredResult?.education || []);
@@ -3092,6 +3143,7 @@
 
       LOG(`CDP click attempt: ${JSON.stringify(cdpResult)}`);
     } catch (err) {
+      if (err && err.isPauseError) throw err; // propagate pause up
       LOG(`CDP click error for ${fieldAutomationId}: ${err.message}`);
     }
 
@@ -3564,8 +3616,10 @@
       const pauseBtn = isAi
         ? `<button id="aa-btn-pause" style="${btnStyle}background:rgba(255,255,255,0.18);color:#fff;margin-left:auto;">Pause</button>`
         : "";
-      const resumeBtn = opts.showResume
-        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.3);color:#fff;">Resume</button>`
+      // Always show Continue button on "user" banners — the state machine may have
+      // exited (pause or error) and the user needs a way to restart it.
+      const resumeBtn = (opts.showResume || type === "user")
+        ? `<button id="aa-btn-resume" style="${btnStyle}background:rgba(255,255,255,0.3);color:#fff;font-weight:800;">▶ Continue</button>`
         : "";
 
       let actionRow = "";
@@ -3662,16 +3716,23 @@
       });
       document.getElementById("aa-btn-pause")?.addEventListener("click", () => {
         LOG("Paused by user");
+        // Set in-memory flag FIRST (synchronous) so sleep() throws PauseError immediately
+        window.__aa_isPaused = true;
         chrome.storage.local.set({ _aa_paused: true });
-        showBanner("Paused — click Resume when ready.", "user", {
-          subtext: "AutoApply will continue from where it left off.",
+        showBanner("Paused — click Continue when ready.", "user", {
+          subtext: "AutoApply has stopped. Click Continue to resume filling from this step.",
           showResume: true,
         });
       });
       document.getElementById("aa-btn-resume")?.addEventListener("click", () => {
-        LOG("Resumed by user");
+        LOG("Resumed by user — restarting state machine from current step");
+        // Clear both flags so the new startStateMachine run isn't immediately paused
+        window.__aa_isPaused = false;
         chrome.storage.local.set({ _aa_paused: false });
-        showBanner("Resuming...", "ai", { subtext: "Picking up where we left off." });
+        showBanner("Resuming…", "ai", { subtext: "Picking up where we left off." });
+        // Re-run the state machine so it detects current step and continues
+        window.__autoapply_ats_injected = false;
+        startStateMachine();
       });
 
       document.getElementById("aa-btn-collapse")?.addEventListener("click", () => {
@@ -3795,15 +3856,39 @@
 
   /**
    * Pause-aware delay: waits until _aa_paused is false before returning.
+   * Checks the in-memory flag first (synchronous) then falls back to storage.
    * Called before advancing steps so the user can pause mid-application.
    */
   async function waitForResume() {
     while (true) {
-      const paused = await new Promise(resolve =>
-        chrome.storage.local.get(["_aa_paused"], r => resolve(r._aa_paused))
-      );
-      if (!paused) return;
-      await sleep(600);
+      // In-memory flag is set synchronously on Pause click — fastest check
+      if (!window.__aa_isPaused) {
+        // Double-check storage in case of cross-tab resume
+        const paused = await new Promise(resolve =>
+          chrome.storage.local.get(["_aa_paused"], r => resolve(r._aa_paused))
+        );
+        if (!paused) return;
+      }
+      await new Promise(r => setTimeout(r, 600));
     }
+  }
+
+  /**
+   * Pause-aware sleep. If the user clicks Pause mid-fill this throws a
+   * PauseError immediately (instead of waiting for the next advanceToStep call),
+   * which unwinds the fill stack and leaves the form in a clean state.
+   */
+  class PauseError extends Error { constructor() { super("PAUSED"); this.isPauseError = true; } }
+  function sleep(ms) {
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        if (window.__aa_isPaused) { reject(new PauseError()); return; }
+        resolve();
+      };
+      if (ms <= 0) { check(); return; }
+      const t = setTimeout(check, ms);
+      // Also check immediately in case already paused before the timeout
+      if (window.__aa_isPaused) { clearTimeout(t); reject(new PauseError()); }
+    });
   }
 })();

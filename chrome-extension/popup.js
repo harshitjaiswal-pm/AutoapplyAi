@@ -91,6 +91,7 @@ function initTabs() {
       if (tabName === "logs")    refreshLogs();
       if (tabName === "chat")    popupChatFocus();
       if (tabName === "history") refreshHistory();
+      if (tabName === "vault")   refreshVault();
     });
   });
   // Show the initially active tab correctly
@@ -790,3 +791,187 @@ function exportHistoryCSV(history) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Credential Vault UI
+ * ══════════════════════════════════════════════════════════════════════ */
+
+function vaultSend(msg) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(msg, (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(resp || { ok: false, error: "no response" });
+        }
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
+function vaultShowPanel(which) {
+  ["vault-init-panel", "vault-unlock-panel", "vault-manage-panel"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = id === which ? "block" : "none";
+  });
+}
+
+function vaultBanner(text, color) {
+  const el = document.getElementById("vault-status-banner");
+  if (!el) return;
+  el.textContent = text;
+  if (color === "green") {
+    el.style.background = "#D1FAE5";
+    el.style.color = "#065F46";
+    el.style.borderColor = "#6EE7B7";
+  } else if (color === "red") {
+    el.style.background = "#FEE2E2";
+    el.style.color = "#991B1B";
+    el.style.borderColor = "#FCA5A5";
+  } else {
+    el.style.background = "#FEF3C7";
+    el.style.color = "#92400E";
+    el.style.borderColor = "#FCD34D";
+  }
+}
+
+async function refreshVault() {
+  const status = await vaultSend({ type: "VAULT_STATUS" });
+  if (!status || status.error) {
+    vaultBanner("Vault error: " + (status?.error || "unknown"), "red");
+    return;
+  }
+  if (!status.exists) {
+    vaultBanner("No vault yet — create one below.", "yellow");
+    vaultShowPanel("vault-init-panel");
+    return;
+  }
+  if (!status.unlocked) {
+    vaultBanner("Vault locked. Enter passphrase to unlock.", "yellow");
+    vaultShowPanel("vault-unlock-panel");
+    return;
+  }
+  vaultBanner("Vault unlocked. Auto-locks after 15 min idle.", "green");
+  vaultShowPanel("vault-manage-panel");
+  await renderVaultEntries();
+}
+
+async function renderVaultEntries() {
+  const list = await vaultSend({ type: "VAULT_LIST" });
+  const container = document.getElementById("vault-entries-list");
+  if (!container) return;
+  if (!list?.ok || !list.entries || list.entries.length === 0) {
+    container.innerHTML = '<p style="font-size:11px; color:#6B7280; margin:0;">No credentials stored yet.</p>';
+    return;
+  }
+  container.innerHTML = list.entries
+    .map(
+      (e) => `
+        <div style="
+          display:flex; justify-content:space-between; align-items:center;
+          padding:8px; border:1px solid #E5E7EB; border-radius:6px;
+          margin-bottom:6px; background:#F9FAFB;
+        ">
+          <div style="font-size:11px; overflow:hidden; text-overflow:ellipsis;">
+            <div style="font-weight:600; color:#111827;">${escapeHtml(e.host)}</div>
+            <div style="color:#6B7280;">${escapeHtml(e.username)}${e.autoSubmit ? ' · auto-submit' : ''}</div>
+          </div>
+          <button class="btn btn-danger vault-del-btn" data-host="${escapeHtml(e.host)}"
+            style="padding:4px 8px; font-size:11px; margin-left:6px;">Delete</button>
+        </div>
+      `
+    )
+    .join("");
+
+  container.querySelectorAll(".vault-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const host = btn.getAttribute("data-host");
+      if (!confirm(`Delete credentials for ${host}?`)) return;
+      await vaultSend({ type: "VAULT_DELETE", host });
+      await renderVaultEntries();
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const initBtn = document.getElementById("vault-init-btn");
+  const unlockBtn = document.getElementById("vault-unlock-btn");
+  const lockBtn = document.getElementById("vault-lock-btn");
+  const saveBtn = document.getElementById("vault-entry-save");
+  const destroyBtn = document.getElementById("vault-destroy-btn");
+
+  if (initBtn) {
+    initBtn.addEventListener("click", async () => {
+      const p1 = document.getElementById("vault-init-pass").value;
+      const p2 = document.getElementById("vault-init-pass2").value;
+      const err = document.getElementById("vault-init-err");
+      err.textContent = "";
+      if (p1 !== p2) { err.textContent = "Passphrases don't match."; return; }
+      if (p1.length < 8) { err.textContent = "Min 8 characters."; return; }
+      const r = await vaultSend({ type: "VAULT_INIT", passphrase: p1 });
+      if (!r?.ok) { err.textContent = r?.error || "init failed"; return; }
+      document.getElementById("vault-init-pass").value = "";
+      document.getElementById("vault-init-pass2").value = "";
+      await refreshVault();
+    });
+  }
+
+  if (unlockBtn) {
+    unlockBtn.addEventListener("click", async () => {
+      const p = document.getElementById("vault-unlock-pass").value;
+      const err = document.getElementById("vault-unlock-err");
+      err.textContent = "";
+      const r = await vaultSend({ type: "VAULT_UNLOCK", passphrase: p });
+      if (!r?.ok) { err.textContent = r?.error || "unlock failed"; return; }
+      document.getElementById("vault-unlock-pass").value = "";
+      await refreshVault();
+    });
+  }
+
+  if (lockBtn) {
+    lockBtn.addEventListener("click", async () => {
+      await vaultSend({ type: "VAULT_LOCK" });
+      await refreshVault();
+    });
+  }
+
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const host = document.getElementById("vault-entry-host").value.trim();
+      const username = document.getElementById("vault-entry-user").value.trim();
+      const password = document.getElementById("vault-entry-pass").value;
+      const autoSubmit = document.getElementById("vault-entry-auto").checked;
+      const fb = document.getElementById("vault-entry-feedback");
+      fb.textContent = "";
+      fb.style.color = "#DC2626";
+      if (!host || !username || !password) { fb.textContent = "All fields required."; return; }
+      const r = await vaultSend({ type: "VAULT_SET", host, username, password, autoSubmit });
+      if (!r?.ok) { fb.textContent = r?.error || "save failed"; return; }
+      fb.style.color = "#059669";
+      fb.textContent = "✓ Saved";
+      document.getElementById("vault-entry-host").value = "";
+      document.getElementById("vault-entry-user").value = "";
+      document.getElementById("vault-entry-pass").value = "";
+      document.getElementById("vault-entry-auto").checked = false;
+      await renderVaultEntries();
+    });
+  }
+
+  if (destroyBtn) {
+    destroyBtn.addEventListener("click", async () => {
+      if (!confirm("Wipe the entire vault? This cannot be undone.")) return;
+      if (!confirm("Really wipe the vault? You'll lose all stored credentials.")) return;
+      await vaultSend({ type: "VAULT_DESTROY" });
+      await refreshVault();
+    });
+  }
+});

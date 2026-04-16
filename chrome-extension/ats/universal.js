@@ -402,14 +402,63 @@
 
   /* ── Main-world bridge: postMessage → content script → background ───── */
   // Allows the page's main world (e.g. DevTools or Claude automation) to
-  // trigger form fill on ALL open Taleo tabs without needing extension APIs.
-  // Usage: window.postMessage({ type: 'AA_FILL_TALEO' }, '*')
+  // trigger form fill or retrieve resume data without needing extension APIs.
   window.addEventListener('message', (e) => {
-    if (e.data?.type === 'AA_FILL_TALEO') {
+    if (!e.data || typeof e.data !== 'object') return;
+
+    // Usage: window.postMessage({ type: 'AA_FILL_TALEO' }, '*')
+    if (e.data.type === 'AA_FILL_TALEO') {
       LOG("AA_FILL_TALEO received from main world — sending FILL_TALEO_TABS to background");
       chrome.runtime.sendMessage({ type: "FILL_TALEO_TABS" }, (resp) => {
         LOG("FILL_TALEO_TABS response:", resp);
       });
+      return;
+    }
+
+    // Usage: window.postMessage({ type: 'AA_GET_RESUME_PDF' }, '*')
+    // Returns: window.postMessage({ type: 'AA_RESUME_PDF_RESULT', base64, filename, jobTitle, company, hasResume }, '*')
+    // Allows the AI (via javascript_tool) or any page script to pull the latest
+    // tailored resume PDF base64 directly from extension storage.
+    if (e.data.type === 'AA_GET_RESUME_PDF') {
+      LOG("AA_GET_RESUME_PDF received — reading storage");
+      chrome.storage.local.get(
+        ['tailoredResumeMap', 'tailoredResumePdf', 'tailoredResumeFilename', 'lastResumeKey'],
+        (result) => {
+          const map     = result.tailoredResumeMap || {};
+          const entries = Object.values(map)
+            .filter(en => en && en.pdf)
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          const best = entries[0] || null;
+          const base64   = best?.pdf      || result.tailoredResumePdf      || null;
+          const filename = best?.filename || result.tailoredResumeFilename || 'Resume.pdf';
+          LOG("AA_GET_RESUME_PDF result — hasResume:", !!base64, "filename:", filename);
+          window.postMessage({
+            type:     'AA_RESUME_PDF_RESULT',
+            base64,
+            filename,
+            jobTitle:  best?.jobTitle || null,
+            company:   best?.company  || null,
+            hasResume: !!base64,
+          }, '*');
+        }
+      );
+      return;
+    }
+
+    // Usage: window.postMessage({ type: 'AA_SAVE_RESUME_TO_DOWNLOADS' }, '*')
+    // Triggers a chrome.downloads.download() with a fixed known filename so the
+    // AI (or user) can reference it at ~/Downloads/AutoApply_TailoredResume.pdf.
+    if (e.data.type === 'AA_SAVE_RESUME_TO_DOWNLOADS') {
+      LOG("AA_SAVE_RESUME_TO_DOWNLOADS received");
+      chrome.runtime.sendMessage({ type: "SAVE_RESUME_TO_FIXED_PATH" }, (resp) => {
+        LOG("SAVE_RESUME_TO_FIXED_PATH response:", resp);
+        window.postMessage({
+          type:    'AA_RESUME_SAVED_TO_DOWNLOADS',
+          success: !!(resp && resp.success),
+          path:    resp?.path || null,
+        }, '*');
+      });
+      return;
     }
   });
 

@@ -1350,6 +1350,40 @@
         }
       }
 
+      // ── Strategy 4: Force-inject into ALL file inputs (hidden included) ──
+      // Greenhouse and similar ATSs hide the native <input type="file"> behind a
+      // custom drag-drop / click-to-upload UI (opacity:0, position:absolute, width:0).
+      // The hidden input still processes files via the native property descriptor.
+      // We must try it even if CSS hides it — this is the most reliable Greenhouse path.
+      for (const inp of allFileInputs) {
+        try {
+          const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          // Set files via native descriptor (bypasses React/framework guards)
+          if (desc?.set) desc.set.call(inp, dt.files);
+          else inp.files = dt.files;
+          // Fire all relevant change events Greenhouse listens to
+          inp.dispatchEvent(new Event("change",  { bubbles: true, cancelable: true }));
+          inp.dispatchEvent(new Event("input",   { bubbles: true, cancelable: true }));
+          inp.dispatchEvent(new InputEvent("change", { bubbles: true, cancelable: true }));
+          LOG("Strategy 4: Forced resume inject on hidden file input");
+          await new Promise(r => setTimeout(r, 800));
+          // Verify Greenhouse's UI updated — it typically shows the filename or hides the placeholder
+          const uploadUI = document.querySelector(
+            '#resume_filename, [id*="resume"], [class*="filename"], ' +
+            '[class*="upload-name"], [data-testid*="resume"], .attach-or-paste'
+          );
+          if (uploadUI) {
+            const txt = uploadUI.textContent || uploadUI.value || "";
+            LOG("Upload UI after Strategy 4:", txt.trim().slice(0, 60));
+          }
+          return true; // Best-effort — Greenhouse doesn't expose confirmation in DOM reliably
+        } catch(e) {
+          LOG("Strategy 4 error on input:", e.message);
+        }
+      }
+
       LOG("All upload strategies exhausted — user must attach resume manually");
       return false;
     } catch (err) {
