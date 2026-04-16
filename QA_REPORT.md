@@ -310,3 +310,60 @@ _setTxt("log-form-count", forms);
 - `src/lib/resumeValidation.ts` — After the Bug 9 fix, all date formats from the task spec are confirmed handled: em-dash ranges ("2018 – Present"), abbreviated months with periods ("Jan. 2020"), MM/YYYY ("08/2019"), YYYY/MM ("2019/08"), quarter notation ("Q1 2022"), and season notation ("Summer 2019").
 - `chrome-extension/ats/generic.js` — `type="tel"` phone fields matched by `fillByLabel()`. LinkedIn URL, salary expectation, cover letter textarea, and "years of experience" fields all have label mappings. `detectSignInWall()` "apply with" guard confirmed present.
 
+
+---
+
+## Overnight QA Run — 2026-04-15
+
+### Bugs Found: 0
+### Bugs Fixed: 0
+### Push Status: No changes to commit. Per project CLAUDE.md ("Never push directly to main"), no push would have been made even if changes existed — a branch + PR would have been required.
+
+### Summary
+Full static-analysis pass across all checklist areas. No new defects found. The codebase has accumulated extensive prior QA fixes (8+ labeled `[AutoQA fix YYYY-MM-DD]` comments) covering cross-frame setters, SELECT element handling, sign-in-wall false positives, range-date parsing, cache key consistency across ATS files, empty-content-array guards on Anthropic responses, JSON extraction fallback, and server-side RULE ZERO sanitization. All checklist items verified against current code — no gaps remain.
+
+### No-change review areas (clean)
+
+- `src/lib/resumeValidation.ts` — `parseDate()` already handles every format listed in Phase 6: em-dash ranges ("2018 – Present"), abbreviated months with trailing period ("Jan. 2020"), MM/YYYY ("08/2019"), YYYY/MM ("2019/08"), YYYY-MM ISO partial, quarter notation ("Q1 2022"), season notation ("Summer 2019"), and bare year ("2020"). Present-in-any-segment guard confirmed from prior 2026-04-09 fix.
+- `src/app/api/tailor-resume/route.ts` — RULE ZERO sanitization overwrites `startDate`, `endDate`, `company`, `title`, `location`, and contact info from source verbatim (lines 150-224) regardless of what the model returns, making date corruption physically unviolatable. Prompt-injection risk from the job description is mitigated because the JD is JSON-stringified inside a `content` string rather than interpolated as a system instruction. Optional chaining guard on `message.content?.[0]` present from prior fix. First-brace / last-brace JSON extraction fallback present.
+- `chrome-extension/ats/generic.js` —
+  - `setNativeValue()` uses `element.ownerDocument.defaultView` so the native setter is resolved against the element's own window, preventing cross-frame "Illegal invocation". SELECT branch dispatches `change`. Date/number/month inputs additionally dispatch `InputEvent`.
+  - `detectSignInWall()` covers URL patterns, visible password inputs, low-input + sign-in text, and sign-in text without upload/rich inputs. The `!hasApplyButton` guard on Signals 3 and 4 prevents false positives on job-listing pages. "apply with" prefix match in the apply-button detector correctly whitelists "Apply with LinkedIn", "Apply with Indeed", etc.
+  - Field-fill coverage confirmed for: `type="tel"` phone (matched by phone/telephone/mobile labels), LinkedIn URL (label mapping at lines 1165 and 1363, plus id/name selector at line 2305), years-of-experience numeric inputs (line 1379), salary expectation (line 1373), cover letter textarea (lines 1427-1470, including Greenhouse "Enter manually" flow), pronouns, preferred name, notice period.
+  - Resume upload logic stores a page-specific `__autoapply_resumeKey` and falls back to a downloads-folder banner when no file input is present.
+- `chrome-extension/background.js` — `APPLICATION_COMPLETED` handler serializes sendResponse inside the storage-callback chain. `_aa_lastAtsTabId` cleanup on tab close. `KNOWN_ATS_DOMAINS` includes current set.
+- `chrome-extension/ats/workday.js` / `greenhouse.js` / `lever.js` / `universal.js` — null-check guards on `extractJobInfoFromPage`. `isSameJob` cache compare requires both title AND company in all three (greenhouse.js fix from 2026-04-09 confirmed present).
+
+### Notes
+
+- Path referenced in the scheduled task file (`/sessions/bold-vibrant-albattani/mnt/autoapply-ai`) does not match the actual mounted session path (`/sessions/relaxed-awesome-fermat/mnt/autoapply-ai`). Review was performed against the actual mounted path.
+- No commit or push performed: (a) no code changes were needed, and (b) project CLAUDE.md forbids direct pushes to main and requires PRs off `harshit/*` or `kiran/*` feature branches. Any future autonomous fixes should land on a feature branch and open a PR rather than pushing to main as the task template suggests.
+
+
+---
+
+## Overnight QA Run — 2026-04-16
+
+### Bugs Found: 1
+### Bugs Fixed: 1
+
+#### lever.js: Global resume fallback causes wrong resume upload in batch mode
+**File:** `chrome-extension/ats/lever.js`
+**Problem:** `_downloadResumeForPage()` Priority 3 fell back to the global `tailoredResumePdf` when no keyed or company match was found. In batch-apply mode, if Job B's Lever page opened before Job B's tailoring completed, the function would silently serve Job A's resume PDF. This was fixed in `greenhouse.js` and `workday.js` on 2026-04-13 but lever.js was missed.
+**Fix:** Replaced global fallback with `noGlobalFallback: true` flag on the `DOWNLOAD_RESUME` message, matching the pattern used by greenhouse.js and workday.js. When no keyed resume exists, background.js will now show a "Tailor Resume first" banner instead of silently uploading the wrong PDF.
+**Severity:** error
+
+### No-change review areas (clean)
+
+- `src/lib/resumeValidation.ts` — `parseDate()` handles all Phase 6 formats: em-dash ranges ("2018 – Present"), abbreviated months with period ("Jan. 2020"), MM/YYYY ("08/2019"), YYYY/MM ("2019/08"), YYYY-MM ISO partial, quarter notation ("Q1 2022"), season notation ("Summer 2019"), bare year ("2020"), and Present/Current/Now/Today in any segment of a range string. No gaps found.
+- `src/app/api/tailor-resume/route.ts` — Server-side `sanitizeRuleZero` overwrites dates, company, title, location, and contact info from source verbatim (lines 150-227). Prompt injection risk mitigated by JSON-stringifying job description inside user content. Optional chaining guard on `message.content?.[0]` and first-brace/last-brace JSON extraction fallback both present.
+- `chrome-extension/ats/generic.js` — `setNativeValue()` uses `element.ownerDocument.defaultView` for cross-frame safety. SELECT elements handled via direct value assignment. `detectSignInWall()` covers URL patterns, password inputs, low-input pages, and sign-in text without apply buttons. Field-fill coverage verified for: `type="tel"` phone, LinkedIn URL, years of experience, salary expectation, cover letter textarea (including "Enter manually" flow), pronouns, preferred name, notice period. Resume upload searches all accessible docs + shadow DOM, falls back to download banner.
+- `chrome-extension/background.js` — No message handling races detected. Storage keys properly cleaned on tab close (`_aa_lastAtsTabId`). `KNOWN_ATS_DOMAINS` covers current major ATSs.
+- `chrome-extension/ats/workday.js` — `noGlobalFallback` correctly set. Self-scrape from DOM when no pendingApplication. Multi-step state machine handles job posting → modal → form progression.
+- `chrome-extension/ats/greenhouse.js` — `noGlobalFallback` correctly set. Confirmation page detection at init. Cross-origin iframe handling with independent fill.
+- `chrome-extension/ats/universal.js` — Job page detection heuristics and floating button injection. Null checks on scraped data. No issues found.
+
+### Notes
+
+- Path in scheduled task template (`/sessions/bold-vibrant-albattani/mnt/autoapply-ai`) does not match actual mounted path (`/sessions/epic-confident-noether/mnt/autoapply-ai`). Review performed against actual path.
+- Per CLAUDE.md, changes committed to a feature branch rather than pushing directly to main.

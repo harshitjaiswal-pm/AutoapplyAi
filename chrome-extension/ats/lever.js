@@ -47,9 +47,16 @@
         chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: matched.jobUrl || window.location.href } });
         return;
       }
-      // Priority 3: global fallback
-      console.log("AutoApply Lever: no company match — using global tailoredResumePdf fallback");
-      chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: { applyUrl: window.location.href } });
+      // [AutoQA fix 2026-04-16] Removed global `tailoredResumePdf` fallback to
+      // prevent cross-contamination where Job A's resume gets uploaded onto
+      // Job B's Lever form in batch mode. Matches the fix applied to greenhouse.js
+      // and workday.js on 2026-04-13.
+      console.log("AutoApply Lever: no keyed or company match — requesting download without fallback (will show banner)");
+      chrome.runtime.sendMessage({
+        type: "DOWNLOAD_RESUME",
+        job: { applyUrl: window.location.href },
+        noGlobalFallback: true,
+      });
     });
   }
 
