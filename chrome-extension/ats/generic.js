@@ -1384,12 +1384,16 @@
         if (fillByLabel(mapping.labels, mapping.value, doc)) filled++;
       }
 
-      // Province/territory dropdown — try select element first, then text input
+      // Province/territory dropdown — try select element first, then custom combobox.
+      // Cascade order matters: real <select> (fast) → PrimeNG (CEIPAL) → Ashby typed combobox.
       const provinceValue = user.province || "British Columbia";
       if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, doc)) {
         filled++;
       } else if (await fillPrimeNGDropdownByLabel(["province", "territory", "state", "region"], provinceValue, doc)) {
         // [BUG-006 fix 2026-04-16] CEIPAL fallback — PrimeNG dropdowns
+        filled++;
+      } else if (await fillAshbyComboboxByLabel(["province", "territory", "state", "region"], provinceValue, doc)) {
+        // [BUG-013 fix 2026-04-16] Ashby fallback — typed-input combobox with async options
         filled++;
       }
 
@@ -1401,26 +1405,55 @@
       } else if (await fillPrimeNGDropdownByLabel(["country"], countryValue, doc)) {
         // [BUG-006 fix 2026-04-16] CEIPAL fallback
         filled++;
+      } else if (await fillAshbyComboboxByLabel(["country"], countryValue, doc)) {
+        // [BUG-013 fix 2026-04-16] Ashby fallback
+        filled++;
       }
 
       // [BUG-006 fix 2026-04-16] CEIPAL / Angular ATS work-authorization, visa,
       // and city dropdowns are PrimeNG comboboxes — a real <select> isn't present
       // so fillSelectByLabel can't see them. Run the PrimeNG helper for the
       // common fields Cowork had to hand-fill on Campus4Tech (CEIPAL).
+      // [BUG-013 fix 2026-04-16] Ashby equivalents (typed-input comboboxes) run
+      // after PrimeNG as an additional fallback — harmless no-op on non-Ashby sites.
       if (await fillPrimeNGDropdownByLabel(
         ["work authorization", "authorized to work", "work auth", "eligible to work"],
         "yes", doc
       )) filled++;
+      else if (await fillAshbyComboboxByLabel(
+        ["work authorization", "authorized to work", "work auth", "eligible to work"],
+        "yes", doc
+      )) filled++;
+
       if (await fillPrimeNGDropdownByLabel(
         ["visa", "sponsorship", "require sponsorship", "visa status", "immigration"],
         "no", doc
       )) filled++;
+      else if (await fillAshbyComboboxByLabel(
+        ["visa", "sponsorship", "require sponsorship", "visa status", "immigration"],
+        "no", doc
+      )) filled++;
+
       if (user.city || user.location) {
+        const cityValue = user.city || (user.location || "").split(",")[0].trim();
         if (await fillPrimeNGDropdownByLabel(
           ["city", "current city", "city of residence"],
-          user.city || (user.location || "").split(",")[0].trim(), doc
+          cityValue, doc
+        )) filled++;
+        else if (await fillAshbyComboboxByLabel(
+          ["city", "current city", "city of residence"],
+          cityValue, doc
         )) filled++;
       }
+
+      // [BUG-013 fix 2026-04-16] "How did you find out about this job" —
+      // observed on Ashby (Forward Financing). Defaults to "LinkedIn" which
+      // is the most common attribution source. Safe to no-op on sites without
+      // this field.
+      if (await fillAshbyComboboxByLabel(
+        ["how did you find", "how did you hear", "how did you learn", "referral source", "source of application"],
+        "LinkedIn", doc
+      )) filled++;
 
       // Native <select> Yes/No dropdowns (work auth, residency, sponsorship) — Breezy HR etc.
       filled += fillYesNoDropdowns(user, doc);
@@ -2172,6 +2205,133 @@
     return false;
   }
 
+  /**
+   * [BUG-013 fix 2026-04-16] Fill an Ashby typed-input combobox by label.
+   *
+   * Ashby renders "Province/State", "How did you find out about this job",
+   * and several other fields as React-controlled <input role="combobox">
+   * widgets. Typing into the input fetches/renders matching options
+   * asynchronously into a [role="listbox"] nearby, with a ~500ms–1s delay.
+   * Querying [role="option"] in the same tick as input returns null, so any
+   * "type → immediately click" approach leaves the field empty.
+   *
+   * Observed on: Forward Financing / Senior Analyst (Ashby).
+   *
+   * Strategy:
+   *   1. Find combobox inputs near a matching label.
+   *   2. Skip if the combobox is already displaying the target value.
+   *   3. Focus, select all, type via execCommand('insertText') — this routes
+   *      through React's native input pipeline (same insight as BUG-009
+   *      workday React-state fix) so the filter actually fires.
+   *   4. Poll for [role="option"] / .ashby-option / [data-ashby-option] for
+   *      up to 2.5s at 100ms intervals. NEVER click in the same tick as input.
+   *   5. Click the first option whose visible text matches.
+   *
+   * Returns true if a match was selected.
+   */
+  async function fillAshbyComboboxByLabel(labelTexts, value, doc = document) {
+    if (!value) return false;
+    const valueLower = String(value).toLowerCase();
+
+    // Ashby comboboxes are <input role="combobox"> — distinct from PrimeNG's
+    // <div role="combobox"> triggers. Narrow to inputs + aria-autocomplete
+    // (Ashby sets aria-autocomplete="list").
+    const inputs = queryAllDeep(
+      'input[role="combobox"], input[aria-autocomplete="list"], input[aria-haspopup="listbox"]',
+      doc
+    );
+
+    for (const input of inputs) {
+      if (input.tagName !== "INPUT") continue;
+
+      // Label matching: walk up to find a label/legend with the right text.
+      const container = input.closest("label, fieldset, .ashby-field, div, section, li, form") || input.parentElement;
+      if (!container) continue;
+      const nearbyLabel = (
+        container.querySelector("label, legend, p, span, h3, h4, h5")?.textContent ||
+        input.getAttribute("aria-label") ||
+        input.getAttribute("placeholder") ||
+        ""
+      ).toLowerCase().replace(/_/g, " ");
+      if (!labelTexts.some((t) => nearbyLabel.includes(t.toLowerCase()))) continue;
+
+      // Skip if already set — current input value OR aria-activedescendant text
+      // already matches. Prevents a second fill pass from clobbering the choice.
+      const currentValue = (input.value || "").toLowerCase().trim();
+      if (currentValue && (currentValue === valueLower || currentValue.startsWith(valueLower))) {
+        continue;
+      }
+
+      // Focus + select existing text. isTrusted=false is fine — execCommand
+      // still routes through the native input pipeline so React's onChange
+      // handler fires normally.
+      try { input.focus(); } catch {}
+      try {
+        if (input.setSelectionRange) input.setSelectionRange(0, (input.value || "").length);
+      } catch {}
+      try { document.execCommand("selectAll", false, null); } catch {}
+
+      const inserted = document.execCommand("insertText", false, String(value));
+      if (!inserted) {
+        // Fallback: native setter + input event. Works on older React too.
+        try {
+          const proto = window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (nativeSetter) nativeSetter.call(input, String(value));
+          else input.value = String(value);
+          input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: String(value) }));
+        } catch {}
+      }
+
+      // Poll for options. Ashby renders them ~500ms–1s after input — NEVER
+      // click in the same tick as input, it will always find nothing.
+      const POLL_MS = 100;
+      const MAX_MS = 2500;
+      let elapsed = 0;
+      let matched = false;
+
+      while (elapsed < MAX_MS && !matched) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        elapsed += POLL_MS;
+
+        // Ashby options: [role="option"] (ARIA combobox pattern), with
+        // fallbacks for Ashby-custom markers if future versions change.
+        const optionEls = queryAllDeep(
+          '[role="option"], [role="listbox"] li, .ashby-option, [data-ashby-option], [data-option]',
+          doc
+        );
+
+        for (const opt of optionEls) {
+          if (opt.getAttribute("aria-disabled") === "true") continue;
+          // Ashby sometimes hides stale options via aria-hidden.
+          if (opt.getAttribute("aria-hidden") === "true") continue;
+          const optText = (opt.textContent || "").toLowerCase().trim();
+          if (!optText) continue;
+          if (optText === valueLower || optText.startsWith(valueLower) || optText.includes(valueLower)) {
+            ["mousedown", "mouseup", "click"].forEach((type) =>
+              opt.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
+            );
+            console.log(`AutoApply [Ashby combobox] "${nearbyLabel.slice(0, 60)}" → "${optText}"`);
+            matched = true;
+            break;
+          }
+        }
+      }
+
+      if (matched) {
+        // Blur the input so React commits the selection to form state.
+        try { input.blur(); } catch {}
+        return true;
+      }
+
+      // Couldn't match — blur the input so the dropdown closes and the next
+      // field can be focused without interference.
+      try { input.blur(); } catch {}
+    }
+
+    return false;
+  }
+
   // Pick the first <option> whose visible text contains targetText
   function fillSelectElement(sel, targetText) {
     const target = targetText.toLowerCase();
@@ -2394,16 +2554,46 @@
         return btn.textContent || btn.value || btn.getAttribute("aria-label") || "";
       }
 
+      // [BUG-012 fix 2026-04-16] Click, verify, retry-once helper.
+      //
+      // Symptom: on Ashby (Forward Financing / Jerry), some Yes/No toggles
+      // took the click but didn't flip the `_active_` CSS class, so
+      // authorization/sponsorship/screening answers were silently lost on
+      // submit. Root cause: a single native .click() sometimes misses the
+      // React synthetic event handler on Ashby's toggle component.
+      //
+      // Fix: after clicking, wait a tick, re-check isAlreadySelected. If
+      // still unselected, dispatch the full mousedown → mouseup → click
+      // sequence and re-check. This costs ~150ms per retry and is a no-op
+      // when the first click worked (most sites).
+      async function clickAndVerify(btn, rawText, questionTextLocal, pathTag) {
+        const tag = pathTag || "";
+        console.log(`AutoApply:${tag} Clicking "${rawText.trim()}" for question: "${questionTextLocal.slice(0, 70)}"`);
+        btn.click();
+        await sleep(150);
+        if (isAlreadySelected(btn)) return true;
+
+        // Retry with explicit mousedown/mouseup/click — covers React synthetic
+        // event listeners that .click() alone misses.
+        console.log(`AutoApply:${tag} Click did not register; retrying with mouse event sequence`);
+        try {
+          ["mousedown", "mouseup", "click"].forEach((type) =>
+            btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
+          );
+        } catch {}
+        await sleep(150);
+        return isAlreadySelected(btn);
+      }
+
       let foundAndClicked = false;
       for (const btn of allBtns) {
         const rawText = getBtnText(btn);
         if (!answerMatches(rawText, targetAnswers)) continue;
 
         if (!isAlreadySelected(btn)) {
-          console.log(`AutoApply: Clicking "${rawText.trim()}" for question: "${questionText.slice(0, 70)}"`);
-          btn.click();
-          await sleep(150);
-          clicked++;
+          const ok = await clickAndVerify(btn, rawText, questionText, "");
+          if (ok) clicked++;
+          else console.log(`AutoApply: WARN toggle did not register after retry: "${rawText.trim()}"`);
         } else {
           console.log(`AutoApply: Already selected "${rawText.trim()}" for: "${questionText.slice(0, 70)}"`);
         }
@@ -2419,10 +2609,9 @@
           const rawText = getBtnText(btn);
           if (!answerMatches(rawText, targetAnswers)) continue;
           if (!isAlreadySelected(btn)) {
-            console.log(`AutoApply: (parent) Clicking "${rawText.trim()}" for: "${questionText.slice(0, 70)}"`);
-            btn.click();
-            await sleep(150);
-            clicked++;
+            const ok = await clickAndVerify(btn, rawText, questionText, " (parent)");
+            if (ok) clicked++;
+            else console.log(`AutoApply: (parent) WARN toggle did not register after retry: "${rawText.trim()}"`);
           }
           break;
         }

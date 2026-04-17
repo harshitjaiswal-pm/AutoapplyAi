@@ -3233,6 +3233,46 @@
   }
 
   /**
+   * BUG-011 guard: Return all dropdown buttons in a Workday application page,
+   * SKIPPING the site-wide language-picker button that Workday renders in the
+   * top nav. That button matches the same `button[aria-haspopup="listbox"]`
+   * selector as form dropdowns, and on full-page querySelectorAll it always
+   * shows up as btns[0]. Iterating by raw index and clicking btns[0] launches
+   * the language modal mid-form and derails the fill.
+   *
+   * All current extension code selects dropdowns by `data-automation-id` via
+   * selectDropdown() and is already safe. This helper exists so (a) any future
+   * index-based iteration has a correct source of truth, and (b) the pitfall
+   * is documented in the codebase where it can be discovered.
+   *
+   * Observed on: The Salvation Army / ALS Workday (BUG-011).
+   */
+  function findWorkdayFormDropdownButtons(scope) {
+    const root = scope || document;
+    const all = Array.from(root.querySelectorAll('button[aria-haspopup="listbox"]'));
+    return all.filter(btn => !isWorkdayLanguagePickerButton(btn));
+  }
+
+  /** Heuristic: is this button the Workday site language picker (not a form field)? */
+  function isWorkdayLanguagePickerButton(btn) {
+    if (!btn) return false;
+    const label = (btn.getAttribute("aria-label") || "").toLowerCase();
+    const text  = (btn.textContent || "").toLowerCase();
+    // Explicit language / locale markers in the button itself
+    if (/\b(language|locale|translate|select language|change language)\b/.test(label + " " + text)) {
+      return true;
+    }
+    // The language picker lives outside the form body. Form dropdowns are
+    // always inside a formField- container, a wd-* container, a <form>, or the
+    // main content region. If we can't find any of those ancestors, it's not
+    // a form dropdown — skip it.
+    const formAncestor = btn.closest(
+      '[data-automation-id^="formField-"],[data-automation-id^="wd-"],form,[role="main"],[data-automation-id*="pageSection" i]'
+    );
+    return !formAncestor;
+  }
+
+  /**
    * Select a Workday dropdown option.
    * Workday button-based dropdowns use isTrusted event checks, so programmatic
    * clicks from content scripts may not open them. We try multiple strategies:
