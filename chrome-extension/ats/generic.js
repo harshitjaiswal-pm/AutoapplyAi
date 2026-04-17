@@ -1388,6 +1388,9 @@
       const provinceValue = user.province || "British Columbia";
       if (fillSelectByLabel(["province", "territory", "province or territory", "state or province", "province/territory", "located in"], provinceValue, doc)) {
         filled++;
+      } else if (await fillPrimeNGDropdownByLabel(["province", "territory", "state", "region"], provinceValue, doc)) {
+        // [BUG-006 fix 2026-04-16] CEIPAL fallback — PrimeNG dropdowns
+        filled++;
       }
 
       // [AutoQA fix 2026-04-11] Country dropdown — was never handled in fillGenericForm,
@@ -1395,6 +1398,28 @@
       const countryValue = user.country || "Canada";
       if (fillSelectByLabel(["country", "country of residence", "country/region", "country of work", "work country"], countryValue, doc)) {
         filled++;
+      } else if (await fillPrimeNGDropdownByLabel(["country"], countryValue, doc)) {
+        // [BUG-006 fix 2026-04-16] CEIPAL fallback
+        filled++;
+      }
+
+      // [BUG-006 fix 2026-04-16] CEIPAL / Angular ATS work-authorization, visa,
+      // and city dropdowns are PrimeNG comboboxes — a real <select> isn't present
+      // so fillSelectByLabel can't see them. Run the PrimeNG helper for the
+      // common fields Cowork had to hand-fill on Campus4Tech (CEIPAL).
+      if (await fillPrimeNGDropdownByLabel(
+        ["work authorization", "authorized to work", "work auth", "eligible to work"],
+        "yes", doc
+      )) filled++;
+      if (await fillPrimeNGDropdownByLabel(
+        ["visa", "sponsorship", "require sponsorship", "visa status", "immigration"],
+        "no", doc
+      )) filled++;
+      if (user.city || user.location) {
+        if (await fillPrimeNGDropdownByLabel(
+          ["city", "current city", "city of residence"],
+          user.city || (user.location || "").split(",")[0].trim(), doc
+        )) filled++;
       }
 
       // Native <select> Yes/No dropdowns (work auth, residency, sponsorship) — Breezy HR etc.
@@ -2055,6 +2080,98 @@
     return filled;
   }
 
+  /**
+   * [BUG-006 fix 2026-04-16] Fill a PrimeNG / Angular Material / custom
+   * combobox dropdown by label. CEIPAL ATS (and similar Angular-based ATSes)
+   * render their "Work authorization", "Visa status", "City", etc. selects
+   * as <p-dropdown> components that emit role="combobox" on a clickable div,
+   * with the actual options appearing in a detached panel containing
+   * [role="option"] / p-dropdownitem / li.p-dropdown-item elements once
+   * clicked. fillSelectByLabel only finds real <select> tags, so it missed
+   * every CEIPAL field — Cowork had to fill them via custom JS.
+   *
+   * Strategy:
+   *   1. Find combobox elements near each label.
+   *   2. Dispatch mousedown+mouseup+click to open the dropdown panel
+   *      (PrimeNG listens on mousedown, not a bare click).
+   *   3. Poll for the detached option list for up to 2s.
+   *   4. Click the first option whose visible text matches `value`.
+   *
+   * Returns true if a match was selected.
+   */
+  async function fillPrimeNGDropdownByLabel(labelTexts, value, doc = document) {
+    if (!value) return false;
+    const valueLower = value.toLowerCase();
+
+    // Find combobox triggers — role="combobox" OR p-dropdown / .p-dropdown wrapper
+    const triggers = queryAllDeep(
+      '[role="combobox"], p-dropdown, .p-dropdown, .p-select, [class*="ng-select"], [class*="mat-select"]',
+      doc
+    );
+
+    for (const trigger of triggers) {
+      // Look for a label nearby — same container or preceding sibling
+      const container = trigger.closest("div, fieldset, section, li, form") || trigger.parentElement;
+      if (!container) continue;
+      const nearbyLabel = (
+        container.querySelector("label, p, span, h3, h4, h5, legend")?.textContent ||
+        trigger.getAttribute("aria-label") ||
+        trigger.getAttribute("placeholder") ||
+        ""
+      ).toLowerCase().replace(/_/g, " ");
+      if (!labelTexts.some((t) => nearbyLabel.includes(t))) continue;
+
+      // Skip if this trigger is already displaying the target value — prevents
+      // a second pass from reopening and potentially reshuffling the selection.
+      const currentText = (trigger.textContent || "").toLowerCase().trim();
+      if (currentText && (currentText === valueLower || currentText.startsWith(valueLower))) {
+        continue;
+      }
+
+      // Dispatch the full event sequence — PrimeNG listens on mousedown,
+      // .click() alone often doesn't open the panel.
+      ["mousedown", "mouseup", "click"].forEach((type) =>
+        trigger.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
+      );
+
+      // Poll for the option panel (it's usually appended to document.body, not
+      // inside the trigger's subtree, because PrimeNG overlays float).
+      const POLL_MS = 100;
+      const MAX_MS = 2000;
+      let elapsed = 0;
+      let matched = false;
+      while (elapsed < MAX_MS && !matched) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        elapsed += POLL_MS;
+        const optionEls = queryAllDeep(
+          '[role="option"], .p-dropdown-item, .p-select-option, li.p-dropdownitem, li.mat-option, mat-option, .ng-option',
+          doc
+        );
+        for (const opt of optionEls) {
+          if (opt.getAttribute("aria-disabled") === "true" || opt.classList.contains("p-disabled")) continue;
+          const optText = (opt.textContent || "").toLowerCase().trim();
+          if (!optText) continue;
+          if (optText === valueLower || optText.startsWith(valueLower) || optText.includes(valueLower)) {
+            ["mousedown", "mouseup", "click"].forEach((type) =>
+              opt.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
+            );
+            console.log(`AutoApply [PrimeNG] "${nearbyLabel.slice(0, 60)}" → "${optText}"`);
+            matched = true;
+            break;
+          }
+        }
+      }
+
+      if (matched) return true;
+
+      // Couldn't find an option — close the panel by clicking the trigger again
+      // so we don't leave an open dropdown blocking the next field.
+      trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    }
+
+    return false;
+  }
+
   // Pick the first <option> whose visible text contains targetText
   function fillSelectElement(sel, targetText) {
     const target = targetText.toLowerCase();
@@ -2173,6 +2290,19 @@
         answer: "yes",
         label: "office/location",
       },
+      // [BUG-005 fix 2026-04-16] Ashby renders "When can you start?" / "Timeline"
+      // / "Earliest start date" as pill-style <button> toggles (ASAP / 2 weeks /
+      // 1 month / etc.) that AutoApply's other code paths miss, so they got
+      // set and then wiped by subsequent re-fill passes. Route them through
+      // fillButtonStyleYesNo — it already has the isAlreadySelected idempotency
+      // guard, so repeated passes won't toggle the answer off.
+      {
+        keywords: ["earliest start", "timeline", "when can you start", "available start", "start availability", "earliest.*available", "when.*available"],
+        answer: "asap",
+        answerFallback: "immediately",
+        label: "start timeline",
+        useRegex: true,
+      },
     ];
 
     let clicked = 0;
@@ -2225,11 +2355,27 @@
       }
 
       function isAlreadySelected(btn) {
+        // [BUG-005 fix 2026-04-16] Expanded detection so a second fill pass
+        // doesn't TOGGLE OFF an already-set Ashby button. Ashby's pill toggles
+        // and some custom ATSes mark the selected state with data-state /
+        // data-selected / data-checked instead of the classic aria-* or
+        // classList tokens, so the old check missed them and the second
+        // pass re-clicked — deselecting the answer and leaving the field blank.
+        const dataState = (btn.getAttribute("data-state") || "").toLowerCase();
+        const dataSelected = btn.getAttribute("data-selected");
+        const dataChecked = btn.getAttribute("data-checked");
         return btn.classList.contains("selected") ||
                btn.classList.contains("active") ||
+               btn.classList.contains("is-selected") ||
+               btn.classList.contains("is-active") ||
+               btn.classList.contains("is-checked") ||
                btn.getAttribute("aria-selected") === "true" ||
                btn.getAttribute("aria-pressed") === "true" ||
                btn.getAttribute("aria-checked") === "true" ||
+               btn.getAttribute("aria-current") === "true" ||
+               dataState === "checked" || dataState === "selected" || dataState === "on" ||
+               dataSelected === "true" || dataSelected === "" ||
+               dataChecked === "true" || dataChecked === "" ||
                (btn.type === "radio"    && btn.checked) ||
                (btn.type === "checkbox" && btn.checked);
       }

@@ -56,8 +56,21 @@ function UserStoreGuard() {
           // Hydrate Zustand
           useAppStore.setState({ userProfile: clientProfile });
 
-          // Hydrate localStorage so the Chrome extension can sync it
-          localStorage.setItem("aa_profile", JSON.stringify(clientProfile));
+          // [BUG-001 fix 2026-04-16] Write to BOTH localStorage keys:
+          //   - aa_profile              → used by the React dashboard UI
+          //   - autoapply-user-profile  → read by chrome-extension/pipeline-bridge.js
+          //     on load (previously only aa_profile was written, so the extension
+          //     never got the Redis profile on a fresh device — it kept whatever
+          //     stale data was already in chrome.storage.local from a prior user).
+          // Also dispatch autoapply-sync-resume with userProfile in the detail so
+          // the bridge can push it into chrome.storage.local immediately, instead
+          // of only picking it up on the next dashboard page reload.
+          const profileJson = JSON.stringify(clientProfile);
+          localStorage.setItem("aa_profile", profileJson);
+          localStorage.setItem("autoapply-user-profile", profileJson);
+          window.dispatchEvent(
+            new CustomEvent("autoapply-sync-resume", { detail: { userProfile: clientProfile } })
+          );
 
           // Set onboarding cookie so middleware doesn't redirect to /onboarding
           document.cookie =

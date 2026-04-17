@@ -886,6 +886,27 @@ document.documentElement.dataset.aaContentVersion = '2026-04-14-v18-auto-approve
   }
 
   /**
+   * [JD-preview race fix 2026-04-16] Wait up to `timeoutMs` for the detail panel
+   * to actually be showing the expected job. Polls `isPanelShowingJob(job)` every
+   * 250ms. Returns true as soon as the panel matches; false on timeout.
+   *
+   * Background: scrapeJobDescription() pulls text from the right-side detail
+   * panel. In a batch run, LinkedIn sometimes keeps the previous job's panel
+   * visible for a beat while the new card is "selected" — the JD we scrape is
+   * then stale. Call this helper right before any scrapeJobDescription() path
+   * that isn't already gated by isPanelShowingJob().
+   */
+  async function waitForDetailPanelUpdate(job, timeoutMs = 4000) {
+    const deadline = Date.now() + timeoutMs;
+    if (isPanelShowingJob(job)) return true;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (isPanelShowingJob(job)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Process a single job: click card → scroll → scrape JD → click Apply → notify background
    */
   async function processJob(job) {
@@ -1283,6 +1304,13 @@ document.documentElement.dataset.aaContentVersion = '2026-04-14-v18-auto-approve
       let jobDescription = fetched.description;
       let fetchedApplyUrl = fetched.applyUrl; // May be null; used later to open the ATS tab
       if (!jobDescription || jobDescription.length < 50) {
+        // [JD-preview race fix 2026-04-16] Before falling back to scraping the
+        // panel, wait for the panel to actually show THIS job. On job 2+ in a
+        // batch, the panel occasionally still shows job 1 for a beat — and the
+        // scrape returned job 1's JD, which then got sent to tailoring for
+        // job 2. The post-scrape "looksStale" guard below still runs as a
+        // second line of defense.
+        await waitForDetailPanelUpdate(job, 4000);
         await scrollDetailPanel();
         await new Promise((r) => setTimeout(r, 800));
         jobDescription = scrapeJobDescription();
@@ -2317,7 +2345,15 @@ document.documentElement.dataset.aaContentVersion = '2026-04-14-v18-auto-approve
       if (!pick("yes")) pick("willing");
     } else if (label.match(/background check|drug test|drug screen/)) {
       pick("yes");
-    } else if (label.match(/start|available|notice/)) {
+    } else if (
+      // [GH-1 fix 2026-04-16] Tightened from /start|available|notice/ which matched
+      // Education "Start date month" / "Start date year" selects on Greenhouse +
+      // other ATS pages and filled them with "2 weeks" / "Immediately". We now
+      // require a phrase that unambiguously means "availability to begin work",
+      // and explicitly exclude labels that are month/year date-part pickers.
+      label.match(/when can you start|can you start|earliest start|available to start|start availability|notice period|available start date/) &&
+      !label.match(/year|month|day\b|date of birth/)
+    ) {
       // "When can you start?" → prefer "Immediately" / "Yes"
       if (!pick("immediate") && !pick("asap") && !pick("two weeks") && !pick("2 weeks")) pick("yes");
     }

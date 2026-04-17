@@ -68,25 +68,50 @@
     }
   });
 
-  // Also check localStorage on load in case user synced before bridge loaded
-  try {
-    const storedResume = localStorage.getItem("autoapply-parsed-resume");
-    const storedProfile = localStorage.getItem("autoapply-user-profile");
+  // [BUG-001 fix 2026-04-16] Poll localStorage repeatedly for the first 20s
+  // after load so we don't lose the profile/resume when the React app's
+  // server fetch completes AFTER the bridge's listeners attach but before
+  // its first localStorage read (race that used to leave Kiran's second
+  // laptop showing Harshit's stale chrome.storage.local data).
+  //
+  // Also reads BOTH possible profile keys — "autoapply-user-profile" (legacy)
+  // AND "aa_profile" (what the dashboard's UserStoreGuard writes). Either
+  // one present means the profile is authoritative for this session.
+  let lastProfileHash = "";
+  let lastResumeHash = "";
+  function readAndSync() {
+    try {
+      const storedResume = localStorage.getItem("autoapply-parsed-resume");
+      const storedProfile =
+        localStorage.getItem("autoapply-user-profile") ||
+        localStorage.getItem("aa_profile");
 
-    if (storedResume) {
-      chrome.storage.local.set({ parsedResume: JSON.parse(storedResume) }, () => {
-        console.log("AutoApply Bridge: Synced resume from localStorage to extension");
-      });
-    }
+      if (storedResume && storedResume !== lastResumeHash) {
+        lastResumeHash = storedResume;
+        chrome.storage.local.set({ parsedResume: JSON.parse(storedResume) }, () => {
+          console.log("AutoApply Bridge: Synced resume from localStorage to extension");
+        });
+      }
 
-    if (storedProfile) {
-      chrome.storage.local.set({ userProfile: JSON.parse(storedProfile) }, () => {
-        console.log("AutoApply Bridge: Synced profile from localStorage to extension");
-      });
+      if (storedProfile && storedProfile !== lastProfileHash) {
+        lastProfileHash = storedProfile;
+        chrome.storage.local.set({ userProfile: JSON.parse(storedProfile) }, () => {
+          console.log("AutoApply Bridge: Synced profile from localStorage to extension");
+        });
+      }
+    } catch (e) {
+      console.warn("AutoApply Bridge: Error reading localStorage", e);
     }
-  } catch (e) {
-    console.warn("AutoApply Bridge: Error reading localStorage", e);
   }
+
+  // Immediate read + poll every 1s for 20s to catch late writes from the
+  // React fetch (`/api/user/profile`, `/api/user/resume`).
+  readAndSync();
+  let polls = 0;
+  const pollInterval = setInterval(() => {
+    readAndSync();
+    if (++polls >= 20) clearInterval(pollInterval);
+  }, 1000);
 
   /* ── Completed Applications Sync: Extension → React App ── */
   // Sync completed applications from the extension to the dashboard

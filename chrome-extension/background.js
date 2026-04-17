@@ -509,8 +509,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   /* ── From ATS scripts: Download the tailored resume as PDF ── */
   if (message.type === "DOWNLOAD_RESUME") {
-    handleDownloadResume(message.job, sender.tab?.id, { noGlobalFallback: !!message.noGlobalFallback });
-    sendResponse({ success: true });
+    // [BUG-003 fix 2026-04-16] Await the actual download outcome instead of
+    // fire-and-forget. Previously sendResponse({success:true}) ran immediately
+    // and the floating-pill callback believed every click succeeded — masking
+    // key-miss + empty-storage silent failures. Now the caller gets back
+    // { success, reason, filename, resumeKey } and can show a useful message.
+    (async () => {
+      try {
+        const result = await handleDownloadResume(
+          message.job,
+          sender.tab?.id,
+          { noGlobalFallback: !!message.noGlobalFallback }
+        );
+        sendResponse(result || { success: false, reason: "No result returned from handler" });
+      } catch (err) {
+        console.error("AutoApply BG: DOWNLOAD_RESUME handler threw:", err);
+        sendResponse({ success: false, reason: err.message || "Unknown error" });
+      }
+    })();
     return true;
   }
 
@@ -554,16 +570,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const stored = await chrome.storage.local.get(["tailoredResumePdf", "tailoredResumeMap", "lastResumeKey"]);
       const map    = stored.tailoredResumeMap || {};
       const entries = Object.values(map).filter(e => e && e.pdf).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      const base64  = entries[0]?.pdf || stored.tailoredResumePdf || null;
+      const latestEntry = entries[0] || null;
+      const base64  = latestEntry?.pdf || stored.tailoredResumePdf || null;
       if (!base64) {
         sendResponse({ success: false, error: "no_resume", path: null });
         return;
       }
-      const id = await saveResumeToFixedPath(base64);
+      // [BUG-002 fix 2026-04-16] Pass company/jobTitle to build a
+      // "Company_Role_resume.pdf" filename instead of the hardcoded one.
+      const jobMeta = latestEntry ? { company: latestEntry.company, jobTitle: latestEntry.jobTitle } : null;
+      const { downloadId, filename } = await saveResumeToFixedPath(base64, jobMeta);
       sendResponse({
-        success: !!id,
-        path:    'AutoApply_TailoredResume.pdf',   // relative to Downloads folder
-        downloadId: id,
+        success: !!downloadId,
+        path:    filename,   // actual filename used, relative to Downloads folder
+        downloadId,
       });
     })();
     return true;
@@ -1089,14 +1109,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // cause "No active application found" on the next ATS page.
     applyTabId = null;
 
-    // Store completed application in a list for the dashboard to read
+    // Store completed application in a list for the dashboard to read (with dedup)
     chrome.storage.local.get(["completedApplications"], (stored) => {
       const completed = stored.completedApplications || [];
-      completed.push({
+      const newEntry = {
         ...job,
         status: "applied",
         completedAt: job.completedAt || new Date().toISOString(),
-      });
+      };
+      // [DB-1 fix 2026-04-16] Dedup on jobUrl OR jobTitle+company. Prevents
+      // double-counting when APPLICATION_COMPLETED fires more than once for
+      // the same submission (e.g. confirmation page mutation observer firing
+      // alongside the explicit submit handler).
+      if (isDuplicateApplication(completed, newEntry)) {
+        console.log("AutoApply BG: Skipping duplicate completedApplications entry for", newEntry.jobTitle, "at", newEntry.company);
+        sendResponse({ success: true, duplicate: true });
+        return;
+      }
+      completed.push(newEntry);
       chrome.storage.local.set({ completedApplications: completed }, () => {
         console.log("AutoApply BG: Saved completed application. Total:", completed.length);
         sendResponse({ success: true });
@@ -1823,10 +1853,33 @@ function injectFloatingTrigger(tabId) {
                 clearInterval(tickInterval);
                 if (!cancelled) {
                   setStatus("Downloading…");
-                  chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobInfo || {} }, () => {
-                    setStatus("Check your downloads!");
+                  // [BUG-003 fix 2026-04-16] Previously sent `job: jobInfo || {}` which
+                  // left applyUrl undefined when jobInfo didn't carry one. Tailor-time
+                  // stores under `makeResumeKey({ applyUrl: jobInfo?.applyUrl ||
+                  // jobInfo?.jobUrl || window.location.href })`, so if download-time
+                  // falls back to just company/title (no URL) the keys don't match
+                  // and handleDownloadResume silently aborts. Mirror the tailor-time
+                  // URL selection so the keys line up on the same page.
+                  const jobForDownload = {
+                    ...(jobInfo || {}),
+                    applyUrl: (jobInfo && (jobInfo.applyUrl || jobInfo.jobUrl)) || window.location.href,
+                  };
+                  chrome.runtime.sendMessage({ type: "DOWNLOAD_RESUME", job: jobForDownload }, (resp) => {
+                    // [BUG-003 fix 2026-04-16] Surface success/failure to the user.
+                    // Previously the callback ignored resp and always said
+                    // "Check your downloads!" — hiding silent key-miss and
+                    // storage-empty failures that left the user confused.
+                    if (resp && resp.success) {
+                      setStatus("Check your downloads!");
+                    } else {
+                      const reason = (resp && resp.reason) ||
+                        "No PDF found for this job — click “Tailor resume” first.";
+                      setStatus("⚠ " + reason);
+                      console.warn("AutoApply panel: DOWNLOAD_RESUME failed — resp:", resp,
+                        "job:", jobForDownload);
+                    }
                     restore();
-                    setTimeout(() => setStatus(""), 3500);
+                    setTimeout(() => setStatus(""), 4500);
                   });
                 }
               }
@@ -2574,10 +2627,12 @@ async function handleTailorAndFill(job) {
       console.log("AutoApply BG: Step 3 done. PDF stored in map key:", resumeKey);
       try { AALog && AALog.api("bg.api.exportResume.done", { filename, sizeBytes: arrayBuffer.byteLength, resumeKey }); } catch(_){}
 
-      // ── Auto-save a fixed-name copy to Downloads so the AI can always
-      // reference it at ~/Downloads/AutoApply_TailoredResume.pdf via file_upload.
-      // This runs silently alongside the user-facing download — no dialog shown.
-      saveResumeToFixedPath(base64);
+      // ── Auto-save a "sticky" copy to Downloads so the AI can always
+      // reference the latest tailored PDF via file_upload. This runs silently
+      // alongside the user-facing download — no dialog shown.
+      // [BUG-002 fix 2026-04-16] Pass the job context so the filename follows
+      // the "Company_Role_resume.pdf" convention instead of the old fixed name.
+      saveResumeToFixedPath(base64, { company: job?.company, jobTitle: job?.jobTitle });
     } else {
       const errBody = await pdfRes.text().catch(() => "");
       console.warn(`AutoApply BG: PDF export failed: ${pdfRes.status} — ${errBody.substring(0, 200)}`);
@@ -2732,30 +2787,64 @@ function makeResumeKey(job) {
 }
 
 /**
- * Save the tailored resume as a FIXED-NAME file so the AI can always find it at
- * a predictable location: ~/Downloads/AutoApply_TailoredResume.pdf
+ * [BUG-002 fix 2026-04-16] Build a "CompanyName_RoleName_resume.pdf" style
+ * filename from job metadata. Strips anything that isn't alnum/space/&/-/_,
+ * collapses whitespace, and trims to a reasonable length so the OS doesn't
+ * reject it. Returns null if neither company nor role are usable — caller
+ * should fall back to the legacy fixed filename in that case.
+ */
+function buildFixedPathFilename(jobMeta) {
+  const raw = (s) => (s || "").toString();
+  const sanitize = (s) =>
+    raw(s)
+      .replace(/[^a-zA-Z0-9 &\-_]/g, "")
+      .trim()
+      .replace(/\s+/g, "")
+      .slice(0, 40);
+  const company = sanitize(jobMeta && jobMeta.company);
+  const role    = sanitize(jobMeta && jobMeta.jobTitle);
+  if (!company && !role) return null;
+  const parts = [company, role, "resume"].filter(Boolean);
+  return parts.join("_") + ".pdf";
+}
+
+/**
+ * Save the tailored resume as a "sticky" copy at a predictable path so the
+ * AI can always reference the most recent tailored PDF via file_upload.
+ *
+ * [BUG-002 fix 2026-04-16] Previously always wrote to the hardcoded
+ * "AutoApply_TailoredResume.pdf" — that filename then showed up in the user's
+ * Downloads folder for every application, which was confusing and made
+ * post-application record-keeping harder (all files identical). Now we
+ * accept an optional `jobMeta` ({ company, jobTitle }) and prefer a filename
+ * of the form "CompanyName_RoleName_resume.pdf" when it's available.
+ * Falls back to "AutoApply_TailoredResume.pdf" when metadata is missing so
+ * downstream tools that already expect that path still work for the
+ * no-job-context case (e.g. a user tailoring from the dashboard before
+ * picking a specific role).
  *
  * Called automatically on every PDF generation AND on demand via
  * SAVE_RESUME_TO_FIXED_PATH message (from AA_SAVE_RESUME_TO_DOWNLOADS postMessage).
  *
- * Returns the downloadId (or null on failure).
+ * Returns a Promise resolving to `{ downloadId, filename }` (or
+ * `{ downloadId: null, filename }` on failure).
  */
-function saveResumeToFixedPath(base64) {
-  if (!base64) return null;
-  const FIXED_FILENAME = 'AutoApply_TailoredResume.pdf';
+function saveResumeToFixedPath(base64, jobMeta) {
+  if (!base64) return Promise.resolve({ downloadId: null, filename: null });
+  const filename = buildFixedPathFilename(jobMeta) || 'AutoApply_TailoredResume.pdf';
   return new Promise((resolve) => {
     chrome.downloads.download({
       url:            `data:application/pdf;base64,${base64}`,
-      filename:       FIXED_FILENAME,
+      filename,
       saveAs:         false,
       conflictAction: 'overwrite',
     }, (downloadId) => {
       if (chrome.runtime.lastError) {
         console.warn("AutoApply BG [saveResumeToFixedPath] failed:", chrome.runtime.lastError.message);
-        resolve(null);
+        resolve({ downloadId: null, filename });
       } else {
-        console.log("AutoApply BG [saveResumeToFixedPath] saved as", FIXED_FILENAME, "id:", downloadId);
-        resolve(downloadId);
+        console.log("AutoApply BG [saveResumeToFixedPath] saved as", filename, "id:", downloadId);
+        resolve({ downloadId, filename });
       }
     });
   });
@@ -2764,6 +2853,12 @@ function saveResumeToFixedPath(base64) {
 /**
  * Download the tailored resume PDF to the user's Downloads folder.
  * Uses keyed lookup so batch jobs always download the correct resume.
+ *
+ * [BUG-003 fix 2026-04-16] Returns a Promise resolving to:
+ *   { success: true,  downloadId, filename, resumeKey }
+ *   { success: false, reason, resumeKey }
+ * so callers (the DOWNLOAD_RESUME message handler → floating pill) can
+ * distinguish real success from silent no-PDF / key-mismatch failures.
  */
 async function handleDownloadResume(job, callerTabId, opts) {
   const noGlobalFallback = !!(opts && opts.noGlobalFallback);
@@ -2901,49 +2996,68 @@ async function handleDownloadResume(job, callerTabId, opts) {
         level: "warn",
       }).catch(() => {});
     }
-    return;
+    // [BUG-003 fix 2026-04-16] Return a structured failure so the panel
+    // callback can surface "⚠ No PDF found — tailor first" in the status
+    // strip instead of the misleading old "Check your downloads!" text.
+    return {
+      success: false,
+      reason: "No tailored resume for this job — click \"Tailor resume\" first.",
+      resumeKey,
+    };
   }
 
   const safeFilename = filename.replace(/[^a-zA-Z0-9 _\-\.]/g, "").replace(/\s+/g, " ").trim() || "Resume.pdf";
   console.log("AutoApply BG: Downloading resume — key:", resumeKey, "fromMap:", !!entry?.pdf, "filename:", safeFilename);
 
-  // Also keep the fixed-name copy fresh so the AI always has a predictable path to use.
-  saveResumeToFixedPath(base64);
+  // Also keep the sticky-path copy fresh so the AI always has a predictable
+  // path to use. [BUG-002 fix 2026-04-16] Pass job context so the filename is
+  // "Company_Role_resume.pdf" instead of the legacy fixed name.
+  saveResumeToFixedPath(base64, { company: job?.company, jobTitle: job?.jobTitle });
 
-  chrome.downloads.download({
-    url:      `data:application/pdf;base64,${base64}`,
-    filename: safeFilename,
-    saveAs:   false,
-  }, (downloadId) => {
-    if (chrome.runtime.lastError) {
-      console.error("AutoApply BG: Download failed:", chrome.runtime.lastError.message);
-      // Surface error to the user visually via a Chrome notification
-      chrome.notifications.create({
-        type:    "basic",
-        iconUrl: chrome.runtime.getURL("icon128.png"),
-        title:   "⚠️ Resume Download Failed",
-        message: `Could not save ${safeFilename}. Error: ${chrome.runtime.lastError.message}`,
-      });
-      // Also notify the triggering tab if we have it
-      if (callerTabId) {
-        chrome.tabs.sendMessage(callerTabId, {
-          type:    "SHOW_BANNER",
-          message: `⚠️ Download failed: ${chrome.runtime.lastError.message} — try clicking ↓ Resume again.`,
-          level:   "warn",
-        }).catch(() => {});
-      }
-    } else {
-      console.log("AutoApply BG: Download started, id:", downloadId, "filename:", safeFilename);
-      // Success notification so user knows to check Downloads
-      try {
+  // [BUG-003 fix 2026-04-16] Wrap chrome.downloads.download in a Promise so
+  // we can resolve the surrounding async function with the real outcome
+  // (success / failure). Before this the function returned undefined as the
+  // download callback fired asynchronously, so the DOWNLOAD_RESUME message
+  // handler couldn't tell the pill whether the save actually worked.
+  return new Promise((resolve) => {
+    chrome.downloads.download({
+      url:      `data:application/pdf;base64,${base64}`,
+      filename: safeFilename,
+      saveAs:   false,
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        const errMsg = chrome.runtime.lastError.message || "Unknown download error";
+        console.error("AutoApply BG: Download failed:", errMsg);
+        // Surface error to the user visually via a Chrome notification
         chrome.notifications.create({
           type:    "basic",
           iconUrl: chrome.runtime.getURL("icon128.png"),
-          title:   "✅ Resume Downloaded!",
-          message: `Saved as: ${safeFilename}`,
+          title:   "⚠️ Resume Download Failed",
+          message: `Could not save ${safeFilename}. Error: ${errMsg}`,
         });
-      } catch(_) {}
-    }
+        // Also notify the triggering tab if we have it
+        if (callerTabId) {
+          chrome.tabs.sendMessage(callerTabId, {
+            type:    "SHOW_BANNER",
+            message: `⚠️ Download failed: ${errMsg} — try clicking ↓ Resume again.`,
+            level:   "warn",
+          }).catch(() => {});
+        }
+        resolve({ success: false, reason: errMsg, resumeKey, filename: safeFilename });
+      } else {
+        console.log("AutoApply BG: Download started, id:", downloadId, "filename:", safeFilename);
+        // Success notification so user knows to check Downloads
+        try {
+          chrome.notifications.create({
+            type:    "basic",
+            iconUrl: chrome.runtime.getURL("icon128.png"),
+            title:   "✅ Resume Downloaded!",
+            message: `Saved as: ${safeFilename}`,
+          });
+        } catch(_) {}
+        resolve({ success: true, downloadId, filename: safeFilename, resumeKey });
+      }
+    });
   });
 }
 
@@ -3063,6 +3177,26 @@ function arrayBufferToBase64(buffer) {
  * Record an application submission to local storage (and Supabase when configured).
  * Called when "Application Submitted" confirmation is detected in Workday/Greenhouse.
  */
+/**
+ * [DB-1 fix 2026-04-16] Is `candidate` a duplicate of any existing entry in `list`?
+ * Matches on jobUrl first (strongest signal), then falls back to the
+ * jobTitle+company combo normalized to lowercase trimmed. This is the
+ * same dedup rule used in the APPLICATION_COMPLETED handler so both code
+ * paths stay in sync.
+ */
+function isDuplicateApplication(list, candidate) {
+  if (!Array.isArray(list) || list.length === 0) return false;
+  const url = (candidate.jobUrl || "").toLowerCase().trim();
+  const title = (candidate.jobTitle || "").toLowerCase().trim();
+  const company = (candidate.company || "").toLowerCase().trim();
+  return list.some((e) => {
+    if (url && (e.jobUrl || "").toLowerCase().trim() === url) return true;
+    const eTitle = (e.jobTitle || "").toLowerCase().trim();
+    const eCompany = (e.company || "").toLowerCase().trim();
+    return title && company && eTitle === title && eCompany === company;
+  });
+}
+
 async function recordApplication(jobData) {
   try {
     const record = {
@@ -3078,9 +3212,18 @@ async function recordApplication(jobData) {
       status: "Applied",
     };
 
-    // Save to local applicationHistory
+    // Save to local applicationHistory (with dedup)
     chrome.storage.local.get(["applicationHistory"], (result) => {
       const history = Array.isArray(result.applicationHistory) ? result.applicationHistory : [];
+      // [DB-1 fix 2026-04-16] Skip if we've already recorded this job (same
+      // jobUrl, or same jobTitle+company combo). Previously every re-entry
+      // into the ATS page — e.g. confirmation page re-load, SW restart, user
+      // hitting Back and resubmitting — created a brand-new entry, so the
+      // dashboard showed multiple identical rows for a single application.
+      if (isDuplicateApplication(history, record)) {
+        console.log("AutoApply BG: Skipping duplicate applicationHistory entry for", record.jobTitle, "at", record.company);
+        return;
+      }
       history.push(record);
       chrome.storage.local.set({ applicationHistory: history }, () => {
         console.log("AutoApply BG: Recorded application:", record.jobTitle, "at", record.company);

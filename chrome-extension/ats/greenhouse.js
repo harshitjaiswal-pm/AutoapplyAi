@@ -825,8 +825,12 @@
     const jobTitlePatterns = ["job title", "position", "title", "role"];
     const companyPatterns = ["company", "employer", "organization"];
     const locationPatterns = ["location", "city", "based"];
-    const dateStartPatterns = ["start date", "from", "began"];
-    const dateEndPatterns = ["end date", "to", "ended"];
+    // [GH-1 fix 2026-04-16] Removed unused dateStartPatterns / dateEndPatterns that
+    // contained bare "start date" / "end date". Those loose patterns never got
+    // wired up here, but keeping them around invited future regressions where
+    // Education "Start date month/year" fields could be filled with
+    // "2 weeks notice" via a substring match. Work-experience dates are handled
+    // by fillWorkExperienceDates() which uses more specific patterns.
     const descriptionPatterns = ["description", "description of role", "responsibilities", "about this role"];
 
     // Fill Job Title
@@ -1077,34 +1081,65 @@
     }
 
     // 5. Custom styled "Select…" trigger div (Greenhouse React-Select replacement)
-    // Click the trigger to open the dropdown, then find and click the matching option
-    // after a short delay (options render asynchronously).
+    // [GH-2 fix 2026-04-16] Previously:
+    //   - Strict textContent === "select..." check missed triggers that showed
+    //     "Select...", "Select…" (Unicode ellipsis), "Select an option", etc.
+    //   - Plain .click() didn't reliably open React-Select components — those
+    //     listen on mousedown/mouseup, not click.
+    //   - Single 400ms timeout to find options was too fragile: if options took
+    //     longer to render (slow laptop, heavy page) the dropdown stayed open
+    //     with no selection and the Yes/No question fell through unanswered.
+    // Fixed: more permissive trigger detection + dispatch mousedown/mouseup/click
+    // event sequence + poll for options up to 2.5s with 100ms intervals.
     const selectTrigger = container.querySelector(
       "[class*='select__control'], [class*='SelectTrigger'], [class*='dropdown-toggle'], " +
       "[data-testid*='select'], [class*='custom-select']"
-    ) || Array.from(container.querySelectorAll("div[class]")).find(
-      (el) => el.textContent.trim().toLowerCase() === "select..." ||
-              el.textContent.trim().toLowerCase() === "select one" ||
-              el.getAttribute("aria-haspopup") === "listbox"
-    );
+    ) || Array.from(container.querySelectorAll("div[class], button[class]")).find((el) => {
+      const txt = (el.textContent || "").trim().toLowerCase();
+      // Unicode ellipsis (…) and ASCII ellipsis (...) both common in placeholders
+      return /^select(\s*(one|an option|…|\.\.\.))?\s*$/i.test(txt) ||
+             el.getAttribute("aria-haspopup") === "listbox" ||
+             el.getAttribute("role") === "combobox";
+    });
     if (selectTrigger) {
-      selectTrigger.click();
+      // Dispatch the full event sequence React-Select listens for. Plain click()
+      // doesn't open react-select v5 dropdowns.
+      ["mousedown", "mouseup", "click"].forEach((type) =>
+        selectTrigger.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
+      );
       console.log("AutoApply: [custom-select] Opened dropdown trigger for →", yesOrNo);
-      // Scan for matching option after DOM updates
-      setTimeout(() => {
+
+      // Poll for options instead of single-shot timeout — options may render
+      // asynchronously on slow pages.
+      const POLL_INTERVAL_MS = 100;
+      const MAX_WAIT_MS = 2500;
+      let elapsed = 0;
+      const poll = () => {
         const optionEls = document.querySelectorAll(
-          "[class*='select__option'], [class*='dropdown-item'], [role='option'], [class*='SelectItem']"
+          "[class*='select__option'], [class*='dropdown-item'], [role='option'], [class*='SelectItem'], li[class*='option']"
         );
         for (const opt of optionEls) {
           const optText = (opt.textContent || "").toLowerCase().trim();
-          if (optText.includes(yesOrNo)) {
+          // Match word-boundary "yes"/"no" to avoid matching "notebook" etc.
+          const yesNoRe = new RegExp(`\\b${yesOrNo}\\b`, "i");
+          if (yesNoRe.test(optText) || optText === yesOrNo) {
             opt.click();
             console.log("AutoApply: [custom-select] Selected option →", yesOrNo);
-            return;
+            return true;
           }
         }
-        console.log("AutoApply: [custom-select] Could not find matching option for →", yesOrNo);
-      }, 400);
+        return false;
+      };
+      const retryTick = () => {
+        if (poll()) return;
+        elapsed += POLL_INTERVAL_MS;
+        if (elapsed < MAX_WAIT_MS) {
+          setTimeout(retryTick, POLL_INTERVAL_MS);
+        } else {
+          console.log("AutoApply: [custom-select] Could not find matching option for →", yesOrNo, "(timed out after " + MAX_WAIT_MS + "ms)");
+        }
+      };
+      setTimeout(retryTick, POLL_INTERVAL_MS);
       return;
     }
 
