@@ -621,6 +621,12 @@ function DashboardPage() {
                     const resumeData = pipelineParsedResume;
                     const profile = userProfile;
 
+                    if (!resumeData && !profile) {
+                      setSyncStatus("error");
+                      setTimeout(() => setSyncStatus("idle"), 3000);
+                      return;
+                    }
+
                     // Write to localStorage with correct keys that pipeline-bridge.js reads
                     if (resumeData) {
                       localStorage.setItem("autoapply-parsed-resume", JSON.stringify(resumeData));
@@ -629,22 +635,38 @@ function DashboardPage() {
                       localStorage.setItem("autoapply-user-profile", JSON.stringify(profile));
                     }
 
+                    // Listen for ACK from extension content script before showing success
+                    // Timeout after 3s — show error if extension didn't respond
+                    let ackReceived = false;
+                    const timeout = setTimeout(() => {
+                      if (!ackReceived) {
+                        setSyncStatus("error");
+                        setTimeout(() => setSyncStatus("idle"), 3000);
+                        window.removeEventListener("autoapply-sync-ack", onAck as EventListener);
+                      }
+                    }, 3000);
+
+                    function onAck(e: CustomEvent) {
+                      ackReceived = true;
+                      clearTimeout(timeout);
+                      window.removeEventListener("autoapply-sync-ack", onAck as EventListener);
+                      if (e.detail?.ok) {
+                        setSyncStatus("done");
+                        setTimeout(() => setSyncStatus("idle"), 3000);
+                      } else {
+                        setSyncStatus("error");
+                        setTimeout(() => setSyncStatus("idle"), 3000);
+                      }
+                    }
+                    window.addEventListener("autoapply-sync-ack", onAck as EventListener);
+
                     // Dispatch the event that pipeline-bridge.js content script listens for
-                    // This writes both parsedResume + userProfile into chrome.storage.local
                     window.dispatchEvent(new CustomEvent("autoapply-sync-resume", {
                       detail: {
                         parsedResume: resumeData || undefined,
                         userProfile: profile || undefined,
                       }
                     }));
-
-                    if (resumeData || profile) {
-                      setSyncStatus("done");
-                      setTimeout(() => setSyncStatus("idle"), 3000);
-                    } else {
-                      setSyncStatus("error");
-                      setTimeout(() => setSyncStatus("idle"), 3000);
-                    }
                   }}
                   className={`w-full text-white text-xs font-semibold py-2 rounded-lg transition-colors ${
                     syncStatus === "done" ? "bg-emerald-600" :
@@ -653,7 +675,7 @@ function DashboardPage() {
                   }`}
                 >
                   {syncStatus === "done" ? "✓ Synced to Extension!" :
-                   syncStatus === "error" ? "⚠ Nothing to sync yet" :
+                   syncStatus === "error" ? "⚠ Reload extension & retry" :
                    "Sync to Extension"}
                 </button>
                 <a

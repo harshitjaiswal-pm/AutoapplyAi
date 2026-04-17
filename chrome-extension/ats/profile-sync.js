@@ -14,8 +14,7 @@
         return;
       }
       console.log("AutoApply: Profile synced from web app to extension storage ✓");
-      // Clean up after successful sync
-      window.localStorage.removeItem("aa_profile");
+      // Do NOT remove aa_profile — pipeline-bridge.js also needs it
     });
   } catch (e) {
     console.error("AutoApply: Profile sync exception:", e);

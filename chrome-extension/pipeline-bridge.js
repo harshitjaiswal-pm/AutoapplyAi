@@ -54,17 +54,40 @@
   /* ── Resume & Profile Sync: React App → Extension ── */
   window.addEventListener("autoapply-sync-resume", (event) => {
     const { parsedResume, userProfile } = event.detail || {};
+    let pending = 0;
+
+    function maybeAck() {
+      pending--;
+      if (pending === 0) {
+        // Fire ACK back to the page so the dashboard button can show real confirmation
+        window.dispatchEvent(new CustomEvent("autoapply-sync-ack", {
+          detail: { ok: true, ts: Date.now() }
+        }));
+        console.log("AutoApply Bridge: Sync ACK sent to page");
+      }
+    }
 
     if (parsedResume) {
+      pending++;
       chrome.storage.local.set({ parsedResume }, () => {
         console.log("AutoApply Bridge: Synced parsed resume to extension storage");
+        maybeAck();
       });
     }
 
     if (userProfile) {
+      pending++;
       chrome.storage.local.set({ userProfile }, () => {
         console.log("AutoApply Bridge: Synced user profile to extension storage");
+        maybeAck();
       });
+    }
+
+    // Nothing to write — still ACK so button doesn't hang
+    if (pending === 0) {
+      window.dispatchEvent(new CustomEvent("autoapply-sync-ack", {
+        detail: { ok: false, ts: Date.now() }
+      }));
     }
   });
 

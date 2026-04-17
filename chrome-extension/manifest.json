@@ -19,22 +19,17 @@
   "content_scripts": [
     {
       "matches": ["https://www.linkedin.com/jobs/*"],
-      "js": ["logger.js", "content.js"],
+      "js": ["logger.js", "cowork-bridge.js", "content.js"],
       "css": ["content.css"]
     },
     {
       "matches": ["https://*.vercel.app/*", "http://localhost:3000/*"],
-      "js": ["logger.js", "ats/profile-sync.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://*.vercel.app/pipeline*", "http://localhost:3000/pipeline*", "https://*.vercel.app/dashboard*", "http://localhost:3000/dashboard*", "https://*.vercel.app/onboarding*", "http://localhost:3000/onboarding*"],
-      "js": ["logger.js", "pipeline-bridge.js"],
+      "js": ["logger.js", "ats/profile-sync.js", "pipeline-bridge.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://boards.greenhouse.io/*", "https://job-boards.greenhouse.io/*"],
-      "js": ["logger.js", "ats/greenhouse.js"],
+      "js": ["logger.js", "cowork-bridge.js", "review-submit.js", "ats/greenhouse.js"],
       "run_at": "document_idle",
       "all_frames": true
     },
@@ -54,7 +49,7 @@
         "https://*.wd10.myworkdayjobs.com/*",
         "https://*.wd12.myworkdayjobs.com/*"
       ],
-      "js": ["logger.js", "ats/workday.js"],
+      "js": ["logger.js", "cowork-bridge.js", "review-submit.js", "ats/workday.js"],
       "run_at": "document_idle"
     },
     {
