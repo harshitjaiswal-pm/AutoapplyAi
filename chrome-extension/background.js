@@ -222,23 +222,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Delegate to credential vault for sign-in or account creation
     (async () => {
       try {
-        // Check vault for stored credentials
-        const entry = self.AAVault.getEntry(host);
-        if (!entry) {
-          // No entry found
-          sendResponse({
-            success: false,
-            error: 'no-entry',
-          });
+        // Check vault status first
+        const vaultStatus = self.AAVault.status();
+        if (!vaultStatus.unlocked) {
+          sendResponse({ success: false, error: 'vault-locked' });
           return;
         }
 
-        // Check if vault is unlocked
-        if (self.AAVault.isLocked()) {
-          sendResponse({
-            success: false,
-            error: 'vault-locked',
-          });
+        // Check vault for stored credentials
+        const entry = await self.AAVault.getEntry(host);
+        if (!entry) {
+          sendResponse({ success: false, error: 'no-entry' });
           return;
         }
 
