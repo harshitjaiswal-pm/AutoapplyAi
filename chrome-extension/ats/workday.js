@@ -1869,24 +1869,14 @@
 
       LOG("Filling date field with today's date");
 
-      // Focus and type into each spinbutton — Workday date pickers respond to keydown
-      const typeIntoSpinner = async (spinner, text) => {
-        spinner.focus();
-        await sleep(80);
-        for (const ch of text) {
-          ["keydown", "keypress", "keyup"].forEach(evType => {
-            spinner.dispatchEvent(new KeyboardEvent(evType, {
-              key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0),
-              which: ch.charCodeAt(0), bubbles: true, cancelable: true
-            }));
-          });
-          await sleep(30);
-        }
-      };
+      // BUG-010: use typeIntoWorkdaySpinner which includes click-triggered
+      // validation (fixes "field required" errors on save after fill).
+      await typeIntoWorkdaySpinner(monthS, month);
+      await typeIntoWorkdaySpinner(dayS, day);
+      if (yearS) await typeIntoWorkdaySpinner(yearS, year);
 
-      await typeIntoSpinner(monthS, month);
-      await typeIntoSpinner(dayS, day);
-      if (yearS) await typeIntoSpinner(yearS, year);
+      // Final click on Month to commit the whole group (matches user behavior).
+      try { monthS.click(); } catch {}
       await sleep(100);
       return true;
     }
@@ -2725,14 +2715,29 @@
 
   /**
    * Fill a date field (MM/YYYY format) within a container block.
-   * Workday date fields are text inputs that accept "MM/YYYY".
+   *
+   * Workday renders date fields two ways:
+   *   (a) a single text input that accepts "MM/YYYY"
+   *   (b) separate [role="spinbutton"] elements for Month/Year (the Work
+   *       Experience From/To fields on Step 2 — "My Experience" — use this)
+   *
+   * We try the spinbutton path first (BUG-010), then fall back to text.
    */
   async function fillDateFieldInBlock(container, labelKeywords, mmYYYY) {
     if (!mmYYYY) return false;
+
+    // (a) Spinbutton path (BUG-010) — Work Experience From/To dates on
+    // Workday's "My Experience" step use Month/Year spinbutton widgets.
+    // These require a real user click after programmatic fill to clear the
+    // "required" validator; form_input MCP alone was not enough.
+    const spinbuttonFilled = await fillSpinbuttonDateInBlock(container, labelKeywords, mmYYYY);
+    if (spinbuttonFilled) return true;
+
+    // (b) Legacy single-text-input path
     const input = findInputByLabelInBlock(container, labelKeywords);
     if (!input || input.value?.trim()) return false;
 
-    // Set value using setWorkdayValue
+    // Set value using setWorkdayValue (now uses execCommand — BUG-009)
     setWorkdayValue(input, mmYYYY);
     await sleep(100);
 
@@ -2752,6 +2757,125 @@
     }
 
     return true;
+  }
+
+  /**
+   * Fill a spinbutton-based Month/Year date field (BUG-010).
+   *
+   * Workday Work Experience From/To dates render as a pair of
+   * [role="spinbutton"] widgets (aria-label="Month", aria-label="Year")
+   * grouped inside the labelled container. They validate against React
+   * internal state and require:
+   *   1. a real pointer click on the spinbutton to open its edit mode
+   *   2. keyboard-style keydown events to enter digits
+   *   3. a final click on the spinbutton (or group) to commit + clear validation
+   *
+   * Returns true if we found & filled a spinbutton group, false if none found
+   * so the caller falls through to the text-input path.
+   */
+  async function fillSpinbuttonDateInBlock(container, labelKeywords, mmYYYY) {
+    if (!mmYYYY) return false;
+
+    // Locate the labelled date group. Try a few strategies:
+    // 1. A container-level label whose text matches one of labelKeywords +
+    //    has spinbuttons as siblings/descendants.
+    // 2. A [data-automation-id*="<keyword>"] node with descendant spinbuttons.
+    let dateGroup = null;
+
+    for (const label of container.querySelectorAll("label, legend, [role='group'] > *:first-child")) {
+      const text = (label.textContent?.trim() || "").toLowerCase();
+      if (!labelKeywords.some(kw => text.includes(kw.toLowerCase()))) continue;
+      // Walk up to find a container that holds spinbuttons
+      let cur = label.parentElement;
+      for (let d = 0; d < 6 && cur && cur !== document.body; d++, cur = cur.parentElement) {
+        if (cur.querySelector('[role="spinbutton"]')) { dateGroup = cur; break; }
+      }
+      if (dateGroup) break;
+    }
+
+    if (!dateGroup) {
+      for (const kw of labelKeywords) {
+        const el = container.querySelector(`[data-automation-id*="${kw}" i]`);
+        if (el && el.querySelector('[role="spinbutton"]')) { dateGroup = el; break; }
+      }
+    }
+
+    if (!dateGroup) return false;
+
+    const monthS = dateGroup.querySelector('[role="spinbutton"][aria-label="Month" i]') ||
+                   Array.from(dateGroup.querySelectorAll('[role="spinbutton"]'))
+                        .find(s => /month/i.test(s.getAttribute("aria-label") || ""));
+    const yearS  = dateGroup.querySelector('[role="spinbutton"][aria-label="Year" i]') ||
+                   Array.from(dateGroup.querySelectorAll('[role="spinbutton"]'))
+                        .find(s => /year/i.test(s.getAttribute("aria-label") || ""));
+
+    if (!monthS || !yearS) return false;
+
+    // Skip if already filled
+    if (monthS.getAttribute("aria-valuenow") && yearS.getAttribute("aria-valuenow")) {
+      return true;
+    }
+
+    const [mm, yyyy] = mmYYYY.split("/");
+    if (!mm || !yyyy) return false;
+
+    LOG(`Filling spinbutton date for [${labelKeywords.join("|")}]: ${mm}/${yyyy}`);
+
+    await typeIntoWorkdaySpinner(monthS, mm);
+    await typeIntoWorkdaySpinner(yearS, yyyy);
+
+    // BUG-010: Workday's validator only clears when the user physically clicks
+    // after fill. Fire a trusted-equivalent click on each spinbutton to trigger
+    // validation.
+    try {
+      monthS.click();
+      await sleep(40);
+      yearS.click();
+      await sleep(40);
+      // Click the group container too — some Workday versions bind the
+      // validation listener on the wrapping formField.
+      dateGroup.click();
+    } catch {}
+
+    return true;
+  }
+
+  /**
+   * Type a numeric string into a Workday [role="spinbutton"] widget.
+   *
+   * Used by both today-date fields and Work Experience From/To dates.
+   * Workday spinbuttons respond to keydown/keypress/keyup; we focus first,
+   * then send each digit, then fire a click to trigger commit/validation
+   * (BUG-010).
+   */
+  async function typeIntoWorkdaySpinner(spinner, digits) {
+    if (!spinner || !digits) return;
+    try { spinner.click(); } catch {}
+    try { spinner.focus(); } catch {}
+    await sleep(60);
+
+    for (const ch of String(digits)) {
+      ["keydown", "keypress", "keyup"].forEach(evType => {
+        spinner.dispatchEvent(new KeyboardEvent(evType, {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: ch.charCodeAt(0),
+          which: ch.charCodeAt(0),
+          bubbles: true,
+          cancelable: true
+        }));
+      });
+      await sleep(30);
+    }
+
+    // Blur/commit: Tab fires change + moves focus to next spinbutton, which
+    // is how a real user advances Month → Day → Year.
+    try {
+      spinner.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab", code: "Tab", keyCode: 9, which: 9, bubbles: true, cancelable: true
+      }));
+    } catch {}
+    await sleep(40);
   }
 
   /** Find the "I currently work here" checkbox within a work experience block. */
@@ -2824,6 +2948,68 @@
   function setWorkdayValue(input, value) {
     if (!input || value === undefined || value === null) return false;
     value = String(value);
+
+    // ── Strategy 0: click + focus + execCommand('insertText') (BUG-009 fix) ──
+    // Workday's React components validate against React's internal state, which
+    // is committed via onBlur — NOT onChange/onInput. When we set value via the
+    // native setter and dispatch synthetic events, React's _valueTracker can
+    // reject the change as "already known" and the "field is required" validator
+    // fires on Save even though the DOM shows the correct text.
+    //
+    // `document.execCommand('insertText')` routes through the browser's native
+    // input pipeline the same way a real keystroke does, so React accepts it.
+    // Followed by fiber memoizedProps.onBlur to commit the value to React state
+    // (the validation gate for uncontrolled Workday textareas).
+    //
+    // Observed on: Salvation Army Workday — Step 2 (My Experience) text fields.
+    try {
+      if (input.tagName === "INPUT" || input.tagName === "TEXTAREA") {
+        // Activate: click + focus. isTrusted=false on these events, but it's
+        // enough to move focus so execCommand targets this element.
+        try { input.click(); } catch {}
+        try { input.focus(); } catch {}
+
+        // Select any existing text so insertText replaces (not appends) it.
+        try {
+          if (input.setSelectionRange) input.setSelectionRange(0, (input.value || "").length);
+        } catch {}
+        try { document.execCommand("selectAll", false, null); } catch {}
+
+        const inserted = document.execCommand("insertText", false, value);
+
+        if (inserted && input.value === value) {
+          // Value landed via native pipeline. Now commit to React state via
+          // fiber onBlur (the validation gate for uncontrolled components).
+          try {
+            const fiberKey = Object.keys(input).find(k => k.startsWith("__reactFiber"));
+            if (fiberKey) {
+              const fiber = input[fiberKey];
+              const onBlur = fiber?.memoizedProps?.onBlur;
+              if (onBlur) {
+                onBlur({
+                  target: input,
+                  currentTarget: input,
+                  type: "blur",
+                  nativeEvent: new FocusEvent("blur"),
+                  preventDefault: () => {},
+                  stopPropagation: () => {},
+                  persist: () => {}
+                });
+              }
+            }
+          } catch {}
+
+          // Also fire a bubbling blur for non-React listeners.
+          try { input.blur(); } catch {}
+          try { input.dispatchEvent(new FocusEvent("blur", { bubbles: true })); } catch {}
+
+          LOG(`execCommand strategy succeeded for: "${value.substring(0, 25)}"`);
+          return true;
+        }
+      }
+    } catch (e) {
+      LOG(`execCommand strategy failed (${e.message}), falling through to legacy path`);
+    }
 
     // Set native DOM value first (makes the text visible)
     // Wrapped in try-catch: nativeSetter.call can throw "Illegal invocation"
