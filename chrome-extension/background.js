@@ -215,6 +215,116 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async response
   }
 
+  /* ── Cowork Bridge: Login handling ────────────────────────────────── */
+  if (message.type === "AA_LOGIN_NEEDED") {
+    const { host, url, requestId } = message;
+    console.log(`AutoApply BG: AA_LOGIN_NEEDED for ${host}`);
+    // Delegate to credential vault for sign-in or account creation
+    (async () => {
+      try {
+        // Check vault for stored credentials
+        const entry = self.AAVault.getEntry(host);
+        if (!entry) {
+          // No entry found
+          sendResponse({
+            success: false,
+            error: 'no-entry',
+          });
+          return;
+        }
+
+        // Check if vault is unlocked
+        if (self.AAVault.isLocked()) {
+          sendResponse({
+            success: false,
+            error: 'vault-locked',
+          });
+          return;
+        }
+
+        // Attempt sign-in by sending VAULT_SIGN_IN to the active tab's content script
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs.length === 0) {
+            sendResponse({
+              success: false,
+              error: 'no-active-tab',
+            });
+            return;
+          }
+
+          const activeTab = tabs[0];
+          chrome.tabs.sendMessage(activeTab.id, {
+            type: 'VAULT_SIGN_IN',
+            email: entry.email,
+            password: entry.password,
+            host: host,
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.error(`AutoApply BG: sendMessage error: ${chrome.runtime.lastError.message}`);
+              sendResponse({
+                success: false,
+                error: chrome.runtime.lastError.message,
+              });
+              return;
+            }
+
+            // Forward content script response back to caller
+            sendResponse(response || { success: false, error: 'no-response' });
+          });
+        });
+      } catch (err) {
+        console.error("AutoApply BG: AA_LOGIN_NEEDED handler error", err);
+        sendResponse({ success: false, error: String(err && err.message || err) });
+      }
+    })();
+    return true; // async response
+  }
+
+  /* ── Cowork Bridge: Review page + submission ────────────────────────────────── */
+  if (message.type === "AA_REVIEW_PAGE") {
+    const { url, atsType } = message;
+    console.log(`AutoApply BG: AA_REVIEW_PAGE for ${atsType} at ${url}`);
+    // Delegate to review-submit module in the content script
+    (async () => {
+      try {
+        // Get the active tab
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs.length === 0) {
+            sendResponse({
+              success: false,
+              errors: ['no-active-tab'],
+            });
+            return;
+          }
+
+          const activeTab = tabs[0];
+          // Send AA_DO_REVIEW_SUBMIT to the content script
+          chrome.tabs.sendMessage(activeTab.id, {
+            type: 'AA_DO_REVIEW_SUBMIT',
+            url: url,
+            atsType: atsType,
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.error(`AutoApply BG: sendMessage error: ${chrome.runtime.lastError.message}`);
+              sendResponse({
+                success: false,
+                errors: [chrome.runtime.lastError.message],
+              });
+              return;
+            }
+
+            // Forward content script response back to caller
+            sendResponse(response || { success: false, errors: ['no-response'] });
+          });
+        });
+      } catch (err) {
+        console.error("AutoApply BG: AA_REVIEW_PAGE handler error", err);
+        sendResponse({ success: false, errors: [String(err && err.message || err)] });
+      }
+    })();
+    return true; // async response
+  }
+
   /* ── From LinkedIn content.js: Store job data before Apply click ── */
   if (message.type === "PREPARE_APPLICATION") {
     try { AALog && AALog.state("bg.prepareApplication", { jobTitle: message.job?.jobTitle, company: message.job?.company }); } catch(_){}
