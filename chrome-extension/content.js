@@ -775,7 +775,23 @@ document.documentElement.dataset.aaContentVersion = '2026-04-14-v18-auto-approve
     const btnLabel = bestApplyBtn.getAttribute("aria-label") || bestApplyBtn.textContent.trim();
     console.log("AutoApply: Clicking external Apply button: " + btnLabel);
     try { AALog && AALog.nav("linkedin.clickApply.external", { label: btnLabel, candidates }); } catch(_){}
-    bestApplyBtn.click();
+
+    // [BUG-NEW-007 fix 2026-04-17] When the apply button is an <a href target="_blank">,
+    // the browser opens the ATS page via native tab creation which bypasses the existing
+    // window.open interception in background.js. Route these through OPEN_ATS_TAB so the
+    // background script properly arms expectingNewTab and injects into the correct tab.
+    const linkHref = bestApplyBtn.getAttribute("href");
+    const isExternalAnchor = bestApplyBtn.tagName === "A" && linkHref &&
+                             (linkHref.startsWith("http://") || linkHref.startsWith("https://")) &&
+                             !linkHref.includes("linkedin.com");
+    if (isExternalAnchor) {
+      console.log("AutoApply: Routing <a href> apply link through OPEN_ATS_TAB:", linkHref.slice(0, 100));
+      await new Promise(resolve =>
+        chrome.runtime.sendMessage({ type: "OPEN_ATS_TAB", url: linkHref }, resolve)
+      );
+    } else {
+      bestApplyBtn.click();
+    }
     await new Promise((r) => setTimeout(r, 1500));
     return "external";
   }
@@ -3125,5 +3141,65 @@ document.documentElement.dataset.aaContentVersion = '2026-04-14-v18-auto-approve
       const firstChild = panel.firstChild;
       panel.insertBefore(banner, firstChild);
     }
+
+    // [BUG-NEW-001 fix 2026-04-17] Profile mismatch warning: show a visible banner when
+    // the stored profile differs from the one used in the previous application.
+    if (message.type === "PROFILE_MISMATCH_WARNING") {
+      showBanner(
+        `⚠ Profile mismatch — applying as "${message.currentProfile}" but last app used "${message.previousProfile}". ` +
+        "Verify you have the correct profile loaded in the AutoApply dashboard.",
+        "warn"
+      );
+    }
   });
+
+  // [BUG-NEW-008 fix 2026-04-17] Strip the LinkedIn Easy Apply filter (f_AL=true) when
+  // AutoApply is running in external-ATS mode. The f_AL filter hides all non-Easy-Apply
+  // jobs, so users attempting to apply to external ATS postings never see them in search
+  // results. When AutoApply detects f_AL=true in the URL on a LinkedIn jobs search page,
+  // it offers a one-click suggestion to remove the filter.
+  (function checkLinkedInEasyApplyFilter() {
+    if (!location.hostname.includes("linkedin.com")) return;
+    if (!location.search.includes("f_AL=true")) return;
+
+    // Only surface this once per page load via a dismissible warning
+    const warnKey = "_aa_fAL_warned_" + location.pathname;
+    if (sessionStorage.getItem(warnKey)) return;
+    sessionStorage.setItem(warnKey, "1");
+
+    // Wait until AutoApply panel is injected before inserting the notice
+    const checkInterval = setInterval(() => {
+      const panel = document.getElementById("autoapply-panel");
+      if (!panel) return;
+      clearInterval(checkInterval);
+
+      const notice = document.createElement("div");
+      notice.id = "aa-fAL-notice";
+      notice.style.cssText = `
+        margin: 8px 12px 0;
+        padding: 8px 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #92400E;
+        background: #FEF3C7;
+        border: 1px solid #FDE68A;
+        line-height: 1.4;
+        cursor: pointer;
+      `;
+      notice.innerHTML =
+        '⚠ "Easy Apply only" filter is active — external ATS jobs are hidden. ' +
+        '<u>Click to remove the filter</u> and see all jobs.';
+      notice.addEventListener("click", () => {
+        // Remove f_AL=true from the current search URL and reload
+        const url = new URL(location.href);
+        url.searchParams.delete("f_AL");
+        notice.remove();
+        location.href = url.toString();
+      });
+      panel.insertBefore(notice, panel.firstChild);
+    }, 500);
+    // Stop checking after 10s if panel never appears
+    setTimeout(() => clearInterval(checkInterval), 10000);
+  })();
 })();
