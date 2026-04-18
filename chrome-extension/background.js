@@ -215,10 +215,144 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async response
   }
 
+  /* ── Cowork Bridge: Login handling ────────────────────────────────── */
+  if (message.type === "AA_LOGIN_NEEDED") {
+    const { host, url, requestId } = message;
+    console.log(`AutoApply BG: AA_LOGIN_NEEDED for ${host}`);
+    // Delegate to credential vault for sign-in or account creation
+    (async () => {
+      try {
+        // Check vault for stored credentials
+        const entry = self.AAVault.getEntry(host);
+        if (!entry) {
+          // No entry found
+          sendResponse({
+            success: false,
+            error: 'no-entry',
+          });
+          return;
+        }
+
+        // Check if vault is unlocked
+        if (self.AAVault.isLocked()) {
+          sendResponse({
+            success: false,
+            error: 'vault-locked',
+          });
+          return;
+        }
+
+        // Attempt sign-in by sending VAULT_SIGN_IN to the active tab's content script
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs.length === 0) {
+            sendResponse({
+              success: false,
+              error: 'no-active-tab',
+            });
+            return;
+          }
+
+          const activeTab = tabs[0];
+          chrome.tabs.sendMessage(activeTab.id, {
+            type: 'VAULT_SIGN_IN',
+            email: entry.email,
+            password: entry.password,
+            host: host,
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.error(`AutoApply BG: sendMessage error: ${chrome.runtime.lastError.message}`);
+              sendResponse({
+                success: false,
+                error: chrome.runtime.lastError.message,
+              });
+              return;
+            }
+
+            // Forward content script response back to caller
+            sendResponse(response || { success: false, error: 'no-response' });
+          });
+        });
+      } catch (err) {
+        console.error("AutoApply BG: AA_LOGIN_NEEDED handler error", err);
+        sendResponse({ success: false, error: String(err && err.message || err) });
+      }
+    })();
+    return true; // async response
+  }
+
+  /* ── Cowork Bridge: Review page + submission ────────────────────────────────── */
+  if (message.type === "AA_REVIEW_PAGE") {
+    const { url, atsType } = message;
+    console.log(`AutoApply BG: AA_REVIEW_PAGE for ${atsType} at ${url}`);
+    // Delegate to review-submit module in the content script
+    (async () => {
+      try {
+        // Get the active tab
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs.length === 0) {
+            sendResponse({
+              success: false,
+              errors: ['no-active-tab'],
+            });
+            return;
+          }
+
+          const activeTab = tabs[0];
+          // Send AA_DO_REVIEW_SUBMIT to the content script
+          chrome.tabs.sendMessage(activeTab.id, {
+            type: 'AA_DO_REVIEW_SUBMIT',
+            url: url,
+            atsType: atsType,
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.error(`AutoApply BG: sendMessage error: ${chrome.runtime.lastError.message}`);
+              sendResponse({
+                success: false,
+                errors: [chrome.runtime.lastError.message],
+              });
+              return;
+            }
+
+            // Forward content script response back to caller
+            sendResponse(response || { success: false, errors: ['no-response'] });
+          });
+        });
+      } catch (err) {
+        console.error("AutoApply BG: AA_REVIEW_PAGE handler error", err);
+        sendResponse({ success: false, errors: [String(err && err.message || err)] });
+      }
+    })();
+    return true; // async response
+  }
+
   /* ── From LinkedIn content.js: Store job data before Apply click ── */
   if (message.type === "PREPARE_APPLICATION") {
     try { AALog && AALog.state("bg.prepareApplication", { jobTitle: message.job?.jobTitle, company: message.job?.company }); } catch(_){}
     startKeepAlive(); // Keep alive while waiting for new tab + API calls
+
+    // [BUG-NEW-001 fix 2026-04-17] Profile mismatch guard.
+    // On shared machines two different users' profiles can be stored simultaneously,
+    // causing the wrong name / contact info to be injected into applications.
+    // Compare the profile used in the LAST application against the one currently
+    // loaded — if they differ, surface a clear warning in the content script.
+    chrome.storage.local.get(["_aa_activeProfileName", "_aa_lastApplicationProfileName"], (profileCheck) => {
+      const active = profileCheck._aa_activeProfileName;
+      const last   = profileCheck._aa_lastApplicationProfileName;
+      if (active && last && active !== last) {
+        console.warn(
+          `AutoApply BG: ⚠ PROFILE MISMATCH — last app used "${last}", current profile is "${active}". ` +
+          "Make sure you have the correct profile loaded before applying."
+        );
+        try {
+          chrome.tabs.sendMessage(sender.tab?.id, {
+            type: "PROFILE_MISMATCH_WARNING",
+            currentProfile: active,
+            previousProfile: last,
+          });
+        } catch(_) {}
+      }
+    });
+
     chrome.storage.local.set({ pendingApplication: { ...message.job, _queuedAt: Date.now() } }, () => {
       console.log("AutoApply BG: Stored pending application for", message.job?.jobTitle);
 
@@ -486,22 +620,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* ── [BUG-015 fix 2026-04-17] Get today's session state for context-exhausted Cowork agents ── */
+  if (message.type === "GET_SESSION_STATE") {
+    const sessionKey = "_aa_session_" + new Date().toISOString().slice(0, 10);
+    chrome.storage.local.get([sessionKey], (stored) => {
+      sendResponse({ session: stored[sessionKey] || { appliedJobIds: [], appliedCompanies: [], totalApplied: 0 } });
+    });
+    return true;
+  }
+
   /* ── Save user profile ── */
   if (message.type === "SAVE_PROFILE") {
-    chrome.storage.local.set({ userProfile: message.profile }, () => {
-      console.log("AutoApply BG: Saved user profile");
-      sendResponse({ success: true });
+    const profileName = message.profile
+      ? `${message.profile.firstName || ""} ${message.profile.lastName || ""}`.trim()
+      : null;
+    // [BUG-NEW-001 fix 2026-04-17] Persist the active profile display name so
+    // GET_STATUS can surface it in the UI without reading the full profile object.
+    const update = { userProfile: message.profile };
+    if (profileName) update._aa_activeProfileName = profileName;
+    chrome.storage.local.set(update, () => {
+      console.log("AutoApply BG: Saved user profile:", profileName || "(no name)");
+      sendResponse({ success: true, profileName });
     });
     return true;
   }
 
   /* ── Get extension status ── */
   if (message.type === "GET_STATUS") {
-    chrome.storage.local.get(["completedApplications", "_aa_currentJobNumber"], (stored) => {
+    chrome.storage.local.get(["completedApplications", "_aa_currentJobNumber", "_aa_activeProfileName"], (stored) => {
       sendResponse({
         expectingNewTab,
         completedCount: (stored.completedApplications || []).length,
         currentJobNumber: stored._aa_currentJobNumber || 0,
+        // [BUG-NEW-001] Surface active profile name so UI can display "Applying as: [Name]"
+        activeProfileName: stored._aa_activeProfileName || null,
       });
     });
     return true;
@@ -1110,7 +1262,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     applyTabId = null;
 
     // Store completed application in a list for the dashboard to read (with dedup)
-    chrome.storage.local.get(["completedApplications"], (stored) => {
+    chrome.storage.local.get(["completedApplications", "_aa_activeProfileName"], (stored) => {
       const completed = stored.completedApplications || [];
       const newEntry = {
         ...job,
@@ -1127,7 +1279,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       completed.push(newEntry);
-      chrome.storage.local.set({ completedApplications: completed }, () => {
+      // [BUG-NEW-001 fix 2026-04-17] Record the profile name used for this application
+      // so the PREPARE_APPLICATION mismatch guard can compare against the next one.
+      const update = { completedApplications: completed };
+      if (stored._aa_activeProfileName) update._aa_lastApplicationProfileName = stored._aa_activeProfileName;
+      chrome.storage.local.set(update, () => {
         console.log("AutoApply BG: Saved completed application. Total:", completed.length);
         sendResponse({ success: true });
       });
@@ -1144,6 +1300,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     });
+
+    // [BUG-015 fix 2026-04-17] Persist lightweight session state after every completed
+    // application so a context-exhausted Cowork agent can reconstruct progress without
+    // rescanning LinkedIn from scratch. Keyed by sessionDate so each day gets a clean slate.
+    (async () => {
+      try {
+        const sessionKey = "_aa_session_" + new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        const sessionData = await chrome.storage.local.get([sessionKey]);
+        const session = sessionData[sessionKey] || { appliedJobIds: [], appliedCompanies: [], lastCompletedAt: null };
+        if (job.id && !session.appliedJobIds.includes(job.id)) {
+          session.appliedJobIds.push(job.id);
+        }
+        const companyKey = `${job.company || ""}|${job.jobTitle || ""}`.slice(0, 80);
+        if (companyKey && !session.appliedCompanies.includes(companyKey)) {
+          session.appliedCompanies.push(companyKey);
+        }
+        session.lastCompletedAt = new Date().toISOString();
+        session.totalApplied = session.appliedJobIds.length;
+        await chrome.storage.local.set({ [sessionKey]: session });
+        console.log(`AutoApply BG: Session state updated — ${session.totalApplied} jobs applied today`);
+      } catch (err) {
+        console.warn("AutoApply BG: Failed to persist session state:", err.message);
+      }
+    })();
 
     return true;
   }
