@@ -1887,14 +1887,27 @@
     // Alias for backward compat with code below
     const stored = { tailoredResumePdf: pdfResult.pdf };
 
+    // [BUG-NEW-002 fix 2026-04-17] Returns true if a file input is a Cover Letter slot.
+    // Upload should ONLY target resume/CV slots — never cover letter upload fields.
+    function isCoverLetterInput(fi) {
+      const lbl  = getFieldLabel(fi).toLowerCase();
+      const name = (fi.name || fi.id || "").toLowerCase();
+      return lbl.includes("cover letter")  || lbl.includes("cover_letter")  ||
+             name.includes("cover_letter") || name.includes("coverletter")  || name.includes("cover-letter");
+    }
+
     // Find file input across all accessible docs (including iframes + shadow DOM)
     let fileInput = null;
     const docs = getAccessibleDocuments();
     for (const doc of docs) {
-      fileInput = queryDeep('input[type="file"][name*="resume"], input[type="file"][name*="cv"]', doc);
-      if (fileInput) break;
+      // Priority 1: name attribute contains "resume" or "cv" — skip cover letter slots
+      const byName = queryDeep('input[type="file"][name*="resume"], input[type="file"][name*="cv"]', doc);
+      if (byName && !isCoverLetterInput(byName)) { fileInput = byName; break; }
+
+      // Priority 2: label contains resume/cv/upload — explicitly skip cover letter slots
       const fileInputs = queryAllDeep('input[type="file"]', doc);
       for (const fi of fileInputs) {
+        if (isCoverLetterInput(fi)) continue; // [BUG-NEW-002] never upload resume to cover letter field
         const label = getFieldLabel(fi).toLowerCase();
         if (label.includes("resume") || label.includes("cv") || label.includes("upload")) {
           fileInput = fi;
@@ -1902,9 +1915,10 @@
         }
       }
       if (fileInput) break;
-      // Fall back to first file input in this doc
+      // Priority 3: Fallback to first file input that is NOT a cover letter slot
       const allFiles = queryAllDeep('input[type="file"]', doc);
-      if (allFiles.length > 0) { fileInput = allFiles[0]; break; }
+      const nonCoverLetter = allFiles.filter(fi => !isCoverLetterInput(fi));
+      if (nonCoverLetter.length > 0) { fileInput = nonCoverLetter[0]; break; }
     }
 
     if (!fileInput) {
