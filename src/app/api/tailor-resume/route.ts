@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
       sanitizeRuleZero(tailoredResult);
     }
 
-    return NextResponse.json({ tailoredResult });
+    return NextResponse.json({ tailoredResult, usage: message.usage });
   } catch (error: unknown) {
     console.error("Tailoring error:", error);
     if (error instanceof SyntaxError) {
