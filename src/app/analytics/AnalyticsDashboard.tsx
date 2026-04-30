@@ -39,7 +39,7 @@ export default function AnalyticsDashboard() {
     setError(null);
     try {
       const res = await fetch(`/api/dashboard/summary?range=${r}`);
-      if (\!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
     } catch (e) {
@@ -76,7 +76,7 @@ export default function AnalyticsDashboard() {
     );
   }
 
-  if (\!data) return null;
+  if (!data) return null;
 
   return (
     <div className="max-w-7xl mx-auto py-6 space-y-8">
@@ -104,7 +104,7 @@ export default function AnalyticsDashboard() {
       {/* Dedup notice */}
       {data.duplicatesBlocked > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-          <strong>{data.duplicatesBlocked}</strong> duplicate application{data.duplicatesBlocked \!== 1 ? "s" : ""} blocked this period.
+          <strong>{data.duplicatesBlocked}</strong> duplicate application{data.duplicatesBlocked !== 1 ? "s" : ""} blocked this period.
         </div>
       )}
 
