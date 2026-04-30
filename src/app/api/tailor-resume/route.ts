@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { RESUME_TAILOR_SYSTEM } from "@/lib/prompts";
+import { authorize } from "@/lib/apiAuth";
 
 /**
  * API ROUTE: POST /api/tailor-resume
@@ -18,6 +19,11 @@ import { RESUME_TAILOR_SYSTEM } from "@/lib/prompts";
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { parsedResume, parsedJob, mode } = await request.json();
 
     if (!parsedResume || !parsedJob) {
