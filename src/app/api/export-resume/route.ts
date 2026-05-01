@@ -133,9 +133,13 @@ async function generateDocx(resume: any) {
   for (const exp of resume.experience || []) {
     const titleField = exp.title || exp.role || "";
     // Line 1: Company | Title
+    // Tighter `before` spacing to maximize page-1 density. keepNext to keep
+    // the role header, location/dates line, and at least the first bullet
+    // on the same page (prevents an awkward orphan header at page-bottom).
     experienceChildren.push(
       new Paragraph({
-        spacing: { before: 160, after: 40 },
+        spacing: { before: 100, after: 30 },
+        keepNext: true,
         children: [
           new TextRun({
             text: titleField ? `${exp.company}  |  ${titleField}` : `${exp.company}`,
@@ -235,9 +239,14 @@ async function generateDocx(resume: any) {
 
   function sectionHeading(text: string) {
     return new Paragraph({
-      spacing: { before: 240, after: 80 },
+      spacing: { before: 140, after: 60 },
       alignment: AlignmentType.LEFT,
       border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
+      // keepNext: prevents the section header from stranding alone at the
+      // bottom of a page (the case where Page 1 ended with "CERTIFICATIONS"
+      // header and Page 2 had only the cert line). Forces the header to
+      // stay with the next paragraph.
+      keepNext: true,
       children: [
         new TextRun({
           text: text.toUpperCase(),
@@ -411,16 +420,20 @@ async function generateDocx(resume: any) {
             ? [sectionHeading("Projects"), ...projectChildren]
             : []),
 
-          // Certifications
+          // Certifications — pipe-separated single line to match reference.
           // [Fix 2026-04-14] Claude sometimes returns certs as objects like
           // {name: "AWS", issuer: "Amazon", year: 2023} instead of plain strings.
           // Array.join() on objects produces "[object Object]" in the exported
           // resume. Normalize every entry to a display string before joining.
+          // keepLines so the cert content can't get split across pages, and
+          // the section header has keepNext so it stays glued to this content
+          // (the page-1.5 stranding fix).
           ...(resume.certifications?.length
             ? [
                 sectionHeading("Certifications"),
                 new Paragraph({
                   spacing: { after: 40 },
+                  keepLines: true,
                   children: [
                     new TextRun({
                       text: (resume.certifications as unknown[])

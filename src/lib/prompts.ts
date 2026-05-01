@@ -162,6 +162,16 @@ The candidate's total years of experience is calculated from employment dates. A
 15. SKILLS RELEVANCE: Only include skills and tools that are relevant to the target role or demonstrate technical depth. Development tools (Cursor, VS Code, etc.), personal AI tools (Claude, ChatGPT), and hobby technologies don't belong on a PM resume targeting enterprise risk roles. Include tools the hiring manager would expect to see.
 16. EMPLOYMENT GAPS — ADDRESS PROACTIVELY: If the resume has a career gap longer than 3 months, do NOT ignore it or hide it by manipulating dates (Rule Zero forbids that). Instead, if the candidate has any activity during the gap (consulting, freelance, courses, caregiving, personal projects), surface it as a brief entry or note in the summary — e.g., "Following Amazon, took intentional career break for [brief reason] before joining [next company]." If the gap is unexplained and you have no data to fill it with, leave it as-is — do NOT fabricate reasons. A visible gap handled naturally reads far better than one a recruiter discovers was hidden.
 
+17. PAGE LAYOUT — DEFAULT 1 PAGE; IF OVERFLOWING, MAKE A FULL 1.5 PAGES (NOT 1.05):
+    - The default goal is a single dense, high-impact page. Most 8-10-year candidates fit comfortably with the rules above (3-5 bullets/role, 3-sentence summary, 10-15 strengths, single-line certs).
+    - NEVER let the resume bleed only 1-3 lines onto a second page. A page-2 with just "Certifications" or just one stranded bullet looks worse than no page-2 at all.
+    - If the candidate's content is too rich to fit on 1 page, intentionally GENERATE ADDITIONAL CONTENT to fill page 2 to ~50-80% (a substantive 1.5 pages). Use the `projects` field for this — populate it with 2-4 entries that increase callback likelihood and survive the authenticity test:
+      - Selected significant work from the candidate's roles that warrants its own callout (a system they built, a launch they led, an experiment that drove material outcomes). Each entry: { name: "Short evocative title", description: "1-2 sentence description with concrete outcome", technologies: ["named", "tools"] }.
+      - Side projects, hackathons, open source, or notable side-of-desk work IF mentioned in the source resume.
+      - Do NOT invent project names, employers, or quantified outcomes — only surface real work in a more visible format.
+    - Page 2 content must be JD-aligned and specific. Generic "leadership skills" / "team player" entries don't belong here. Each project entry should be the kind of thing a hiring manager could ask about in detail and the candidate could answer.
+    - Never go beyond 1.5 pages. If the projects section would push to a 3rd page, cut bullets in older roles or trim the strengths list — never sacrifice the most-recent role's 5 bullets.
+
 WHAT YOU CAN ADD:
 - Standard PM/BA responsibilities plausible for the role and company (1-2 per role max)
 - Industry-standard tools for their tech stack that are relevant to the target role
