@@ -2040,10 +2040,11 @@
   /**
    * Fill the Skills tag-input field on the My Experience page.
    * Workday uses a multi-select combobox where you type a skill and pick from dropdown.
-   * Fixed to prevent infinite loops by:
-   * 1. Clearing the input after each skill
-   * 2. Waiting for dropdown with timeout
-   * 3. Tracking attempted skills to avoid retries
+   * [PR3 fix 2026-05-01 #30] Verify chip was added after each skill before moving
+   * on. The previous loop trusted that option.click() always added a chip, but in
+   * some Workday variants the dropdown click registered without adding the chip,
+   * leading to the user-visible "loops on the same skill" symptom because the
+   * next skill never started typing.
    */
   async function fillSkillsField(skills) {
     LOG(`Filling ${skills.length} skill(s) in Skills field`);
@@ -2068,9 +2069,32 @@
       return;
     }
 
+    // [PR3 fix #30] Find the parent container that hosts the rendered skill chips
+    // so we can count chip elements before/after each fill to detect actual progress.
+    const skillsContainer =
+      skillsInput.closest('[data-automation-id*="skill" i]') ||
+      skillsInput.closest('[data-automation-id^="formField-"]') ||
+      skillsInput.parentElement;
+
+    function countChips() {
+      if (!skillsContainer) return 0;
+      // Workday renders chips as buttons or pill spans. Common selectors:
+      // - [data-automation-id="DELETE_..."] (delete-buttons next to chips)
+      // - [data-automation-id*="selectedItem"]
+      // - .css-xxx pill nodes — fall back to any non-input descendant role="button"
+      const candidates = skillsContainer.querySelectorAll(
+        '[data-automation-id*="selectedItem" i], ' +
+        '[data-automation-id^="DELETE_"], ' +
+        '[role="button"][aria-label*="remove" i]'
+      );
+      return candidates.length;
+    }
+
     const attemptedSkills = new Set();
-    const MAX_ATTEMPTS = skills.length;
+    const MAX_ATTEMPTS = Math.max(skills.length, 5);
     let attemptCount = 0;
+    let filledCount = 0;
+    let baselineChipCount = countChips();
 
     // Type each skill and either press Enter or pick from dropdown
     for (const skill of skills.slice(0, 20)) { // cap at 20 to avoid spamming
@@ -2112,14 +2136,28 @@
         // No dropdown appeared within timeout — try free-text entry with Enter
         LOG(`No dropdown for skill "${skill}" — trying Enter key`);
         skillsInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
-        await sleep(200);
+        skillsInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", keyCode: 13, bubbles: true }));
+        await sleep(300);
       }
 
-      // Clear the input for the next skill
+      // [PR3 fix #30] Verify a chip was actually added before moving on. If not,
+      // log it and continue anyway — the previous behavior was to loop on the
+      // failure (visible to the user as repeatedly typing the same skill).
+      const newCount = countChips();
+      const chipAdded = newCount > baselineChipCount;
+      if (chipAdded) {
+        filledCount++;
+        baselineChipCount = newCount;
+        LOG(`Chip added for "${skill}" — total chips now: ${newCount}`);
+      } else {
+        LOG(`No chip detected for "${skill}" after fill (chips: ${newCount}). Moving on.`);
+      }
+
+      // Clear the input for the next skill (independent of chip-add success).
       setWorkdayValue(skillsInput, "");
       await sleep(100);
     }
-    LOG(`Skills fill complete — filled ${attemptCount} skill(s)`);
+    LOG(`Skills fill complete — attempted ${attemptCount}, chips added ${filledCount}/${skills.length}`);
   }
 
   /**
@@ -2474,9 +2512,25 @@
         if (select) {
           fillSelectByKeyword(select, degreeNormalized);
         } else {
-          // Button-based Workday dropdown for degree
+          // [PR3 fix #31] Workday's degree picker is a custom button-based dropdown
+          // showing "Select One" until clicked. Three-tier strategy:
+          //   1) data-automation-id path → existing selectDropdown helper (CDP-aware)
+          //   2) Direct button click on the field with fuzzy option match (e.g.
+          //      "Bachelors" should still match "Bachelor of Engineering" /
+          //      "Bachelor's Degree")
+          //   3) Try the original raw degree string as fallback when normalised
+          //      didn't fuzzy-match anything.
           const fieldAutoId = degreeField.getAttribute?.("data-automation-id");
-          if (fieldAutoId) await selectDropdown(fieldAutoId, degreeNormalized);
+          let degreeSelected = false;
+          if (fieldAutoId) {
+            degreeSelected = await selectDropdown(fieldAutoId, degreeNormalized);
+          }
+          if (!degreeSelected) {
+            degreeSelected = await selectDegreeDropdownFuzzy(degreeField, degreeNormalized, edu.degree);
+          }
+          if (!degreeSelected) {
+            LOG(`Degree dropdown could not be selected — user must pick "${degreeNormalized}" manually`);
+          }
         }
       }
 
@@ -3375,6 +3429,92 @@
 
     LOG(`Dropdown ${fieldAutomationId} could not be filled — user must select "${optionText}" manually`);
     return false;
+  }
+
+  /**
+   * [PR3 fix #31] Fuzzy-match degree dropdown selection.
+   *
+   * Workday's degree options vary across instances ("Bachelor's Degree",
+   * "Bachelor of Engineering", "Bachelor of Science", etc.) — the canonical
+   * "Bachelors" never appears verbatim. We open the dropdown and:
+   *   - Prefer an exact "{stem}'s Degree" match
+   *   - Fall back to any option whose text starts with the stem ("Bachelor")
+   *   - Fall back to options that contain the original raw degree text
+   *
+   * Returns true if an option was clicked.
+   */
+  async function selectDegreeDropdownFuzzy(field, normalized, rawDegree) {
+    if (!field || !normalized) return false;
+
+    // Find the dropdown trigger button — Workday renders these as <button>
+    // children of the formField container, often with text "Select One".
+    const btn = field.querySelector('button[aria-haspopup], button[aria-expanded], button');
+    if (!btn) return false;
+
+    // Already selected? Skip.
+    const currentText = (btn.textContent || "").trim().toLowerCase();
+    if (currentText && !currentText.includes("select one") && !currentText.includes("select")) {
+      LOG(`Degree dropdown already shows "${btn.textContent.trim()}" — skipping`);
+      return true;
+    }
+
+    // Open the popup. Click + dispatch a sequence of pointer/mouse events.
+    try { btn.click(); } catch {}
+    await sleep(400);
+
+    // Poll for option list — Workday renders options as [role="option"] or
+    // [data-automation-id="promptOption"] in a popover.
+    let options = [];
+    for (let i = 0; i < 12 && options.length === 0; i++) {
+      options = Array.from(document.querySelectorAll(
+        '[role="option"], [data-automation-id="promptOption"]'
+      ));
+      if (options.length === 0) await sleep(80);
+    }
+    if (options.length === 0) {
+      LOG(`Degree dropdown popup did not open via click — falling back`);
+      return false;
+    }
+
+    // Build the stem from normalized: "Bachelors" → "bachelor"
+    const stem = String(normalized).toLowerCase().replace(/s$/, "").replace(/'s$/, "");
+    const rawLower = String(rawDegree || "").toLowerCase().trim();
+
+    // Score each option:
+    //   3 = "{Stem}'s Degree" exact-ish ("Bachelor's Degree")
+    //   2 = starts with stem ("Bachelor of Engineering")
+    //   1 = contains raw degree text ("B.Eng" → "Bachelor of Engineering")
+    //   0 = no match
+    function score(opt) {
+      const text = (opt.textContent || "").trim().toLowerCase();
+      if (!text) return 0;
+      if (new RegExp(`^${stem}'s\\s+degree`).test(text)) return 3;
+      if (new RegExp(`^${stem}\\b`).test(text)) return 2;
+      if (rawLower && rawLower.length >= 3 && text.includes(rawLower)) return 1;
+      return 0;
+    }
+
+    let best = null;
+    let bestScore = 0;
+    for (const opt of options) {
+      const s = score(opt);
+      if (s > bestScore) { best = opt; bestScore = s; }
+    }
+
+    if (!best || bestScore === 0) {
+      LOG(`No fuzzy match for degree "${normalized}" / "${rawDegree}" in ${options.length} options`);
+      // Close popup so the user isn't stuck with it open
+      try { document.body.click(); } catch {}
+      return false;
+    }
+
+    LOG(`Degree fuzzy-match: clicking "${best.textContent.trim()}" (score ${bestScore})`);
+    try { best.click(); } catch {}
+    await sleep(300);
+
+    // Verify
+    const verifyText = (btn.textContent || "").trim().toLowerCase();
+    return !!verifyText && !verifyText.includes("select one") && !verifyText.includes("select");
   }
 
   /**
