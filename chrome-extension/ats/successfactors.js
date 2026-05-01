@@ -528,4 +528,273 @@
     }
   });
 
+  /* ══════════════════════════════════════════════════════════════════════
+   * PHASE D — Apply worker's saved fills onto the live SAP form (PR5)
+   *
+   * When the user lands on a SAP application form like
+   *   https://career17.sapsf.com/portalcareer?career_ns=job_application&career_job_req_id=N&...
+   * we:
+   *   1. Parse career_job_req_id from the URL → SAP req id
+   *   2. Read _aa_userId and _aa_workerToken from chrome.storage.local
+   *   3. GET /api/pending-fill?atsHost={hostname}&reqId={N} with auth headers
+   *   4. Iterate fill.fields[] and apply each (text / dropdown / screener)
+   *   5. Show overlay summary; never click Apply/Submit (user policy)
+   *
+   * Mirrors worker/steps/runApplication.ts page.evaluate fill_form code.
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  function parseSapReqIdFromUrl() {
+    try {
+      const u = new URL(window.location.href);
+      // career_job_req_id is the canonical param. Some SAP variants put it
+      // in the URL hash; fall back to scanning all params.
+      return u.searchParams.get("career_job_req_id") ||
+             u.searchParams.get("jobId") ||
+             u.searchParams.get("reqId") ||
+             null;
+    } catch { return null; }
+  }
+
+  function isSapApplicationFormUrl() {
+    const href = window.location.href;
+    if (!/sapsf\.com|successfactors\./i.test(window.location.hostname)) return false;
+    // Workforce / job_application namespace tells us the user is on the
+    // application form (not the job listing).
+    return /career_ns=job_application|career_job_req_id=/i.test(href);
+  }
+
+  /** Find an input/textarea by its associated label text containing matchValue. */
+  function findInputByLabelMatch(matchValue) {
+    const needle = (matchValue || "").toLowerCase().trim();
+    if (!needle) return null;
+    const all = Array.from(document.querySelectorAll("input, textarea"));
+    return all.find((el) => {
+      const lbl = (el.labels && el.labels[0] ? el.labels[0].innerText : "").toLowerCase();
+      return lbl.includes(needle);
+    }) || null;
+  }
+
+  /** Set value via the React-aware native setter — same pattern as worker fill_form. */
+  function setSapValue(el, value) {
+    if (!el) return false;
+    try {
+      const proto = el.tagName === "TEXTAREA"
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (setter) setter.call(el, value);
+      else el.value = value;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      return true;
+    } catch (err) {
+      LOG("setSapValue failed:", err.message);
+      return false;
+    }
+  }
+
+  /** Open a SAP rcmpaginatedselect dropdown by labelMatch and pick the option whose text best matches `answer`. */
+  async function pickSapDropdown(labelMatch, answer) {
+    const needle = (labelMatch || "").toLowerCase().trim();
+    if (!needle) return false;
+    const wantedAnswer = (answer || "").toLowerCase().trim();
+    const inputs = Array.from(document.querySelectorAll("input.rcmpaginatedselectinput, input"));
+    const input = inputs.find((i) => {
+      const lbl = (i.labels && i.labels[0] ? i.labels[0].innerText : "").toLowerCase();
+      return lbl.includes(needle);
+    });
+    if (!input) { LOG("dropdown input not found for", labelMatch); return false; }
+
+    if (input.value && input.value.trim() && !/no selection/i.test(input.value)) {
+      LOG("dropdown already filled:", labelMatch, "->", input.value);
+      return true;
+    }
+
+    const button = input.parentElement && input.parentElement.querySelector("button.rcmpaginatedselectbutton");
+    if (!button) { LOG("dropdown trigger button not found for", labelMatch); return false; }
+
+    button.click();
+    // Poll for popover up to 3s
+    for (let i = 0; i < 25; i++) {
+      await sleep(120);
+      const popovers = Array.from(document.querySelectorAll(".sfoverlaycontainer")).filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 50 && r.height > 30;
+      });
+      if (!popovers.length) continue;
+      const items = Array.from(popovers[0].querySelectorAll('a[role="menuitem"], li[role="option"], a'))
+        .filter((el) => {
+          const t2 = ((el.innerText) || "").trim();
+          return t2 && t2.length < 100 && !/no selection/i.test(t2);
+        });
+      if (items.length === 0) continue;
+      // Prefer exact match on answer, fall back to substring contains
+      let target = items.find((el) => ((el.innerText) || "").toLowerCase().trim() === wantedAnswer);
+      if (!target) target = items.find((el) => ((el.innerText) || "").toLowerCase().includes(wantedAnswer));
+      if (!target && items.length > 0) target = items[0]; // last-resort: first real option
+      if (target) {
+        target.click();
+        await sleep(200);
+        LOG("dropdown filled:", labelMatch, "->", (target.innerText || "").trim());
+        return true;
+      }
+    }
+    LOG("dropdown popover never rendered for", labelMatch);
+    document.body.click();
+    return false;
+  }
+
+  /** Click Yes/No on a SAP screener whose label/question text matches questionText. */
+  function answerSapScreener(questionText, answer) {
+    const needle = (questionText || "").toLowerCase().trim().slice(0, 40);
+    if (!needle) return false;
+    const wantNo = /^no$/i.test((answer || "").trim());
+    const allFieldDivs = Array.from(
+      document.querySelectorAll('[class*="rcmFormQuestion"], [class*="RCMFormField"]')
+    ).filter((div) => div.querySelectorAll('.globalRadio.sfRadioInputField, .globalRadio').length >= 2);
+    const containers = Array.from(
+      document.querySelectorAll(".RCMFormField.rcmFormQuestionElement, .RCMFormField .rcmFormQuestionElement")
+    );
+    const all = containers.length > 0 ? containers : allFieldDivs;
+    for (const container of all) {
+      const questionEl = container.querySelector("label, .label, .question, .formLabel, span") || container;
+      const q = ((questionEl.innerText) || "").toLowerCase().trim();
+      if (!q.includes(needle) && !needle.includes(q.slice(0, 40))) continue;
+      const radios = Array.from(container.querySelectorAll(".globalRadio.sfRadioInputField, .globalRadio"));
+      const yesRadio = radios.find((r) => /^yes\b/i.test((r.innerText || "").trim()));
+      const noRadio  = radios.find((r) => /^no\b/i.test((r.innerText || "").trim()));
+      const target = wantNo ? (noRadio || yesRadio) : (yesRadio || noRadio);
+      if (!target) continue;
+      const innerSpan = target.querySelector(".radioCheck, .radioLabel, label, span");
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      target.dispatchEvent(new MouseEvent("mouseup",   { bubbles: true, cancelable: true }));
+      target.click();
+      if (innerSpan) {
+        innerSpan.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        innerSpan.dispatchEvent(new MouseEvent("mouseup",   { bubbles: true, cancelable: true }));
+        innerSpan.click();
+      }
+      LOG("screener answered:", questionText.slice(0, 50), "->", wantNo ? "No" : "Yes");
+      return true;
+    }
+    return false;
+  }
+
+  function showWorkerFillOverlay(filledCount, avgConfidence) {
+    if (document.getElementById("aa-worker-fill-overlay")) return;
+    const overlay = document.createElement("div");
+    overlay.id = "aa-worker-fill-overlay";
+    overlay.style.cssText = [
+      "position:fixed", "top:16px", "right:16px", "z-index:2147483640",
+      "background:linear-gradient(135deg,#10B981 0%,#059669 100%)",
+      "color:#fff", "padding:12px 16px", "border-radius:10px",
+      "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+      "font-size:13px", "font-weight:600",
+      "box-shadow:0 8px 28px rgba(16,185,129,0.42)",
+      "max-width:320px",
+    ].join(";");
+    const confPct = avgConfidence > 0 ? ` · ${Math.round(avgConfidence * 100)}% conf` : "";
+    overlay.innerHTML = `
+      <div style="font-size:12px;font-weight:700;margin-bottom:4px;">✓ Filled by AutoApply</div>
+      <div style="font-size:11px;font-weight:500;opacity:0.92;">${filledCount} field${filledCount === 1 ? "" : "s"} filled${confPct}</div>
+      <div style="font-size:11px;font-weight:500;opacity:0.85;margin-top:6px;">Review and click Apply when ready.</div>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  async function applyWorkerFillsIfPresent() {
+    if (!isSapApplicationFormUrl()) return;
+    const reqId = parseSapReqIdFromUrl();
+    if (!reqId) { LOG("Phase D: no reqId in URL — skipping"); return; }
+    const atsHost = window.location.hostname;
+    const stored = await new Promise((r) =>
+      chrome.storage.local.get(["_aa_userId", "_aa_workerToken", "autoapplyUrl"], r)
+    );
+    if (!stored._aa_workerToken) {
+      LOG("Phase D: _aa_workerToken not set in chrome.storage.local — skipping API call. " +
+          "Set via: chrome.storage.local.set({_aa_workerToken: '...', _aa_userId: 'you@email.com'})");
+      return;
+    }
+    if (!stored._aa_userId) {
+      LOG("Phase D: _aa_userId not set in chrome.storage.local — skipping API call.");
+      return;
+    }
+    const apiBase = stored.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
+    const url = `${apiBase}/api/pending-fill?atsHost=${encodeURIComponent(atsHost)}&reqId=${encodeURIComponent(reqId)}`;
+    LOG("Phase D: GET", url);
+
+    let resp;
+    try {
+      resp = await fetch(url, {
+        method: "GET",
+        headers: {
+          "X-Worker-Token": stored._aa_workerToken,
+          "X-User-Id":      stored._aa_userId,
+        },
+      });
+    } catch (err) {
+      LOG("Phase D: fetch failed:", err.message);
+      return;
+    }
+
+    if (resp.status === 404) {
+      LOG("Phase D: no pending fill for this user/ats/req — nothing to do");
+      return;
+    }
+    if (!resp.ok) {
+      LOG("Phase D: API returned", resp.status);
+      return;
+    }
+
+    const body = await resp.json().catch(() => ({}));
+    if (!body.found || !body.fill || !Array.isArray(body.fill.fields)) {
+      LOG("Phase D: API response had no fields:", JSON.stringify(body).slice(0, 200));
+      return;
+    }
+
+    const fields = body.fill.fields;
+    LOG(`Phase D: applying ${fields.length} worker-saved field(s)`);
+
+    let filledCount = 0;
+    let totalConf = 0;
+    let confSamples = 0;
+
+    for (const f of fields) {
+      try {
+        let ok = false;
+        if (f.kind === "text" && f.matchBy === "labelMatch") {
+          const el = findInputByLabelMatch(f.matchValue);
+          if (el) ok = setSapValue(el, f.answer);
+        } else if (f.kind === "dropdown" && f.matchBy === "labelMatch") {
+          ok = await pickSapDropdown(f.matchValue, f.answer);
+        } else if (f.kind === "screener" && f.matchBy === "questionText") {
+          ok = answerSapScreener(f.matchValue, f.answer);
+        } else {
+          LOG("Phase D: unsupported field combo:", f.kind, f.matchBy);
+        }
+        if (ok) {
+          filledCount++;
+          if (typeof f.confidence === "number") {
+            totalConf += f.confidence;
+            confSamples++;
+          }
+        }
+      } catch (err) {
+        LOG("Phase D: field apply error:", err.message);
+      }
+    }
+
+    const avgConf = confSamples > 0 ? totalConf / confSamples : 0;
+    LOG(`Phase D: done — filled ${filledCount}/${fields.length} (avg conf ${avgConf.toFixed(2)})`);
+    if (filledCount > 0) showWorkerFillOverlay(filledCount, avgConf);
+  }
+
+  // Run on document_idle entry; also retry once after 2s in case React form
+  // hadn't fully rendered the inputs/labels yet.
+  (async () => {
+    await sleep(1500);
+    try { await applyWorkerFillsIfPresent(); } catch (err) { LOG("Phase D init failed:", err.message); }
+  })();
+
 })();
