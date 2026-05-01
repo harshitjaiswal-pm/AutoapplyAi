@@ -3203,23 +3203,29 @@
         });
       });
 
-      document.getElementById("aa-btn-retry")?.addEventListener("click", () => {
+      // [PR6 fix #37/#38] "Try again" = full re-tailor (LLM round-trip ~30s, ~$0.02).
+      // "Reload resume" = JUST refetch the already-generated PDF (no LLM call).
+      // Previously both buttons re-tailored, which wasted time + tokens when the
+      // user only wanted to drop the existing PDF onto the page.
+      document.getElementById("aa-btn-retry")?.addEventListener("click", async () => {
+        LOG("Try Again clicked — clearing cache and re-tailoring");
         removeBanner();
-        window.__autoapply_ats_injected = false;
-        setTimeout(() => init(), 500);
-      });
-      document.getElementById("aa-btn-reload-resume")?.addEventListener("click", async () => {
-        LOG("Reload Resume clicked — clearing cache and re-tailoring");
-        removeBanner();
-        // Clear all cached tailoring data so init triggers a fresh TAILOR_AND_FILL
-        await new Promise(resolve => chrome.storage.local.remove([
+        // Clear all cached tailoring data so init() triggers a fresh TAILOR_AND_FILL
+        await new Promise((resolve) => chrome.storage.local.remove([
           "tailoredResumePdf",
           "tailoredResumeFilename",
           "lastTailoredResult",
-          "lastTailoredJob"
+          "lastTailoredJob",
         ], resolve));
         window.__autoapply_ats_injected = false;
         setTimeout(() => init(), 500);
+      });
+      document.getElementById("aa-btn-reload-resume")?.addEventListener("click", () => {
+        LOG("Reload Resume clicked — refetching cached PDF only (no re-tailor)");
+        // Show a quick info banner so the user sees something happen even if
+        // the download dialog is suppressed by the browser.
+        showBanner("Reloading existing resume...", "info", { subtext: "Downloading the cached PDF — no re-tailoring." });
+        _downloadResumeForPage();
       });
       document.getElementById("aa-btn-skip")?.addEventListener("click", () => {
         chrome.storage.local.remove(["pendingApplication"]);
