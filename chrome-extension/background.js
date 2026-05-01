@@ -119,6 +119,14 @@ const KNOWN_ATS_DOMAINS = [
   // cause a stale flag to inject into the wrong company's breezy.hr tab. Moving to
   // the KNOWN_ATS_DOMAINS path enforces the pendingApplication guard instead.
   "breezy.hr",
+  // [Fix 2026-05-01 PR1] SmartRecruiters never activated because it wasn't here —
+  // the manifest matches but the floating trigger was never injected.
+  "smartrecruiters.com",
+  // [Fix 2026-05-01 PR1] SAP SuccessFactors hosted at *.sapsf.com (e.g. TELUS uses
+  // career17.sapsf.com). Enables Phase D worker-fill on SAP application forms.
+  "sapsf.com",
+  "successfactors.com",
+  "successfactors.eu",
 ];
 
 /* ── Keep-alive mechanism for MV3 service worker ──
@@ -2482,24 +2490,37 @@ function injectFloatingTrigger(tabId) {
 
       function openPanel() {
         buildPanel();
-        panel.style.display = "block";
+        // [Fix 2026-05-01 PR1] Some host sites (e.g. TELUS Workday) inject CSS rules
+        // that win over `panel.style.display = "block"` because of !important or
+        // specificity. Use removeProperty + setProperty(...,'important') to guarantee
+        // the panel actually appears, and add an .aa-panel-open class for sites that
+        // hook into class-based animation overrides.
+        panel.style.removeProperty("display");
+        panel.style.setProperty("display", "block", "important");
+        panel.classList.add("aa-panel-open");
         // Allow display:block to paint, then animate in
         requestAnimationFrame(() => {
-          panel.style.opacity = "1";
-          panel.style.transform = "translateY(0)";
+          panel.style.setProperty("opacity", "1", "important");
+          panel.style.setProperty("transform", "translateY(0)", "important");
         });
         pill.innerHTML = "✕ Close";
         pill.style.background = "linear-gradient(135deg,#3730A3 0%,#5B21B6 100%)";
         open = true;
+        try { console.log("[AutoApply] panel opened"); } catch(_){}
       }
 
       function closePanel() {
-        panel.style.opacity = "0";
-        panel.style.transform = "translateY(6px)";
-        setTimeout(() => { panel.style.display = "none"; }, 150);
+        panel.style.setProperty("opacity", "0", "important");
+        panel.style.setProperty("transform", "translateY(6px)", "important");
+        setTimeout(() => {
+          panel.style.removeProperty("display");
+          panel.style.setProperty("display", "none", "important");
+          panel.classList.remove("aa-panel-open");
+        }, 150);
         pill.innerHTML = "✦ AutoApply";
         pill.style.background = GRAD;
         open = false;
+        try { console.log("[AutoApply] panel closed"); } catch(_){}
       }
 
       let open = false;

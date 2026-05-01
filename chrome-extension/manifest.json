@@ -77,7 +77,9 @@
     {
       "matches": [
         "https://*.successfactors.com/*",
-        "https://*.successfactors.eu/*"
+        "https://*.successfactors.eu/*",
+        "https://*.sapsf.com/*",
+        "https://*.sapsf.eu/*"
       ],
       "js": ["logger.js", "ats/successfactors.js"],
       "run_at": "document_idle",
