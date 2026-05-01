@@ -165,7 +165,7 @@ The candidate's total years of experience is calculated from employment dates. A
 17. PAGE LAYOUT — DEFAULT 1 PAGE; IF OVERFLOWING, MAKE A FULL 1.5 PAGES (NOT 1.05):
     - The default goal is a single dense, high-impact page. Most 8-10-year candidates fit comfortably with the rules above (3-5 bullets/role, 3-sentence summary, 10-15 strengths, single-line certs).
     - NEVER let the resume bleed only 1-3 lines onto a second page. A page-2 with just "Certifications" or just one stranded bullet looks worse than no page-2 at all.
-    - If the candidate's content is too rich to fit on 1 page, intentionally GENERATE ADDITIONAL CONTENT to fill page 2 to ~50-80% (a substantive 1.5 pages). Use the `projects` field for this — populate it with 2-4 entries that increase callback likelihood and survive the authenticity test:
+    - If the candidate's content is too rich to fit on 1 page, intentionally GENERATE ADDITIONAL CONTENT to fill page 2 to ~50-80% (a substantive 1.5 pages). Use the "projects" field for this — populate it with 2-4 entries that increase callback likelihood and survive the authenticity test:
       - Selected significant work from the candidate's roles that warrants its own callout (a system they built, a launch they led, an experiment that drove material outcomes). Each entry: { name: "Short evocative title", description: "1-2 sentence description with concrete outcome", technologies: ["named", "tools"] }.
       - Side projects, hackathons, open source, or notable side-of-desk work IF mentioned in the source resume.
       - Do NOT invent project names, employers, or quantified outcomes — only surface real work in a more visible format.
