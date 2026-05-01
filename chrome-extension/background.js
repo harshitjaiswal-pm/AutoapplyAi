@@ -90,10 +90,34 @@ const injectedTabIds = new Map(); // tabId -> { url, timestamp }
 // whenever onUpdated fires on the already-open breezy.hr tab.
 const ownedByJob = new Map();
 
+// [PR7 fix A.5] Track which jobs (keyed by their _queuedAt) have already claimed
+// a tab. If two ATS tabs fire onUpdated in quick succession during batch mode
+// (e.g. Job 5 and Job 6 both opened within a couple seconds), the second tab
+// must NOT also claim Job 5 just because pendingApplication still reads as
+// Job 5 at onUpdated time. We allow only the FIRST tab opening within 60s of
+// a click to claim that job; subsequent tabs read this map and refuse.
+//
+// Key: queuedAt (number)  Value: { tabId, claimedAt }
+// Entries auto-expire after 60s.
+const claimedJobs = new Map();
+function pruneClaimedJobs() {
+  const cutoff = Date.now() - 60_000;
+  for (const [k, v] of claimedJobs) {
+    if (v.claimedAt < cutoff) claimedJobs.delete(k);
+  }
+}
+
 // Clear tab from injected tracking when it's closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   injectedTabIds.delete(tabId);
+  const owner = ownedByJob.get(tabId);
   ownedByJob.delete(tabId);
+  // [PR7 fix A.5] Release this job's claim if it was held by the closing tab,
+  // so a manually re-opened tab for the same job can re-claim cleanly.
+  if (owner && owner.queuedAt) {
+    const claim = claimedJobs.get(owner.queuedAt);
+    if (claim && claim.tabId === tabId) claimedJobs.delete(owner.queuedAt);
+  }
   if (tabId === applyTabId) {
     console.log("AutoApply BG: apply tab closed — clearing applyTabId");
     applyTabId = null;
@@ -2620,10 +2644,23 @@ async function injectATSScript(tabId, url) {
   const pendingForOwnership = await new Promise(r => chrome.storage.local.get(["pendingApplication"], r));
   const pendingJob = pendingForOwnership.pendingApplication;
   if (pendingJob) {
+    // [PR7 fix A.5] Per-job lock: only the FIRST tab to reach this point within
+    // the 60s window of a SET_PENDING_APPLICATION click is allowed to claim
+    // that job. Later tabs (Job 6's tab firing onUpdated while Job 5's pending
+    // is still in storage) skip claim — they'll get the next job's pending.
+    pruneClaimedJobs();
+    const queuedAt = pendingJob._queuedAt || Date.now();
+    const existingClaim = claimedJobs.get(queuedAt);
+    if (existingClaim && existingClaim.tabId !== tabId) {
+      console.log(`AutoApply BG: Job (queuedAt ${queuedAt}) already claimed by tab ${existingClaim.tabId}; tab ${tabId} skipping (waiting for next pendingApplication).`);
+      try { AALog && AALog.nav("bg.inject.skipDuplicateClaim", { tabId, claimedBy: existingClaim.tabId, queuedAt }); } catch(_){}
+      return;
+    }
+    claimedJobs.set(queuedAt, { tabId, claimedAt: Date.now() });
     ownedByJob.set(tabId, {
       jobTitle: pendingJob.jobTitle || "",
       company: pendingJob.company || "",
-      queuedAt: pendingJob._queuedAt || Date.now(),
+      queuedAt,
     });
   }
 
