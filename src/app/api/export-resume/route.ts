@@ -125,50 +125,52 @@ async function generateDocx(resume: any) {
   const NAVY = "1B2A4A";
   const GRAY = "555555";
 
-  // Build experience paragraphs
+  // Build experience paragraphs in the reference-resume format:
+  //   Line 1 (bold navy): "{Company}  |  {Title}"
+  //   Line 2 (italic gray): "{Location}  |  {Dates}"
+  // No tab-aligned right-side date; everything reads left-to-right with pipe separators.
   const experienceChildren: Paragraph[] = [];
   for (const exp of resume.experience || []) {
-    // Line 1: Role (left) + Location (right)
+    const titleField = exp.title || exp.role || "";
+    // Line 1: Company | Title
     experienceChildren.push(
       new Paragraph({
         spacing: { before: 160, after: 40 },
-        // Use explicit right margin position (page width 12240 - left/right margin 720 each = 10800)
-        // rather than TabStopPosition.MAX which resolves to 9026 — too short for letter-size pages
-        // and caused the location/year text to sit mid-line instead of the true right edge.
-        tabStops: [{ type: TabStopType.RIGHT, position: 10800 }],
         children: [
-          new TextRun({ text: exp.role, bold: true, font: "Arial", size: 22, color: NAVY }),
-          ...(exp.location
-            ? [new TextRun({ text: `\t${exp.location}`, font: "Arial", size: 20, color: GRAY })]
-            : []),
+          new TextRun({
+            text: titleField ? `${exp.company}  |  ${titleField}` : `${exp.company}`,
+            bold: true,
+            font: "Arial",
+            size: 22,
+            color: NAVY,
+          }),
         ],
       })
     );
-    // Line 2: Company | Dates (italic)
-    // Date string is built tolerantly: prefer startDate/endDate (parser format),
-    // fall back to a single `dates` string if present (legacy/raw resume format),
-    // then to "Dates not specified" so the rendered DOCX never shows
-    // "undefined – undefined" to the recruiter.
+    // Line 2: Location | Dates (italic, gray)
     const dateStr = (() => {
       if (exp.startDate && exp.endDate) return `${exp.startDate} – ${exp.endDate}`;
       if (exp.startDate) return `${exp.startDate} – Present`;
       if (typeof exp.dates === "string" && exp.dates.trim()) return exp.dates.trim();
       return "";
     })();
-    experienceChildren.push(
-      new Paragraph({
-        spacing: { after: 60 },
-        children: [
-          new TextRun({
-            text: dateStr ? `${exp.company} | ${dateStr}` : `${exp.company}`,
-            italics: true,
-            font: "Arial",
-            size: 20,
-            color: GRAY,
-          }),
-        ],
-      })
-    );
+    const locDateLine = [exp.location, dateStr].filter(Boolean).join("  |  ");
+    if (locDateLine) {
+      experienceChildren.push(
+        new Paragraph({
+          spacing: { after: 60 },
+          children: [
+            new TextRun({
+              text: locDateLine,
+              italics: true,
+              font: "Arial",
+              size: 20,
+              color: GRAY,
+            }),
+          ],
+        })
+      );
+    }
     // Bullets
     for (const bullet of exp.bullets || []) {
       experienceChildren.push(
@@ -348,7 +350,7 @@ async function generateDocx(resume: any) {
           // Summary
           ...(resume.summary
             ? [
-                sectionHeading("Professional Summary"),
+                sectionHeading("Executive Summary"),
                 new Paragraph({
                   spacing: { after: 80 },
                   alignment: AlignmentType.JUSTIFIED,
@@ -357,27 +359,46 @@ async function generateDocx(resume: any) {
               ]
             : []),
 
-          // Skills — normalize all AI output shapes, then render
+          // Core Strengths — flatten the categorized skills object into a
+          // single pipe-separated line (matches reference resume formatting).
+          // The LLM still outputs categorized skills; we just render them flat
+          // so the visual emphasis stays on the strengths themselves rather
+          // than the category labels (which often feel like AI scaffolding).
           ...((() => {
             const skillEntries = normalizeSkills(resume.skills);
             if (skillEntries.length === 0) return [];
+            const allSkills = skillEntries
+              .flatMap((entry) => entry.items)
+              .map((s) => String(s).trim())
+              .filter((s) => s.length > 0);
+            // Dedupe (case-insensitive) while preserving first-appearance order.
+            const seen = new Set<string>();
+            const flat = allSkills.filter((s) => {
+              const k = s.toLowerCase();
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            if (flat.length === 0) return [];
             return [
-              sectionHeading("Skills"),
-              ...skillEntries.map((entry) =>
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun({ text: `${entry.category}: `, bold: true, font: "Arial", size: 20 }),
-                    new TextRun({ text: entry.items.join(", "), font: "Arial", size: 20 }),
-                  ],
-                })
-              ),
+              sectionHeading("Core Strengths"),
+              new Paragraph({
+                spacing: { after: 40 },
+                alignment: AlignmentType.JUSTIFIED,
+                children: [
+                  new TextRun({
+                    text: flat.join("  |  "),
+                    font: "Arial",
+                    size: 20,
+                  }),
+                ],
+              }),
             ];
           })()),
 
           // Experience
           ...(experienceChildren.length
-            ? [sectionHeading("Experience"), ...experienceChildren]
+            ? [sectionHeading("Professional Experience"), ...experienceChildren]
             : []),
 
           // Education
