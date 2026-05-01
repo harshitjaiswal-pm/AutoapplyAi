@@ -145,12 +145,22 @@ async function generateDocx(resume: any) {
       })
     );
     // Line 2: Company | Dates (italic)
+    // Date string is built tolerantly: prefer startDate/endDate (parser format),
+    // fall back to a single `dates` string if present (legacy/raw resume format),
+    // then to "Dates not specified" so the rendered DOCX never shows
+    // "undefined – undefined" to the recruiter.
+    const dateStr = (() => {
+      if (exp.startDate && exp.endDate) return `${exp.startDate} – ${exp.endDate}`;
+      if (exp.startDate) return `${exp.startDate} – Present`;
+      if (typeof exp.dates === "string" && exp.dates.trim()) return exp.dates.trim();
+      return "";
+    })();
     experienceChildren.push(
       new Paragraph({
         spacing: { after: 60 },
         children: [
           new TextRun({
-            text: `${exp.company} | ${exp.startDate} – ${exp.endDate}`,
+            text: dateStr ? `${exp.company} | ${dateStr}` : `${exp.company}`,
             italics: true,
             font: "Arial",
             size: 20,
