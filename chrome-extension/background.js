@@ -1896,11 +1896,26 @@ function injectFloatingTrigger(tabId) {
             : (currentPageJob || pending || lastJob);
 
           // Use keyed map lookup for hasPdf — eliminates the wrong-resume display bug.
-          // Fallback: scan all entries by company+title in case key was generated from a
-          // different URL (e.g. lastFilledJob.applyUrl differs from the stored applyUrl).
+          // [PR2 fix 2026-05-01 F1/F18] Three-tier lookup priority:
+          //   1) ATS page URL (currentPageJob.applyUrl = window.location.href)
+          //   2) LinkedIn URL (pending.applyUrl) — set during the LinkedIn batch flow,
+          //      used as the primary `resumeKey` during tailoring
+          //   3) Company + title fuzzy match (covers stale-URL edge cases)
+          // Previously only the first lookup ran, so an ATS page whose tailoring was
+          // keyed off the LinkedIn URL would miss tabKey if the dual-write was delayed
+          // or the panel rebuilt before TAILOR_AND_FILL completed.
           const resumeMap = stored.tailoredResumeMap || {};
           const resumeKey = makeResumeKey(jobInfo);
           let   mapEntry  = resumeMap[resumeKey];
+          // Tier 2: try the LinkedIn URL key when we're on an ATS and have a pending
+          // LinkedIn job kicked off via batch.
+          if (!mapEntry?.pdf && !isLinkedIn && pending && pending.applyUrl && pending.applyUrl !== jobInfo?.applyUrl) {
+            const linkedinKey = makeResumeKey(pending);
+            if (resumeMap[linkedinKey]?.pdf) {
+              mapEntry = resumeMap[linkedinKey];
+              console.log("AutoApply panel: hit resume via LinkedIn URL fallback key", linkedinKey);
+            }
+          }
           if (!mapEntry?.pdf && jobInfo) {
             // [AutoQA fix 2026-04-11] Key mismatch guard — find the best entry by title+company
             const co = (jobInfo.company  || "").toLowerCase();
@@ -2775,14 +2790,18 @@ async function handleTailorAndFill(job) {
       const base64 = arrayBufferToBase64(arrayBuffer);
       // Use data URL — URL.createObjectURL is not available in MV3 service workers
       resumeBlobUrl = `data:application/pdf;base64,${base64}`;
-      // [v19 fix] Clean, human-readable filename: "Resume - Company - Job Title.pdf"
-      // No batch numbers or location clutter — just enough to identify which job.
-      // Truncate to 80 chars before .pdf to prevent ATS upload rejection.
-      const safeCompany = (job.company || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "").trim();
-      const safeTitle   = (job.jobTitle || "Role").replace(/[^a-zA-Z0-9 &\-]/g, "").trim();
-      const rawFilename = `Resume - ${safeCompany} - ${safeTitle}`;
-      const truncatedFilename = rawFilename.length > 80 ? rawFilename.substring(0, 80).trim() : rawFilename;
-      const filename = `${truncatedFilename}.pdf`;
+      // [PR2 fix 2026-05-01 BUG-002] Switched to "{LastName}_{Company}_{RoleAbbr}.pdf"
+      // (e.g. "Jaiswal_Zynga_PM.pdf") so recruiters see Harshit's name on the file
+      // instead of a generic "AutoApply" / "Resume - ..." pattern. Mirrors the
+      // shared buildResumeFilename helper in src/lib/buildFilename.ts.
+      const fullName = stored.userProfile
+        ? [stored.userProfile.firstName, stored.userProfile.lastName].filter(Boolean).join(" ").trim()
+        : "";
+      const filename = buildResumeFilenameLocal({
+        applicantName: fullName,
+        company:       job.company,
+        role:          job.jobTitle,
+      }) + ".pdf";
 
       // ── Keyed resume map: each job gets its own slot (fixes wrong-resume bug) ──
       const resumeKey    = makeResumeKey(job);
@@ -2825,9 +2844,16 @@ async function handleTailorAndFill(job) {
       // ── Auto-save a "sticky" copy to Downloads so the AI can always
       // reference the latest tailored PDF via file_upload. This runs silently
       // alongside the user-facing download — no dialog shown.
-      // [BUG-002 fix 2026-04-16] Pass the job context so the filename follows
-      // the "Company_Role_resume.pdf" convention instead of the old fixed name.
-      saveResumeToFixedPath(base64, { company: job?.company, jobTitle: job?.jobTitle });
+      // [BUG-002 fix 2026-04-16 / PR2 fix 2026-05-01] Pass the job context AND
+      // applicantName so the filename follows "{LastName}_{Company}_{RoleAbbr}.pdf".
+      const stickyName = stored.userProfile
+        ? [stored.userProfile.firstName, stored.userProfile.lastName].filter(Boolean).join(" ").trim()
+        : "";
+      saveResumeToFixedPath(base64, {
+        company:       job?.company,
+        jobTitle:      job?.jobTitle,
+        applicantName: stickyName,
+      });
     } else {
       const errBody = await pdfRes.text().catch(() => "");
       console.warn(`AutoApply BG: PDF export failed: ${pdfRes.status} — ${errBody.substring(0, 200)}`);
@@ -2982,10 +3008,10 @@ function makeResumeKey(job) {
 }
 
 /**
- * [BUG-002 fix 2026-04-16] Build a "CompanyName_RoleName_resume.pdf" style
- * filename from job metadata. Strips anything that isn't alnum/space/&/-/_,
- * collapses whitespace, and trims to a reasonable length so the OS doesn't
- * reject it. Returns null if neither company nor role are usable — caller
+ * [BUG-002 fix 2026-04-16] Build a filename from job metadata.
+ * [PR2 fix 2026-05-01] Switched to "{LastName}_{Company}_{RoleAbbr}.pdf"
+ * (e.g. "Jaiswal_Zynga_PM.pdf"). Mirrors src/lib/buildFilename.ts.
+ * Returns null if neither company nor role are usable — caller
  * should fall back to the legacy fixed filename in that case.
  */
 function buildFixedPathFilename(jobMeta) {
@@ -2999,8 +3025,56 @@ function buildFixedPathFilename(jobMeta) {
   const company = sanitize(jobMeta && jobMeta.company);
   const role    = sanitize(jobMeta && jobMeta.jobTitle);
   if (!company && !role) return null;
-  const parts = [company, role, "resume"].filter(Boolean);
-  return parts.join("_") + ".pdf";
+  const fullName = (jobMeta && jobMeta.applicantName) || "";
+  const stem = buildResumeFilenameLocal({
+    applicantName: fullName,
+    company:       jobMeta && jobMeta.company,
+    role:          jobMeta && jobMeta.jobTitle,
+  });
+  return stem + ".pdf";
+}
+
+/**
+ * [PR2 fix 2026-05-01] Local port of src/lib/buildFilename.ts so the extension
+ * service worker can use the same naming convention as the web app without an
+ * import (MV3 service workers can't import .ts files). Keep these in sync.
+ *   "Harshit Jaiswal" + "Zynga" + "Product Manager" → "Jaiswal_Zynga_PM"
+ */
+function buildResumeFilenameLocal(opts) {
+  const STOPWORDS = new Set([
+    "of", "and", "the", "for", "to", "in", "on", "at", "a", "an",
+    "with", "by", "or", "&",
+  ]);
+  const sanitize = (s) => (s || "").replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_").substring(0, 50);
+
+  const { applicantName, company, role } = opts || {};
+
+  let lastName = "Resume";
+  if (applicantName && applicantName.trim()) {
+    const tokens = applicantName.trim().split(/\s+/);
+    const last = tokens[tokens.length - 1] || "";
+    const cleaned = last.replace(/[^A-Za-z]/g, "");
+    if (cleaned) {
+      lastName = cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
+    }
+  }
+
+  const companyPart = company
+    ? sanitize(company.split(/[\s,.\-]+/)[0] || company)
+    : "";
+
+  const roleAbbrev = role
+    ? role
+        .replace(/[^a-zA-Z\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w && !STOPWORDS.has(w.toLowerCase()))
+        .slice(0, 5)
+        .map((w) => w.charAt(0).toUpperCase())
+        .join("")
+    : "";
+
+  const parts = [lastName, companyPart, roleAbbrev].filter(Boolean);
+  return parts.join("_") || "tailored_resume";
 }
 
 /**
@@ -3058,7 +3132,9 @@ function saveResumeToFixedPath(base64, jobMeta) {
 async function handleDownloadResume(job, callerTabId, opts) {
   const noGlobalFallback = !!(opts && opts.noGlobalFallback);
   const resumeKey = makeResumeKey(job);
-  const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename", "lastResumeKey"]);
+  // [PR2 fix 2026-05-01] Also fetch userProfile so saveResumeToFixedPath gets
+  // the applicantName for the {LastName}_{Company}_{RoleAbbr}.pdf convention.
+  const stored    = await chrome.storage.local.get(["tailoredResumeMap", "tailoredResumePdf", "tailoredResumeFilename", "lastResumeKey", "userProfile"]);
   const map       = stored.tailoredResumeMap || {};
   let   entry     = map[resumeKey];
 
@@ -3125,8 +3201,17 @@ async function handleDownloadResume(job, callerTabId, opts) {
     );
   }
   let base64   = entry?.pdf      || (globalMatchesCurrent ? stored.tailoredResumePdf : null);
+  // [PR2 fix 2026-05-01] Default filename matches {LastName}_{Company}_{RoleAbbr}.pdf
+  // when entry/global don't supply one.
+  const fallbackApplicantName = stored.userProfile
+    ? [stored.userProfile.firstName, stored.userProfile.lastName].filter(Boolean).join(" ").trim()
+    : "";
   let filename = entry?.filename || (globalMatchesCurrent ? stored.tailoredResumeFilename : null) ||
-    `Resume - ${(job?.company || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "")} - ${(job?.jobTitle || "Role").replace(/[^a-zA-Z0-9 &\-]/g, "")}.pdf`;
+    (buildResumeFilenameLocal({
+      applicantName: fallbackApplicantName,
+      company:       job?.company,
+      role:          job?.jobTitle,
+    }) + ".pdf");
 
   // [Fix 2026-04-13 Cycle 6] Recovery: if PDF export failed during tailoring, the
   // tailoredResumeMap entry won't have a PDF but lastTailoredResult still has the
@@ -3163,7 +3248,16 @@ async function handleDownloadResume(job, callerTabId, opts) {
           base64      = arrayBufferToBase64(ab);
           const safeC = ((ltj?.company   || job?.company   || "Company").replace(/[^a-zA-Z0-9 &\-]/g, "")).trim();
           const safeT = ((ltj?.jobTitle  || job?.jobTitle  || "Role"   ).replace(/[^a-zA-Z0-9 &\-]/g, "")).trim();
-          filename    = `Resume - ${safeC} - ${safeT}.pdf`.slice(0, 85);
+          // [PR2 fix 2026-05-01] Use the same {LastName}_{Company}_{RoleAbbr}.pdf
+          // convention as the primary export path.
+          const recoveryName = stored.userProfile
+            ? [stored.userProfile.firstName, stored.userProfile.lastName].filter(Boolean).join(" ").trim()
+            : "";
+          filename = buildResumeFilenameLocal({
+            applicantName: recoveryName,
+            company:       ltj?.company || job?.company,
+            role:          ltj?.jobTitle || job?.jobTitle,
+          }) + ".pdf";
           // Store so next download is instant
           const mapUpdate = await chrome.storage.local.get(["tailoredResumeMap"]);
           const rMap      = mapUpdate.tailoredResumeMap || {};
@@ -3205,9 +3299,17 @@ async function handleDownloadResume(job, callerTabId, opts) {
   console.log("AutoApply BG: Downloading resume — key:", resumeKey, "fromMap:", !!entry?.pdf, "filename:", safeFilename);
 
   // Also keep the sticky-path copy fresh so the AI always has a predictable
-  // path to use. [BUG-002 fix 2026-04-16] Pass job context so the filename is
-  // "Company_Role_resume.pdf" instead of the legacy fixed name.
-  saveResumeToFixedPath(base64, { company: job?.company, jobTitle: job?.jobTitle });
+  // path to use. [BUG-002 fix 2026-04-16 / PR2 fix 2026-05-01] Pass job context
+  // AND applicantName so the filename is "{LastName}_{Company}_{RoleAbbr}.pdf".
+  // userProfile is already in stored from the earlier .get() call above.
+  const stickyApplicantName = stored.userProfile
+    ? [stored.userProfile.firstName, stored.userProfile.lastName].filter(Boolean).join(" ").trim()
+    : "";
+  saveResumeToFixedPath(base64, {
+    company:       job?.company,
+    jobTitle:      job?.jobTitle,
+    applicantName: stickyApplicantName,
+  });
 
   // [BUG-003 fix 2026-04-16] Wrap chrome.downloads.download in a Promise so
   // we can resolve the surrounding async function with the real outcome
