@@ -729,12 +729,16 @@
     fillRadioCheckboxQuestions(user);
 
     // ── Free-text custom questions ──
+    // [PR4 fix GH-1] The "earliest start" / "available to start" labels can
+    // accidentally match Education's "Start date" / "Start year" sub-labels.
+    // Guard this set with avoidSectionKeywords=["education","school","university","college"]
+    // so any candidate input nested inside an Education section is rejected.
     const customTextFields = [
       { labels: ["compensation", "salary", "salary expectation", "compensation expectation", "desired salary", "expected salary", "pay expectation"], value: extractMaxPayFromJD(jobDescription) || user.salaryExpectation || user.compensation || "" },
-      { labels: ["earliest start", "when can you start", "available to start", "start availability"],  value: user.startDate || "2 weeks notice" },
+      { labels: ["earliest start", "when can you start", "available to start", "start availability"],  value: user.startDate || "2 weeks notice", avoidSections: ["education", "school", "university", "college", "academic"] },
     ];
-    for (const { labels, value } of customTextFields) {
-      if (value) fillByLabel(labels, value);
+    for (const { labels, value, avoidSections } of customTextFields) {
+      if (value) fillByLabel(labels, value, false, { avoidSections });
     }
 
     // Issue #6/#14: Generate AI answers for unfilled open-ended questions
@@ -756,8 +760,8 @@
         }
         // Re-run radio/custom text fills after React re-renders
         fillRadioCheckboxQuestions(user);
-        for (const { labels, value } of customTextFields) {
-          if (value) fillByLabel(labels, value, true);
+        for (const { labels, value, avoidSections } of customTextFields) {
+          if (value) fillByLabel(labels, value, true, { avoidSections });
         }
         console.log("AutoApply: Text fields re-filled");
 
@@ -768,8 +772,8 @@
         // that haven't fully settled by the first re-fill window.
         setTimeout(() => {
           fillRadioCheckboxQuestions(user);
-          for (const { labels, value } of customTextFields) {
-            if (value) fillByLabel(labels, value, true);
+          for (const { labels, value, avoidSections } of customTextFields) {
+            if (value) fillByLabel(labels, value, true, { avoidSections });
           }
           console.log("AutoApply: Safety-net 3rd fill pass complete");
         }, 3000);
@@ -1091,15 +1095,24 @@
     //     with no selection and the Yes/No question fell through unanswered.
     // Fixed: more permissive trigger detection + dispatch mousedown/mouseup/click
     // event sequence + poll for options up to 2.5s with 100ms intervals.
+    // [PR4 fix GH-2] Expanded trigger detection — Greenhouse work-authorization
+    // questions use a <button> with role="combobox" (or aria-haspopup), not a
+    // styled <div>. Add explicit selectors for those plus a fallback that
+    // walks all buttons and picks one whose label/role/aria suggests a Select.
     const selectTrigger = container.querySelector(
       "[class*='select__control'], [class*='SelectTrigger'], [class*='dropdown-toggle'], " +
-      "[data-testid*='select'], [class*='custom-select']"
-    ) || Array.from(container.querySelectorAll("div[class], button[class]")).find((el) => {
+      "[data-testid*='select'], [class*='custom-select'], " +
+      "button[role='combobox'], button[aria-haspopup='listbox'], button[aria-expanded]"
+    ) || Array.from(container.querySelectorAll("div[class], button, [role='combobox']")).find((el) => {
       const txt = (el.textContent || "").trim().toLowerCase();
-      // Unicode ellipsis (…) and ASCII ellipsis (...) both common in placeholders
+      // Unicode ellipsis (…) and ASCII ellipsis (...) both common in placeholders.
+      // Also accept "select an option", "select…", or any button that is clearly
+      // a combobox/has-popup trigger but doesn't have visible text yet.
       return /^select(\s*(one|an option|…|\.\.\.))?\s*$/i.test(txt) ||
              el.getAttribute("aria-haspopup") === "listbox" ||
-             el.getAttribute("role") === "combobox";
+             el.getAttribute("aria-haspopup") === "true" ||
+             el.getAttribute("role") === "combobox" ||
+             (el.tagName === "BUTTON" && el.hasAttribute("aria-expanded"));
     });
     if (selectTrigger) {
       // Dispatch the full event sequence React-Select listens for. Plain click()
@@ -1186,7 +1199,14 @@
         if (user.location) resumeSummary += `, located in ${user.location}`;
       }
 
-      // Collect all unfilled textareas and contenteditable elements
+      // [PR4 fix #14/#15] GH1 — open-ended questions (the abandonment trigger)
+      // are rendered as either:
+      //   - <textarea>             (legacy)
+      //   - [contenteditable=true] (modern Greenhouse)
+      //   - .ql-editor             (Quill rich-text editor wrapper)
+      //   - [role="textbox"]       (Slate / Trix)
+      // Detect all four. Use element.ownerDocument.execCommand so multi-frame
+      // pages target the correct document (per Bug 7 fix).
       const candidates = [];
       const textareas = document.querySelectorAll("textarea");
       for (const ta of textareas) {
@@ -1195,20 +1215,35 @@
         const label = rawLabel.toLowerCase();
         if (!label || label.length < 5) continue;
         if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) continue;
-        candidates.push({ element: ta, label: rawLabel, isContentEditable: false });
-      }
-      const editables = document.querySelectorAll("[contenteditable='true']");
-      for (const el of editables) {
-        if (el.textContent?.trim()) continue;
-        const rawLabel = getFieldLabel(el) || "";
-        const label = rawLabel.toLowerCase();
-        if (!label || label.length < 5) continue;
-        if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) continue;
-        candidates.push({ element: el, label: rawLabel, isContentEditable: true });
+        candidates.push({ element: ta, label: rawLabel, kind: "textarea" });
       }
 
-      for (const { element, label, isContentEditable } of candidates) {
-        console.log(`AutoApply: Generating answer for: "${label.substring(0, 60)}"`);
+      // Combine selector classes; deduplicate via Set keyed on the actual node.
+      const seenNodes = new Set();
+      const richSelectors = [
+        '[contenteditable="true"]',
+        '.ql-editor',                    // Quill
+        '[role="textbox"][contenteditable]',
+        '[role="textbox"]:not(input):not(textarea)',
+      ];
+      for (const sel of richSelectors) {
+        for (const el of document.querySelectorAll(sel)) {
+          if (seenNodes.has(el)) continue;
+          seenNodes.add(el);
+          if (el.textContent?.trim()) continue;
+          // For Quill, the .ql-editor sits inside a wrapper that holds the label —
+          // walk up so getFieldLabel finds it.
+          const labelHost = el.closest('.ql-container, .ql-snow') ? el.closest('.ql-container, .ql-snow').parentElement : el;
+          const rawLabel = getFieldLabel(labelHost) || getFieldLabel(el) || "";
+          const label = rawLabel.toLowerCase();
+          if (!label || label.length < 5) continue;
+          if (label.includes("compensation") || label.includes("salary") || label.includes("start date")) continue;
+          candidates.push({ element: el, label: rawLabel, kind: "rich" });
+        }
+      }
+
+      for (const { element, label, kind } of candidates) {
+        console.log(`AutoApply: Generating answer for [${kind}]: "${label.substring(0, 60)}"`);
         try {
           const result = await new Promise((resolve) => {
             const timer = setTimeout(() => resolve(null), 15000);
@@ -1226,17 +1261,29 @@
 
           const answer = result?.answer;
           if (answer && answer.length > 10) {
-            if (isContentEditable) {
-              element.focus();
-              document.execCommand("insertText", false, answer);
-              element.dispatchEvent(new Event("input", { bubbles: true }));
+            if (kind === "rich") {
+              // Use element.ownerDocument.execCommand — Bug 7 fix: in iframe
+              // contexts, document.execCommand targets the top frame, but the
+              // contenteditable lives in the iframe's document.
+              try { element.focus(); } catch {}
+              const od = element.ownerDocument || document;
+              let inserted = false;
+              try {
+                inserted = od.execCommand("insertText", false, answer);
+              } catch {}
+              if (!inserted) {
+                // Fallback: write textContent and dispatch input (Quill listens to input)
+                element.textContent = answer;
+              }
+              element.dispatchEvent(new InputEvent("input", { bubbles: true, data: answer, inputType: "insertText" }));
               element.dispatchEvent(new Event("change", { bubbles: true }));
+              element.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
             } else {
               setNativeValue(element, answer);
               element.dispatchEvent(new Event("input", { bubbles: true }));
               element.dispatchEvent(new Event("change", { bubbles: true }));
             }
-            console.log(`AutoApply: Filled answer (${answer.length} chars)`);
+            console.log(`AutoApply: Filled answer (${answer.length} chars) into ${kind}`);
           }
         } catch (err) {
           console.log(`AutoApply: Answer generation failed: ${err.message}`);
@@ -1463,8 +1510,28 @@
     return false;
   }
 
-  function fillByLabel(labelTexts, value, force = false) {
+  function fillByLabel(labelTexts, value, force = false, opts = {}) {
     if (!value) return false;
+
+    // [PR4 fix GH-1] avoidSections — skip any candidate whose container/section
+    // ancestor contains a heading or label matching one of these keywords.
+    // Used to block the "earliest start" / "available to start" patterns from
+    // accidentally hitting Education sub-questions like "Start date month".
+    const avoidSections = opts.avoidSections || null;
+    function isInAvoidedSection(el) {
+      if (!avoidSections || !el) return false;
+      // Walk up to a reasonable section ancestor and inspect headings/labels
+      // for any of the avoid keywords.
+      let cur = el.parentElement;
+      for (let d = 0; d < 8 && cur && cur !== document.body; d++, cur = cur.parentElement) {
+        const heads = cur.querySelectorAll("h1, h2, h3, h4, h5, h6, legend, [class*='section-title' i], [class*='sectionHeader' i]");
+        for (const h of heads) {
+          const t = (h.textContent || "").toLowerCase();
+          if (avoidSections.some(kw => t.includes(kw))) return true;
+        }
+      }
+      return false;
+    }
 
     // Strategy 1: <label> elements
     const labels = document.querySelectorAll("label");
@@ -1488,6 +1555,10 @@
         }
 
         if (input && (force || !input.value)) {
+          if (isInAvoidedSection(input)) {
+            console.log(`AutoApply: Skipping label "${text}" — inside avoided section [${avoidSections.join(",")}]`);
+            continue;
+          }
           setNativeValue(input, value);
           if (!force) console.log(`AutoApply: Filled label "${text}" with "${value.substring(0, 30)}..."`);
           return true;
@@ -1509,6 +1580,10 @@
         placeholder.includes(t) || name.includes(t) || id.includes(t) || ariaLabel.includes(t)
       )) {
         if (force || !input.value) {
+          if (isInAvoidedSection(input)) {
+            console.log(`AutoApply: Skipping attr match (${name || id}) — inside avoided section`);
+            continue;
+          }
           setNativeValue(input, value);
           if (!force) console.log(`AutoApply: Filled input attr match (${name || id}) with "${value.substring(0, 30)}..."`);
           return true;
@@ -1529,6 +1604,10 @@
         "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea"
       );
       if (input && (force || !input.value)) {
+        if (isInAvoidedSection(input)) {
+          console.log(`AutoApply: Skipping near-text "${text}" — inside avoided section`);
+          continue;
+        }
         setNativeValue(input, value);
         if (!force) console.log(`AutoApply: Filled near text "${text}" with "${value.substring(0, 30)}..."`);
         return true;
