@@ -397,3 +397,33 @@ Field-fill (`fillBasicProfileInDoc`, `fillByLabel`, `fillGenericForm`) and uploa
 
 ### Notes
 - Working mount path is `/sessions/adoring-vibrant-pascal/mnt/autoapply-ai`, not the `/sessions/bold-vibrant-albattani/...` referenced in the task template. The bash sandbox initially showed a truncated copy of `chrome-extension/background.js` (file ended mid-statement at line 3651) and reported a corrupt git index — both transient sandbox issues. The truncated tail of the file was reconstructed from `git show HEAD:chrome-extension/background.js` and re-applied; line endings normalised to LF (matching HEAD); resulting `git diff --stat` is `1 file changed, 10 insertions(+), 1 deletion(-)`. Syntax verified via `node --check`.
+
+---
+
+## Overnight QA Run — 2026-05-01 (parallel pass)
+
+A second autonomous QA agent ran on the same date from a different mount path (`/sessions/gifted-keen-faraday/mnt/autoapply-ai`) and converged on two additional fixes that landed in the same `harshit/autoqa-2026-05-01` commit (`ff0f558`). The earlier section above missed describing them — adding the accounting here so the bug ledger reflects what was actually changed.
+
+### Bugs Found: 2
+### Bugs Fixed: 2
+
+#### `isSameJob` fallback in workday.js was title-only — risked stale tailored cache reuse across companies
+**File:** `chrome-extension/ats/workday.js`
+**Problem:** Line 602's fallback compared only `cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle`. Two roles at different companies that share a generic title (e.g. "Senior Product Manager") would erroneously hit the cache, so a candidate landing on Snowflake's Workday after tailoring for Stripe would see Stripe-targeted bullets reused for Snowflake. The same defect was already patched in `greenhouse.js` (296-298) and `lever.js` (182-184); workday.js was the lone outlier.
+**Fix:** Tightened the fallback to require BOTH `jobTitle` AND `company` to match. URL-equality remains the strongest match; `(title && company)` is now the safer fallback.
+**Severity:** warning
+
+#### `sanitizeRuleZero` in tailor-resume route compared the wrong field names — SACRED title/school overwrites never fired
+**File:** `src/app/api/tailor-resume/route.ts`
+**Problem:** The server-side RULE ZERO sanitizer compared `s.title === t.title` for experience matching, and `s.institution === t.institution` for education matching. But `ParsedResume.experience[].role` and `ParsedResume.education[].school` are the canonical schema keys (per `useAppStore.ts`). Source-side reads were always `undefined`, so the title-equality leg of the matcher was a no-op and the SACRED title overwrite at line 195 plus the SACRED institution overwrite at line 222 never executed. Position-index fallback masked the date overwrite (which works) but Claude could quietly rewrite a job title or school name and the sanitizer would not restore the source value. Education `year` was likewise never written back.
+**Fix:** Added `expTitle` and `eduSchool` accessors that read `role ?? title` and `school ?? institution` defensively. Matching, the SACRED overwrites, and the year-vs-startDate normalisation now all work regardless of which key Claude emits in its tailored JSON.
+**Severity:** error
+
+### No-change review areas (clean)
+- `src/lib/resumeValidation.ts` — re-verified Phase 6 coverage (em-dash ranges, `Jan. 2020`, `08/2019`, `2019/08`, `Q1 2022`, `Summer 2019`, bare year, `Present` in any segment of a range). No gaps; the prior 2026-04-09 fix is intact.
+- `chrome-extension/ats/generic.js` lines 1880-2018 (`attemptResumeUpload`) — no-input, multiple-input (cover-letter exclusion), main-world + isolated-world strategies, DOM-confirmation widening for Ashby, downloads-folder fallback all present and correct.
+- `chrome-extension/ats/generic.js` lines 1143-1182 / 1319-1483 (`fillBasicProfileInDoc` / `fillGenericForm`) — `tel`/phone, LinkedIn URL, years-of-experience, salary expectation, cover-letter textarea, "Enter manually" click-through, pronouns, preferred name, notice period, country dropdown all covered.
+- `src/app/api/tailor-resume/route.ts` prompt-injection surface — JD is JSON-stringified inside a user `content` string rather than concatenated into the system prompt. `JSON.parse` runs on first-brace / last-brace extracted text, with markdown-fence stripping and a `startsWith("{")` sanity check before parsing.
+
+### Notes
+- Both parallel passes produced identical comment text on the workday.js and tailor-resume fixes (same prompt -> same output) and were folded into a single commit on `harshit/autoqa-2026-05-01`. No push to `main` per `CLAUDE.md` ("never push directly").
