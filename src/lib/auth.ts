@@ -48,8 +48,35 @@ export const authOptions: NextAuthOptions = {
      * is, persist the access_token + refresh_token to Redis so the worker can
      * call the Gmail API on the user's behalf. We never expose tokens to the
      * client; they live in `user:{email}:google_tokens`.
+     *
+     * DEBUG: also writes a `debug:jwt:{ts}` entry on every invocation while we
+     * verify the OAuth consent flow end-to-end. This is removed once the
+     * Phase A1 demo is green.
      */
-    async jwt({ token, account, profile }) {
+    async jwt({ token, account, profile, trigger }) {
+      // Diagnostic: see exactly what the callback receives. TTL 1hr.
+      try {
+        await redis.set(
+          `debug:jwt:${Date.now()}`,
+          {
+            hasAccount: !!account,
+            accountKeys: account ? Object.keys(account) : null,
+            accountProvider: account?.provider ?? null,
+            accountType: account?.type ?? null,
+            profileEmail: profile?.email ?? null,
+            profileKeys: profile ? Object.keys(profile) : null,
+            tokenEmail: (token as { email?: string })?.email ?? null,
+            trigger: trigger ?? null,
+            hasAccessToken: !!(account as { access_token?: string })?.access_token,
+            hasRefreshToken: !!(account as { refresh_token?: string })?.refresh_token,
+            scope: (account as { scope?: string })?.scope ?? null,
+          },
+          { ex: 3600 }
+        );
+      } catch {
+        /* never block sign-in for diagnostics */
+      }
+
       if (account && profile?.email) {
         const tokens: GoogleTokens = {
           accessToken: account.access_token!,
