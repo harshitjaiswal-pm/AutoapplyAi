@@ -1,25 +1,11 @@
 import NextAuth from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
+import { authOptions } from "@/lib/auth";
 
-const handler = NextAuth({
-  providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID ?? "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-    }),
-  ],
-  secret: process.env.NEXTAUTH_SECRET,
-  pages: {
-    signIn: "/auth/signin",
-  },
-  callbacks: {
-    async session({ session, token }) {
-      if (session.user && token.sub) {
-        (session.user as typeof session.user & { id: string }).id = token.sub;
-      }
-      return session;
-    },
-  },
-});
+// IMPORTANT: this handler MUST use the same authOptions that getServerSession()
+// reads, otherwise the sign-in flow's jwt() and session() callbacks diverge
+// from what API routes see. Previously this file had its own inline config
+// (no Gmail scope, no jwt callback) which silently dropped all OAuth changes
+// made in src/lib/auth.ts. Don't reintroduce.
+const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
