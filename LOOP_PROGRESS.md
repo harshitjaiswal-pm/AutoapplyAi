@@ -163,10 +163,14 @@ All committed under that branch with descriptive messages:
 
 ### Remaining blockers (2 of 10 unsubmitted)
 
-**FIL (Fidelity) — createAccount classifier mis-fires.**
-The createAccount step concludes `successPath=auto_logged_in` (URL changed to `/apply/applyManually` after submit) but the page actually still renders the Create Account form there — Workday on FIL keeps the form embedded at the apply URL until verification completes. Sign-in then submits credentials for an account that was never actually persisted, so it fails.
+**FIL (Fidelity) — Save & Continue silently no-ops despite clean fill.**
+4 iterations got further each time:
+- v1 (original queue): stuck because session lost post-createAccount
+- v2 (sign-in recovery added in `ed70689`): unsuccessful — classifier returned `auto_logged_in` but page still on Create Account
+- v3 (classifier fix `c616e68` requires `verifyPassword` not visible): reached My Information; failed at Province dropdown which on FIL is country→province cascade
+- v4 (cascading-fallthrough `1274af9`): all 21 actions OK including BC under Canada, errors=0 after fill, **but the page does not advance after `Save & Continue`**. Most likely a hidden `click_filter` overlay or a follow-up "Please specify" required field after the source dropdown's "Other" fallback (LinkedIn isn't in FIL's source options).
 
-Fix sketch: tighten classifier in `steps/createAccount.ts` — after Submit, also check if the visible page still has `verifyPassword` field; if yes, treat as `verification_email_sent` regardless of URL. Then the existing email-link verification flow runs.
+Followup needs DevTools inspection of FIL's My Information page after the form is filled to identify the silent blocker. All earlier patches are productive even without finishing FIL — they unblocked UBC + both QuadReal jobs (3 of the 4 stuck tenants on this pattern).
 
 **Best Buy Canada — JD-page Apply button selector miss.**
 `createAccount.ts:425` throws "Apply button not found on JD page" — Best Buy renders the Apply button outside the standard `[data-automation-id="adventureButton"]` selector chain. Needs Best Buy-specific selector probe (likely `[data-automation-id="apply-link"]` or a `<button>` with text "Apply Now").
