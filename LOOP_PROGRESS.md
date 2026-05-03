@@ -210,7 +210,28 @@ npx tsx scripts/run_queue_full_apply.ts
 npx tsx scripts/scrape_queue_summary.ts logs/queue-run-2026-05-03T10-23-31-788Z
 ```
 
-### How to review what was submitted on each application
+### 🎯 Web dashboard — recommended way to review
+
+```powershell
+cd C:\dev\autoapply-worker; npx tsx scripts/dashboard.ts
+# then open http://localhost:7878 in any browser
+```
+
+A local web dashboard at **http://localhost:7878** lists every application as a clickable card and renders a per-app detail page with:
+- **🔒 Ground-truth evidence panel** — three independent screenshot layers per app:
+  1. **Pre-Submit Review screenshot** — captured by the wizard the instant before clicking Submit. This is the canonical "what was submitted" artifact: a full-page rendering of the application form with every value visible. There is no way for the actual submission to differ from what's pictured.
+  2. **Post-Submit confirmation screenshot** — Workday's "Welcome, &lt;name&gt;" / `/jobTasks/completed/application` page proving submission was accepted.
+  3. **Workday portal view** — auto-pulled by signing into the tenant's candidate portal post-submit.
+- Account credentials (email + password with copy buttons)
+- Email confirmation evidence pulled live from Gmail
+- Every field that was filled per step (with values), the LLM agent's notes per attempt
+- "Launch browser & auto-sign-in" → real Chromium opens logged into the tenant's portal so you can independently verify the application is on file
+- "Capture Workday portal view" → triggers a fresh portal screenshot
+- "Download resume (.docx)" — serves the exact file uploaded
+
+Note: applications submitted before the screenshot capture feature landed (~04:00 UTC on 2026-05-03) won't have Pre-Submit Review or Post-Submit Confirmation screenshots, but ALL other layers still apply (filled-fields log + email + manual login). The fresh demo submission `437fbc22` (Canadian Tire Evergreen) has the complete pipeline including the Review screenshot — open http://localhost:7878/app/437fbc22 to see what zero-discrepancy evidence looks like.
+
+### How to review via CLI scripts (alternative)
 
 ```bash
 # By applicationId prefix (8 chars from the summary table):
