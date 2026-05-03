@@ -135,6 +135,25 @@ A1.7 — the real end-to-end smoke that creates a UBC account — requires Harsh
 
 **Headline: 8/10 unique URLs fully submitted to real Workday tenants** with Kiran's master `.docx` resume + LLM-tailored answers per JD. Each `+tag` email aliases to her actual Gmail so confirmation messages will arrive.
 
+### Independent verification via Gmail inbox (post-run audit)
+
+After all runs completed, we cross-checked claimed submissions against Kiran's actual `kiranshahi.can@gmail.com` inbox via the existing `gmail.ts` helper (script: `scripts/verify_inbox_for_runs.ts`).
+
+| URL | Claimed | Inbox evidence | Verdict |
+|---|---|---|---|
+| UBC (rerun) | submitted | "Thank you for your application!" from `noreply@workday.svc.ubc.ca` at 11:01 | ✅ confirmed |
+| CT Evergreen | submitted | "Thank you for Applying" from CTC Workday at 10:26 | ✅ confirmed |
+| CT Standard | submitted | "Thank you for Applying" from CTC Workday at 10:29 | ✅ confirmed |
+| CT Senior | submitted | "Thank you for Applying" from CTC Workday at 10:35 | ✅ confirmed |
+| Langara | submitted | **No emails of any kind** to the run's `+langara-wd10-b43d2cb2` alias | ⚠️ unconfirmed (page hit `/jobTasks/completed/application` URL pattern matching CT's verified-success pattern, but Langara never sent a confirmation; could be either Langara's policy or a false-positive on confirmation detection) |
+| QR Anaplan (rerun) | submitted | "Thank you for your Interest in QuadReal!" + verify email at 11:05 | ✅ confirmed |
+| Fednav | submitted | "Thank You For Applying!" from `Fednav@myworkday.com` at 10:39 | ✅ confirmed |
+| QR Senior (rerun) | submitted | "Thank you for your Interest in QuadReal!" + verify email at 11:08 | ✅ confirmed |
+| FIL | stuck | Verify email arrived for both attempts but no submission email | ✅ matches (account created, didn't finish) |
+| Best Buy | error | **No emails at all for either attempt** | ✅ matches (couldn't even start — JD URL stale) |
+
+**Net verdict: 7/10 inbox-confirmed submissions, 1/10 page-confirmed-but-email-unverified (Langara), 2/10 verified failures.** The Langara discrepancy is a known gap in the `looksLikeConfirmation` heuristic — the URL-path match (`/jobTasks/completed/application`) is necessary but not sufficient evidence of submission. Possible followup: cross-check against the Workday candidate dashboard to see if the application appears there.
+
 ### Code patches pushed (commit log on `harshit/step-a1.7-orchestrator`)
 
 All committed under that branch with descriptive messages:
