@@ -210,4 +210,29 @@ npx tsx scripts/run_queue_full_apply.ts
 npx tsx scripts/scrape_queue_summary.ts logs/queue-run-2026-05-03T10-23-31-788Z
 ```
 
+### How to review what was submitted on each application
+
+```bash
+# By applicationId prefix (8 chars from the summary table):
+npx tsx scripts/review_application.ts 91f6cc00       # CT Evergreen
+npx tsx scripts/review_application.ts a270329b       # Fednav
+npx tsx scripts/review_application.ts 862a635e       # UBC
+
+# By full +tag alias:
+npx tsx scripts/review_application.ts kiranshahi.can+langara-wd10-b43d2cb2@gmail.com
+
+# Or print all 15 attempts back-to-back:
+npx tsx scripts/review_application.ts --all
+```
+
+For each application the script prints:
+- **Login URL** for the tenant's candidate portal (e.g. `https://canadiantirecorporation.wd3.myworkdayjobs.com/en-US/Enterprise_External_Careers_Site/login`)
+- **Email + password** retrieved from Upstash (the deterministic per-tenant password, plaintext) — paste into the login URL above to view the live application in Workday's UI
+- **Confirmation email evidence** from Gmail (subject + sender + timestamp)
+- **Every field that was filled per step** with its exact value (name, address, phone, source dropdown, work-auth Yes/No radio, terms checkbox, etc.)
+- **LLM agent's notes per step** (1-2 sentence rationale for what it filled — explains free-text choices when they matter)
+- **Resume file uploaded** (same Kiran `.docx` for all 10)
+
+This is the canonical way to audit an application end-to-end. The 8 inbox-confirmed application IDs are listed in the "Final 10-URL summary table" above.
+
 Full per-URL logs in `C:\dev\autoapply-worker\logs\queue-run-2026-05-03T10-23-31-788Z\job-N-tenant.log` with formState dumps in `logs/wizard-dumps/`.
