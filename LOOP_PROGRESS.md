@@ -172,6 +172,8 @@ All committed under that branch with descriptive messages:
 
 Followup needs DevTools inspection of FIL's My Information page after the form is filled to identify the silent blocker. All earlier patches are productive even without finishing FIL — they unblocked UBC + both QuadReal jobs (3 of the 4 stuck tenants on this pattern).
 
+**Diagnostic screenshot saved:** `C:\dev\autoapply-worker\logs\stuck-screenshots\step1-bail-errors-zero-2026-05-03T11-30-17-902Z.png` — form is **fully and correctly filled** (Source=Other, Canada, Vancouver BC, V6Z 1Y2, 236-979-6746, Canada (+1), Mobile) with "Save and Continue" button visible at bottom-right and **no validation errors anywhere**. The Save click goes through but the SPA doesn't transition. Likely a backend rejection that doesn't surface as a visible error, or a Workday-FIL click handler quirk. Patch `ec60905` makes future bail screenshots automatic for tenants with this silent-failure pattern.
+
 **Best Buy Canada — JD-page Apply button selector miss.**
 `createAccount.ts:425` throws "Apply button not found on JD page" — Best Buy renders the Apply button outside the standard `[data-automation-id="adventureButton"]` selector chain. Needs Best Buy-specific selector probe (likely `[data-automation-id="apply-link"]` or a `<button>` with text "Apply Now").
 
