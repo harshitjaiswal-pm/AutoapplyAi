@@ -16,6 +16,13 @@ import { RESUME_TAILOR_SYSTEM } from "@/lib/prompts";
  * This single endpoint is what makes our product work.
  */
 
+// Vercel Hobby plan defaults to 10s function timeout — far too short for
+// Claude's tailoring call. Bump to the Hobby tier maximum (60s) so the
+// production endpoint works for the autoapply-worker (which calls this
+// route directly so users don't need a local dev server). Pro tier allows
+// up to 300s if we ever need Sonnet runs that exceed 60s.
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   try {
     const { parsedResume, parsedJob, mode } = await request.json();
@@ -76,12 +83,11 @@ export async function POST(request: NextRequest) {
       : "";
 
     const controller = new AbortController();
-    // 90s hard cap. Haiku (fast mode) usually finishes in 10-20s and Sonnet
-    // in 30-40s, but the API can be slow under load and we'd rather wait than
-    // fail. Bumped 2026-05-06 after both Haiku attempts on a HOOPP submission
-    // hit the previous 45s cap and aborted — the underlying SDK request
-    // succeeds when given enough time.
-    const timeout = setTimeout(() => controller.abort(), 90000);
+    // 55s hard cap — kept just under the Vercel Hobby tier's 60s function
+    // timeout so we return a clean app-level error rather than Vercel's
+    // generic 504. Haiku (fast mode) usually finishes in 10-20s and Sonnet
+    // in 30-40s; both fit comfortably.
+    const timeout = setTimeout(() => controller.abort(), 55000);
 
     const message = await anthropic.messages.create({
       model: modelId,
