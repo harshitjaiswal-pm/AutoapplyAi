@@ -76,9 +76,12 @@ export async function POST(request: NextRequest) {
       : "";
 
     const controller = new AbortController();
-    // 45s hard cap — Haiku (fast mode) should finish in 10-20s; Sonnet in 30-40s.
-    // Signal is passed to the SDK so the in-flight Anthropic request actually cancels.
-    const timeout = setTimeout(() => controller.abort(), 45000);
+    // 90s hard cap. Haiku (fast mode) usually finishes in 10-20s and Sonnet
+    // in 30-40s, but the API can be slow under load and we'd rather wait than
+    // fail. Bumped 2026-05-06 after both Haiku attempts on a HOOPP submission
+    // hit the previous 45s cap and aborted — the underlying SDK request
+    // succeeds when given enough time.
+    const timeout = setTimeout(() => controller.abort(), 90000);
 
     const message = await anthropic.messages.create({
       model: modelId,
