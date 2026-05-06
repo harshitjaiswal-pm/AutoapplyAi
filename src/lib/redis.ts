@@ -20,3 +20,10 @@ export const userResumeKey = (userId: string) => `user:${userId}:resume`;
 
 /** Key schema: user:{userId}:profile */
 export const userProfileKey = (userId: string) => `user:${userId}:profile`;
+
+/** Key schema: submissions:{email}:{applicationId} — written by autoapply-worker */
+export const submissionKey = (email: string, applicationId: string) =>
+  `submissions:${email}:${applicationId}`;
+
+/** Key schema: submissions:index:{email} — set of applicationIds the worker wrote */
+export const submissionIndexKey = (email: string) => `submissions:index:${email}`;
