@@ -524,6 +524,12 @@ function OnboardingContent() {
               <div>
                 <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-3">Location</p>
                 <div className="grid grid-cols-2 gap-3">
+                  <Field label="Street address">
+                    <input type="text" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="123 Main St" className={inputCls} />
+                  </Field>
+                  <Field label="Postal code">
+                    <input type="text" value={formData.postalCode} onChange={(e) => setFormData({ ...formData, postalCode: e.target.value })} placeholder="M5V 2H1" className={inputCls} />
+                  </Field>
                   <Field label="City">
                     <input type="text" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} placeholder="Toronto" className={inputCls} />
                   </Field>
