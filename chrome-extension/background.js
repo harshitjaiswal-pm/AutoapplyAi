@@ -12,6 +12,30 @@
 // Load the unified logger so AALog is available in the service worker too.
 try { importScripts("logger.js"); } catch (e) { console.error("AALog importScripts failed", e); }
 
+/**
+ * Build headers for /api/* calls.
+ *
+ * Server-side /api/* routes require either a NextAuth session (web app) OR
+ * a shared-secret + asserted userId pair (worker, extension). The extension
+ * uses the second mode. Token + userId live in chrome.storage.local under:
+ *   _aa_workerToken — set during onboarding (matches Vercel WORKER_SHARED_SECRET)
+ *   _aa_userId      — set during onboarding (the user's email)
+ *
+ * If either is missing the request goes out unauthenticated and the server
+ * will 401. Logs a one-line warning so onboarding gaps surface quickly.
+ */
+async function aaApiHeaders(extra) {
+  const stored = await chrome.storage.local.get(["_aa_userId", "_aa_workerToken"]);
+  const h = { "Content-Type": "application/json", ...(extra || {}) };
+  if (stored._aa_workerToken && stored._aa_userId) {
+    h["X-Worker-Token"] = stored._aa_workerToken;
+    h["X-User-Id"] = stored._aa_userId;
+  } else {
+    console.warn("AutoApply BG: missing _aa_workerToken or _aa_userId — API calls will 401. Re-run onboarding.");
+  }
+  return h;
+}
+
 // Credential Vault — encrypted credentials for password-gated ATS sites.
 // Loads self.AAVault with { status, init, unlock, lock, setEntry, getEntry,
 // listEntries, deleteEntry, destroy }. See ats/credential-vault.js.
@@ -2793,7 +2817,7 @@ async function handleTailorAndFill(job) {
   const tailorData = await withRetry(async () => {
     const res = await fetch(`${apiUrl}/api/tailor-resume`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aaApiHeaders(),
       body: JSON.stringify(tailorRequestBody),
       signal: apiTimeout(38000),
     });
@@ -2814,7 +2838,7 @@ async function handleTailorAndFill(job) {
   try {
     const pdfRes = await fetch(`${apiUrl}/api/export-resume`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aaApiHeaders(),
       body: JSON.stringify({
         resume: tailoredResult.tailoredResume,
         format: "pdf",
@@ -2941,7 +2965,7 @@ async function handleGenerateBehavioralAnswer(question, jobTitle, company, jobDe
   try {
     const res = await fetch(`${apiUrl}/api/answer-custom-question`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aaApiHeaders(),
       body: JSON.stringify({
         question,
         resumeSummary,
@@ -2982,7 +3006,7 @@ async function fetch_analyze_job(job) {
   try {
     const res = await fetch(`${apiUrl}/api/analyze-job`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aaApiHeaders(),
       body: JSON.stringify({ jobDescription: job.jobDescription }),
       signal: apiTimeout(20000),
     });
@@ -3006,7 +3030,7 @@ async function handleAnswerCustomQuestion({ question, resumeSummary, jobTitle, c
   try {
     const res = await fetch(`${apiUrl}/api/answer-custom-question`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aaApiHeaders(),
       // [Fix 2026-04-13] Forward jobDescription so the API can ground the
       // answer in the actual posting — prevents stale-context answers when
       // an ATS script held a previous job's pendingApplication.
@@ -3277,7 +3301,7 @@ async function handleDownloadResume(job, callerTabId, opts) {
         const apiUrl = recovery.autoapplyUrl || "https://autoapply-ai-delta.vercel.app";
         const pdfRes = await fetch(`${apiUrl}/api/export-resume`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: await aaApiHeaders(),
           body: JSON.stringify({ resume: ltr.tailoredResume, format: "pdf" }),
         });
         if (pdfRes.ok) {
@@ -3437,7 +3461,7 @@ Rules:
 
     const aiRes = await fetch(`${apiUrl}/api/chat`, {
       method:  "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aaApiHeaders(),
       body:    JSON.stringify({
         messages:      [{ role: "user", content: prompt }],
         systemContext: "You are an expert cover letter writer who tailors each letter precisely to the job and resume. Output ONLY the 3 paragraph body. No headers, no salutation, no sign-off, no markdown.",
@@ -3467,7 +3491,7 @@ Rules:
   // ── Step 2: Export to .docx via API ────────────────────────────────────
   const exportRes = await fetch(`${apiUrl}/api/export-cover-letter`, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aaApiHeaders(),
     body:    JSON.stringify({
       paragraphs,
       name:     fullName,

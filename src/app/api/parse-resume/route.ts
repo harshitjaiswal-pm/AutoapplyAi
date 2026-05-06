@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { RESUME_PARSER_SYSTEM } from "@/lib/prompts";
+import { authorize } from "@/lib/apiAuth";
 
 /**
  * API ROUTE: POST /api/parse-resume
@@ -22,6 +23,11 @@ import { RESUME_PARSER_SYSTEM } from "@/lib/prompts";
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     // Step 1: Get the resume text from the request
     const { resumeText } = await request.json();
 

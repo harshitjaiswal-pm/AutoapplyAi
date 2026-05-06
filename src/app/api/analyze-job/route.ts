@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { JOB_ANALYZER_SYSTEM } from "@/lib/prompts";
+import { authorize } from "@/lib/apiAuth";
 
 /**
  * API ROUTE: POST /api/analyze-job
@@ -11,6 +12,11 @@ import { JOB_ANALYZER_SYSTEM } from "@/lib/prompts";
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { jobDescription } = await request.json();
 
     if (!jobDescription || jobDescription.trim().length < 50) {

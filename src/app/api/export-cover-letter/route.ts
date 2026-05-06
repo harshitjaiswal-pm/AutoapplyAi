@@ -6,6 +6,7 @@ import {
   TextRun,
   BorderStyle,
 } from "docx";
+import { authorize } from "@/lib/apiAuth";
 
 /**
  * POST /api/export-cover-letter
@@ -15,6 +16,11 @@ import {
  */
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const {
       paragraphs,   // string[] — the AI-generated body paragraphs
       name,         // applicant full name

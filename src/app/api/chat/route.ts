@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { authorize } from "@/lib/apiAuth";
 
 /**
  * API ROUTE: POST /api/chat
@@ -54,6 +55,11 @@ interface Message {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
+    }
+
     const { messages, pageContext, systemContext } = await request.json() as {
       messages: Message[];
       pageContext?: {

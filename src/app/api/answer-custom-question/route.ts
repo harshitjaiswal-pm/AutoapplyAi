@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { authorize } from "@/lib/apiAuth";
 
 /**
  * API ROUTE: POST /api/answer-custom-question
@@ -118,6 +119,11 @@ function classifyAsDefaultYes(question: string): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
+    }
+
     const { question, resumeSummary, jobTitle, company, jobDescription } = await request.json();
 
     if (!question) {
