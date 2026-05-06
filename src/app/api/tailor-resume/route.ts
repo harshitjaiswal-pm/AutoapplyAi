@@ -82,9 +82,13 @@ export async function POST(request: NextRequest) {
 
     const message = await anthropic.messages.create({
       model: modelId,
-      // 4096 tokens is plenty for a tailored resume JSON (typical output: 2000-3500 tokens).
-      // Halving from 8192 cuts worst-case generation time by ~40%.
-      max_tokens: 4096,
+      // 8192 tokens. Was lowered to 4096 for perf, but the wrapped output
+      // (matchBreakdown + matchReasoning + tailoredResume + coverLetter +
+      // changes) regularly exceeds 4096 for richer JDs, causing truncation
+      // and JSON.parse failures that surface as HTTP 500 "AI returned
+      // invalid format". Caught 2026-05-03 mid-batch (HOOPP FP&A retried
+      // 3x and failed at the same step). Reliability > 40% latency saving.
+      max_tokens: 8192,
       system: RESUME_TAILOR_SYSTEM,
       messages: [
         {
