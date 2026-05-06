@@ -2811,6 +2811,14 @@ async function handleTailorAndFill(job) {
   // Step 3: Generate the resume PDF
   console.log("AutoApply BG: Step 3/3 — Generating PDF for", job.jobTitle);
   let resumeBlobUrl = null;
+  // [AutoQA fix 2026-05-01] Hoist resumeKey out of the try block so the return
+  // statement at the bottom of handleTailorAndFill() can always reference it.
+  // Previously `const resumeKey = makeResumeKey(job)` lived inside the
+  // `if (pdfRes.ok) { ... }` branch — when PDF export failed (API 5xx, timeout,
+  // or non-OK response), execution skipped that branch and the final
+  // `return { ..., resumeKey }` threw a ReferenceError, masking the real
+  // upstream error and surfacing as a generic message handler failure.
+  const resumeKey = makeResumeKey(job);
   try {
     const pdfRes = await fetch(`${apiUrl}/api/export-resume`, {
       method: "POST",
@@ -2841,7 +2849,8 @@ async function handleTailorAndFill(job) {
       }) + ".pdf";
 
       // ── Keyed resume map: each job gets its own slot (fixes wrong-resume bug) ──
-      const resumeKey    = makeResumeKey(job);
+      // [AutoQA fix 2026-05-01] resumeKey is now declared at the top of the function
+      // (outside this try block) so it's always defined for the return statement.
       // Also key by the live tab URL (_tabUrl injected at message handler).
       // This handles the case where applyUrl was a LinkedIn URL but the form
       // is on Greenhouse — so the download button on the Greenhouse page finds it.

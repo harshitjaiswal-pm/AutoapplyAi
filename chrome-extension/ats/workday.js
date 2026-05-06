@@ -599,8 +599,16 @@
       // Step 1 only needs base profile data; tailoring is needed for Step 2/3.
       // Check if we already have a valid tailored result for this job — skip re-tailoring on retry
       const cacheData = await new Promise(resolve => chrome.storage.local.get(["lastTailoredResult", "lastTailoredJob"], resolve));
+      // [AutoQA fix 2026-05-01] isSameJob fallback now requires BOTH title AND company
+      // to match. The previous title-only fallback was the same defect already patched
+      // in greenhouse.js and lever.js: two different "Senior Product Manager" roles at
+      // different companies would erroneously share the cached lastTailoredResult, so a
+      // candidate landing on Snowflake's Workday after tailoring for Stripe would see
+      // Stripe-targeted bullets reused for Snowflake. URL-equality remains the
+      // strongest match; (title && company) is the safer fallback.
       const isSameJob = cacheData.lastTailoredJob?.applyUrl === window.location.href
-        || cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle;
+        || (cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle
+            && cacheData.lastTailoredJob?.company === pendingJob.company);
 
       const tailoringPromise = (cacheData.lastTailoredResult && isSameJob)
         ? Promise.resolve({ tailoredResult: cacheData.lastTailoredResult })

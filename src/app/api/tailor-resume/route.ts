@@ -176,12 +176,22 @@ export async function POST(request: NextRequest) {
         ? (tailored.experience as Array<Record<string, unknown>>)
         : [];
 
+      // [AutoQA fix 2026-05-01] ParsedResume.experience uses `role`, NOT `title`
+      // (see useAppStore.ts ParsedResume interface). Claude's tailored output may
+      // mirror the input (`role`) or use `title` based on its own convention. The
+      // previous code compared only `s.title === t.title` — both undefined for
+      // the source, so the title-equality leg was effectively a no-op and the
+      // intended SACRED title overwrite at line 195 never fired. Now we read
+      // `role || title` from both sides so the matcher and the overwrite both
+      // work regardless of which key Claude emits.
+      const expTitle = (s: Record<string, unknown>) => s.role ?? s.title;
       for (let i = 0; i < tgtExp.length; i++) {
         const t = tgtExp[i];
-        // Find matching source role: company + title match, else position
+        // Find matching source role: company + title/role match, else position
         let match = srcExp.find(
           (s) =>
-            norm(s.company) === norm(t.company) && norm(s.title) === norm(t.title)
+            norm(s.company) === norm(t.company) &&
+            norm(expTitle(s)) === norm(expTitle(t))
         );
         if (!match) {
           match = srcExp.find((s) => norm(s.company) === norm(t.company));
@@ -195,8 +205,18 @@ export async function POST(request: NextRequest) {
           t.endDate = match.endDate;
           // Company name is SACRED
           if (match.company) t.company = match.company;
-          // Title is SACRED — Claude may not rename it
-          if (match.title) t.title = match.title;
+          // Title/role is SACRED — Claude may not rename it. Overwrite whichever
+          // key Claude used in the tailored output with the source's role/title.
+          const sacredTitle = expTitle(match);
+          if (sacredTitle) {
+            if ("title" in t) t.title = sacredTitle;
+            if ("role"  in t) t.role  = sacredTitle;
+            // If Claude emitted neither key, mirror the source's key choice.
+            if (!("title" in t) && !("role" in t)) {
+              if ("title" in match) t.title = sacredTitle;
+              else t.role = sacredTitle;
+            }
+          }
           // Location is SACRED
           if (match.location) t.location = match.location;
         }
@@ -209,21 +229,41 @@ export async function POST(request: NextRequest) {
       const tgtEdu: Array<Record<string, unknown>> = Array.isArray(tailored.education)
         ? (tailored.education as Array<Record<string, unknown>>)
         : [];
+      // [AutoQA fix 2026-05-01] ParsedResume.education uses `school` and `year`
+      // (NOT `institution` / `startDate` / `endDate`). The previous code matched
+      // on `institution` only, so source-side comparisons returned undefined and
+      // the SACRED overwrites for school/year never fired — Claude could quietly
+      // rewrite either field. Read both key conventions defensively.
+      const eduSchool = (s: Record<string, unknown>) => s.school ?? s.institution;
       for (let i = 0; i < tgtEdu.length; i++) {
         const t = tgtEdu[i];
         const match =
           srcEdu.find(
             (s) =>
-              norm(s.institution) === norm(t.institution) &&
+              norm(eduSchool(s)) === norm(eduSchool(t)) &&
               norm(s.degree) === norm(t.degree)
           ) ||
-          srcEdu.find((s) => norm(s.institution) === norm(t.institution)) ||
+          srcEdu.find((s) => norm(eduSchool(s)) === norm(eduSchool(t))) ||
           srcEdu[i];
         if (match) {
+          // Dates / year — copy verbatim under whichever key the tailored entry uses
           if (match.startDate) t.startDate = match.startDate;
           if (match.endDate) t.endDate = match.endDate;
+          if (match.year) {
+            if ("year" in t) t.year = match.year;
+            if ("startDate" in t && !match.startDate) t.startDate = match.year;
+          }
           if (match.degree) t.degree = match.degree;
-          if (match.institution) t.institution = match.institution;
+          // School — overwrite under whichever key the tailored entry uses.
+          const sacredSchool = eduSchool(match);
+          if (sacredSchool) {
+            if ("institution" in t) t.institution = sacredSchool;
+            if ("school" in t)      t.school      = sacredSchool;
+            if (!("institution" in t) && !("school" in t)) {
+              if ("school" in match) t.school = sacredSchool;
+              else t.institution = sacredSchool;
+            }
+          }
         }
       }
 

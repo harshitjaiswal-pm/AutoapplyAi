@@ -367,3 +367,63 @@ Full static-analysis pass across all checklist areas. No new defects found. The 
 
 - Path in scheduled task template (`/sessions/bold-vibrant-albattani/mnt/autoapply-ai`) does not match actual mounted path (`/sessions/epic-confident-noether/mnt/autoapply-ai`). Review performed against actual path.
 - Per CLAUDE.md, changes committed to a feature branch rather than pushing directly to main.
+
+---
+
+## Overnight QA Run — 2026-05-01
+
+### Bugs Found: 1
+### Bugs Fixed: 1
+
+#### `resumeKey` ReferenceError when PDF export fails
+**File:** `chrome-extension/background.js`
+**Problem:** `const resumeKey = makeResumeKey(job)` was declared **inside** the `if (pdfRes.ok) { ... }` branch of `handleTailorAndFill()`. The `return { tailoredResult, resumeBlobUrl, matchScore, resumeKey }` statement at the bottom of the function references `resumeKey` outside that block. When the PDF export API returns non-OK (5xx, timeout, validation error) or throws, execution falls through the `else`/`catch` branch — but `resumeKey` is now block-scoped and undefined, so the return statement throws `ReferenceError: resumeKey is not defined`. This masks the real upstream PDF error and surfaces to the ATS content script as a generic message handler failure. The user sees an opaque "Tailoring failed — basic info filled" banner with no signal that the PDF endpoint was the actual problem.
+**Fix:** Hoisted `const resumeKey = makeResumeKey(job)` to the top of the function body, before the `try { ... }` block. Removed the duplicate inner declaration. `resumeKey` is now always defined for the return statement, regardless of whether PDF export succeeds, fails with a non-OK status, or throws.
+**Severity:** error
+
+### No-change review areas (clean)
+
+#### Phase 1 — Static Analysis
+- `chrome-extension/ats/generic.js` (3,346 lines — note: task template references 1,832 lines; the file has grown). `setNativeValue()` uses `element.ownerDocument.defaultView` and dispatches input/change/blur events — safe across iframes and shadow DOM. SELECT branch sets `.value` directly to avoid `Illegal invocation`. `detectSignInWall()` covers URL patterns (login, signin, sign-in, register, auth, account/create, new-user, createaccount), password inputs, low-input + sign-in text with `!hasApplyButton` guard, and sign-in text + no resume upload + no rich inputs. "Apply With X" patterns are explicitly handled in `applyButtonTexts` and the prefix matcher. Resume upload (`attemptResumeUpload`) handles no-input, cover-letter slot exclusion via `isCoverLetterInput()`, multi-strategy main-world + isolated-world fallback, and all accessible docs. Field-fill confirmed for: `type="tel"` phone, LinkedIn, GitHub, portfolio, years of experience, salary expectation (with JD pay-range fallback), cover letter (with "Enter manually" click-through), pronouns, preferred name, notice period, work authorization, visa, country, province (with PrimeNG / Ashby combobox fallbacks). State leakage between jobs mitigated by `window.__autoapply_resumeKey` per-page key and `tailoredResumePdf` cache invalidation on different-job detection. All exception paths surface user-visible banners.
+- `chrome-extension/background.js` (3,659 lines). Concurrency: `claimedJobs`, `ownedByJob`, `injectedTabIds` triple-lock prevents batch-mode tab hijack races. Cleanup in `chrome.tabs.onRemoved` properly releases all three maps and `_aa_lastAtsTabId`. `KNOWN_ATS_DOMAINS` covers greenhouse.io, lever.co, myworkdayjobs.com, ashbyhq.com, icims.com, taleo.net, breezy.hr, smartrecruiters.com, sapsf.com, successfactors.com/.eu — current major ATSs.
+- `chrome-extension/ats/workday.js` (4,260 lines). `noGlobalFallback: true` set on `_downloadResumeForPage()`. Self-scrape from DOM when no pendingApplication. State machine handles job posting → modal → form. "Apply Manually" never falls back to "Use My Last Application" (cross-contamination guard).
+- `chrome-extension/ats/greenhouse.js` and `lever.js`. Same `_downloadResumeForPage` shape with `noGlobalFallback`, no inconsistencies vs. generic.js patterns.
+- `chrome-extension/ats/universal.js` (501 lines). Optional chaining on scraped data short-circuits correctly through the rest of the chain. `escHtml()` properly sanitizes user-visible scraped text.
+- `src/app/api/tailor-resume/route.ts`. Server-side RULE ZERO enforcement (overwrites dates, name, email, phone, company, title, location with source values), schema guard, JSON extraction handles markdown code fences and prose preamble.
+- `src/lib/resumeValidation.ts`. `parseDate()` already handles all formats listed in the task template — em dash ranges, abbreviated months with period, MM/YYYY, YYYY/MM, ISO partials, quarters, seasons, bare years, native fallback. The `presentWords` set is checked across all range parts before slicing. No gaps found.
+
+#### Phase 2 — Logic Consistency
+Field-fill (`fillBasicProfileInDoc`, `fillByLabel`, `fillGenericForm`) and upload (`attemptResumeUpload`) passed the consistency checks listed in the task template.
+
+### Notes
+- Working mount path is `/sessions/adoring-vibrant-pascal/mnt/autoapply-ai`, not the `/sessions/bold-vibrant-albattani/...` referenced in the task template. The bash sandbox initially showed a truncated copy of `chrome-extension/background.js` (file ended mid-statement at line 3651) and reported a corrupt git index — both transient sandbox issues. The truncated tail of the file was reconstructed from `git show HEAD:chrome-extension/background.js` and re-applied; line endings normalised to LF (matching HEAD); resulting `git diff --stat` is `1 file changed, 10 insertions(+), 1 deletion(-)`. Syntax verified via `node --check`.
+
+---
+
+## Overnight QA Run — 2026-05-01 (parallel pass)
+
+A second autonomous QA agent ran on the same date from a different mount path (`/sessions/gifted-keen-faraday/mnt/autoapply-ai`) and converged on two additional fixes that landed in the same `harshit/autoqa-2026-05-01` commit (`ff0f558`). The earlier section above missed describing them — adding the accounting here so the bug ledger reflects what was actually changed.
+
+### Bugs Found: 2
+### Bugs Fixed: 2
+
+#### `isSameJob` fallback in workday.js was title-only — risked stale tailored cache reuse across companies
+**File:** `chrome-extension/ats/workday.js`
+**Problem:** Line 602's fallback compared only `cacheData.lastTailoredJob?.jobTitle === pendingJob.jobTitle`. Two roles at different companies that share a generic title (e.g. "Senior Product Manager") would erroneously hit the cache, so a candidate landing on Snowflake's Workday after tailoring for Stripe would see Stripe-targeted bullets reused for Snowflake. The same defect was already patched in `greenhouse.js` (296-298) and `lever.js` (182-184); workday.js was the lone outlier.
+**Fix:** Tightened the fallback to require BOTH `jobTitle` AND `company` to match. URL-equality remains the strongest match; `(title && company)` is now the safer fallback.
+**Severity:** warning
+
+#### `sanitizeRuleZero` in tailor-resume route compared the wrong field names — SACRED title/school overwrites never fired
+**File:** `src/app/api/tailor-resume/route.ts`
+**Problem:** The server-side RULE ZERO sanitizer compared `s.title === t.title` for experience matching, and `s.institution === t.institution` for education matching. But `ParsedResume.experience[].role` and `ParsedResume.education[].school` are the canonical schema keys (per `useAppStore.ts`). Source-side reads were always `undefined`, so the title-equality leg of the matcher was a no-op and the SACRED title overwrite at line 195 plus the SACRED institution overwrite at line 222 never executed. Position-index fallback masked the date overwrite (which works) but Claude could quietly rewrite a job title or school name and the sanitizer would not restore the source value. Education `year` was likewise never written back.
+**Fix:** Added `expTitle` and `eduSchool` accessors that read `role ?? title` and `school ?? institution` defensively. Matching, the SACRED overwrites, and the year-vs-startDate normalisation now all work regardless of which key Claude emits in its tailored JSON.
+**Severity:** error
+
+### No-change review areas (clean)
+- `src/lib/resumeValidation.ts` — re-verified Phase 6 coverage (em-dash ranges, `Jan. 2020`, `08/2019`, `2019/08`, `Q1 2022`, `Summer 2019`, bare year, `Present` in any segment of a range). No gaps; the prior 2026-04-09 fix is intact.
+- `chrome-extension/ats/generic.js` lines 1880-2018 (`attemptResumeUpload`) — no-input, multiple-input (cover-letter exclusion), main-world + isolated-world strategies, DOM-confirmation widening for Ashby, downloads-folder fallback all present and correct.
+- `chrome-extension/ats/generic.js` lines 1143-1182 / 1319-1483 (`fillBasicProfileInDoc` / `fillGenericForm`) — `tel`/phone, LinkedIn URL, years-of-experience, salary expectation, cover-letter textarea, "Enter manually" click-through, pronouns, preferred name, notice period, country dropdown all covered.
+- `src/app/api/tailor-resume/route.ts` prompt-injection surface — JD is JSON-stringified inside a user `content` string rather than concatenated into the system prompt. `JSON.parse` runs on first-brace / last-brace extracted text, with markdown-fence stripping and a `startsWith("{")` sanity check before parsing.
+
+### Notes
+- Both parallel passes produced identical comment text on the workday.js and tailor-resume fixes (same prompt -> same output) and were folded into a single commit on `harshit/autoqa-2026-05-01`. No push to `main` per `CLAUDE.md` ("never push directly").
