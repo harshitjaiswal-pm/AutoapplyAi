@@ -186,6 +186,37 @@ export default function SubmissionDetailPage() {
           </div>
         )}
 
+        {/* Job posting — visible URL + copy + open */}
+        {submission.jobUrl && (
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-semibold text-neutral-900">Job Posting</h2>
+                <p className="text-[11px] text-neutral-400 mt-0.5">Public Workday URL — open to view the full JD or share with someone.</p>
+                <a
+                  href={submission.jobUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-indigo-600 hover:text-indigo-700 break-all mt-2 block select-text"
+                >
+                  {submission.jobUrl}
+                </a>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <CopyButton text={submission.jobUrl} label="Copy URL" />
+                <a
+                  href={submission.jobUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  Open ↗
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Workday account credentials used for this application */}
         {tenantCreds && (
           <div className="bg-white rounded-2xl border border-neutral-200 p-5">
