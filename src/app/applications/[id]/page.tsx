@@ -30,6 +30,23 @@ function fmtDate(iso?: string): string {
   return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+/** Build a human-readable filename for the tailored resume download.
+ *  Format: "{Company}_{Candidate_Name}_Resume.docx".
+ *  Falls back to whatever's on the record if metadata is missing. */
+function buildResumeFilename(s: SubmissionRecord): string {
+  const safe = (str: string) => str.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const companyRaw = s.company || s.tenant?.split(".")[0] || "";
+  // Capitalize first letter of each word in company name
+  const company = safe(companyRaw)
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join("_");
+  const contact = (s.tailoredResumeJson as { contactInfo?: { name?: string } } | undefined)?.contactInfo;
+  const candidate = safe(contact?.name || "Resume");
+  if (!company) return `${candidate}_Resume.docx`;
+  return `${company}_${candidate}_Resume.docx`;
+}
+
 export default function SubmissionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -240,7 +257,7 @@ export default function SubmissionDetailPage() {
                 {submission.resumeUrl && (
                   <a
                     href={submission.resumeUrl}
-                    download={submission.resumeFilename || "tailored-resume.docx"}
+                    download={buildResumeFilename(submission)}
                     className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
                   >
                     ↓ Resume
