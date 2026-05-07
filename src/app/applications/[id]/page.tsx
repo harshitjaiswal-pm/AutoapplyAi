@@ -92,7 +92,20 @@ export default function SubmissionDetailPage() {
                 {STATUS_LABEL[submission.status] ?? submission.status}
               </span>
               {submission.matchScore != null && (
-                <span className="text-xs text-indigo-300">Match {submission.matchScore}/100</span>
+                <div className="text-right">
+                  <span className={`text-2xl font-bold tabular-nums ${
+                    submission.matchScore >= 80 ? "text-emerald-300" :
+                    submission.matchScore >= 60 ? "text-amber-300" : "text-indigo-200"
+                  }`}>
+                    {submission.matchScore}
+                  </span>
+                  <span className="text-xs text-indigo-300 ml-1">/100 match</span>
+                  {submission.originalMatchScore != null && submission.matchScore > submission.originalMatchScore && (
+                    <p className="text-[10px] text-emerald-300 mt-0.5">
+                      +{submission.matchScore - submission.originalMatchScore} from {submission.originalMatchScore} after tailoring
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -127,6 +140,66 @@ export default function SubmissionDetailPage() {
           <div className="bg-red-50 border border-red-200 rounded-xl p-4">
             <p className="text-xs font-semibold text-red-700 uppercase tracking-wider">Error</p>
             <p className="text-sm text-red-700 mt-1 whitespace-pre-wrap font-mono">{submission.errorMessage}</p>
+          </div>
+        )}
+
+        {/* Tailored resume + cover letter — what was actually sent */}
+        {(submission.resumeUrl || submission.coverLetter || submission.tailoringChanges) && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Tailored resume + change log */}
+            <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-neutral-900">Tailored Resume</h2>
+                {submission.resumeUrl && (
+                  <a
+                    href={submission.resumeUrl}
+                    download={submission.resumeFilename || "tailored-resume.docx"}
+                    className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    ↓ Download .docx
+                  </a>
+                )}
+              </div>
+              {submission.tailoringCostCents != null && (
+                <p className="text-[11px] text-neutral-400 mb-3">
+                  Tailoring cost: {submission.tailoringCostCents.toFixed(1)}¢
+                </p>
+              )}
+              {submission.tailoringChanges && submission.tailoringChanges.length > 0 ? (
+                <div>
+                  <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-wider mb-2">
+                    What Claude changed ({submission.tailoringChanges.length})
+                  </p>
+                  <ul className="space-y-2">
+                    {submission.tailoringChanges.slice(0, 8).map((c, i) => (
+                      <li key={i} className="text-xs text-neutral-600">
+                        <span className="inline-block bg-indigo-50 text-indigo-700 text-[10px] font-medium px-1.5 py-0.5 rounded mr-1.5">
+                          {c.category}
+                        </span>
+                        {c.text}
+                      </li>
+                    ))}
+                  </ul>
+                  {submission.tailoringChanges.length > 8 && (
+                    <p className="text-[10px] text-neutral-400 mt-2">+ {submission.tailoringChanges.length - 8} more changes</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-neutral-400">No itemized changes recorded.</p>
+              )}
+            </div>
+
+            {/* Cover letter */}
+            <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+              <h2 className="text-sm font-semibold text-neutral-900 mb-3">Cover Letter</h2>
+              {submission.coverLetter ? (
+                <div className="text-xs text-neutral-700 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
+                  {submission.coverLetter}
+                </div>
+              ) : (
+                <p className="text-xs text-neutral-400">No cover letter generated.</p>
+              )}
+            </div>
           </div>
         )}
 

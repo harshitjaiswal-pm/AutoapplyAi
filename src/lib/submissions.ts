@@ -32,7 +32,16 @@ export interface SubmissionRecord {
   status: "in_progress" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
+  /** Match score (0-100) for the *tailored* resume vs the JD. */
   matchScore?: number;
+  /** Match score for the *original* resume — surfaces improvement from tailoring. */
+  originalMatchScore?: number;
+  /** Cover letter Claude generated for this JD. Plain text / markdown. */
+  coverLetter?: string;
+  /** List of changes Claude made to the resume (e.g. "Added cloud experience"). */
+  tailoringChanges?: Array<{ category: string; text: string }>;
+  /** Cents the LLM tailoring run cost. */
+  tailoringCostCents?: number;
   resumeFilename?: string;
   resumeUrl?: string;
   screenshots: SubmissionScreenshot[];
