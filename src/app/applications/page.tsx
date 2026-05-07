@@ -139,6 +139,7 @@ export default function ApplicationsPage() {
                   <th className="text-left px-5 py-3 font-semibold">Company</th>
                   <th className="text-left px-3 py-3 font-semibold">Title</th>
                   <th className="text-left px-3 py-3 font-semibold">Status</th>
+                  <th className="text-left px-3 py-3 font-semibold">Match</th>
                   <th className="text-left px-3 py-3 font-semibold">Started</th>
                   <th className="text-left px-3 py-3 font-semibold">Duration</th>
                   <th className="text-left px-3 py-3 font-semibold">Steps</th>
@@ -165,6 +166,24 @@ export default function ApplicationsPage() {
                       <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS_STYLES[s.status] ?? "bg-neutral-100 text-neutral-500"}`}>
                         {STATUS_LABEL[s.status] ?? s.status}
                       </span>
+                    </td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {s.matchScore != null ? (
+                        <span className={`text-xs font-bold tabular-nums ${
+                          s.matchScore >= 80 ? "text-emerald-600" :
+                          s.matchScore >= 60 ? "text-amber-600" :
+                          "text-neutral-400"
+                        }`}>
+                          {s.matchScore}
+                          {s.originalMatchScore != null && s.matchScore > s.originalMatchScore && (
+                            <span className="text-[10px] text-emerald-500 font-normal ml-1">
+                              +{s.matchScore - s.originalMatchScore}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-neutral-300">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-3 text-neutral-500 whitespace-nowrap">{formatRelativeDate(s.startedAt)}</td>
                     <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums">{formatDuration(s.startedAt, s.completedAt)}</td>
