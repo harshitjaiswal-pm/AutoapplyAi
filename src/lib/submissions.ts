@@ -42,6 +42,9 @@ export interface SubmissionRecord {
   tailoringChanges?: Array<{ category: string; text: string }>;
   /** Cents the LLM tailoring run cost. */
   tailoringCostCents?: number;
+  /** Structured tailored resume — lets the page render it inline without
+   *  downloading the .docx. Matches /api/tailor-resume's tailoredResume shape. */
+  tailoredResumeJson?: Record<string, unknown>;
   resumeFilename?: string;
   resumeUrl?: string;
   screenshots: SubmissionScreenshot[];
