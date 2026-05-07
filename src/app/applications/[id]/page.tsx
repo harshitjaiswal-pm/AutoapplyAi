@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { SubmissionRecord } from "@/lib/submissions";
+import type { TenantCredsRow } from "../../api/credentials/route";
 import { CopyButton } from "@/components/CopyButton";
 import { TailoredResumeView } from "@/components/TailoredResumeView";
 
@@ -36,6 +37,9 @@ export default function SubmissionDetailPage() {
   const [submission, setSubmission] = useState<SubmissionRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoomedShot, setZoomedShot] = useState<string | null>(null);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [tenantCreds, setTenantCreds] = useState<TenantCredsRow | null>(null);
+  const [revealPassword, setRevealPassword] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -60,6 +64,26 @@ export default function SubmissionDetailPage() {
       clearInterval(t);
     };
   }, [id]);
+
+  // Fetch this user's tenant_creds and find the row that matches this
+  // submission's tenant — so we can show username + password used to
+  // create the Workday account on this very page.
+  useEffect(() => {
+    if (!submission?.tenant) return;
+    let cancelled = false;
+    fetch("/api/credentials")
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const creds: TenantCredsRow[] = data.credentials ?? [];
+        const match = creds.find((c) => c.tenantHost === submission.tenant);
+        setTenantCreds(match ?? null);
+      })
+      .catch(() => { /* tolerate */ });
+    return () => {
+      cancelled = true;
+    };
+  }, [submission?.tenant]);
 
   if (error) {
     return (
@@ -145,11 +169,70 @@ export default function SubmissionDetailPage() {
           </div>
         )}
 
-        {/* Tailored resume — full inline preview, no need to download to read it */}
+        {/* Workday account credentials used for this application */}
+        {tenantCreds && (
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-neutral-900">Workday Account</h2>
+                <p className="text-[11px] text-neutral-400 mt-0.5">Used to submit this application — keep these handy if you need to manually sign in to check status.</p>
+              </div>
+              <a
+                href={`https://${tenantCreds.tenantHost}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-indigo-600 hover:text-indigo-700 font-medium whitespace-nowrap"
+              >
+                Open portal ↗
+              </a>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="bg-neutral-50 rounded-lg p-3">
+                <p className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">Email</p>
+                <div className="flex items-center justify-between gap-2 mt-1">
+                  <code className="text-xs text-neutral-800 select-text break-all">{tenantCreds.email}</code>
+                  <CopyButton text={tenantCreds.email} />
+                </div>
+              </div>
+              <div className="bg-neutral-50 rounded-lg p-3">
+                <p className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">Password</p>
+                <div className="flex items-center justify-between gap-2 mt-1">
+                  <code className="text-xs text-neutral-800 select-text font-mono break-all">
+                    {revealPassword ? tenantCreds.password : "••••••••••••"}
+                  </code>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setRevealPassword((v) => !v)}
+                      className="text-[11px] text-indigo-600 hover:text-indigo-700 font-medium"
+                    >
+                      {revealPassword ? "Hide" : "Reveal"}
+                    </button>
+                    <CopyButton text={tenantCreds.password} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tailored resume — collapsible inline preview */}
         {(submission.tailoredResumeJson || submission.resumeUrl) && (
           <div className="bg-white rounded-2xl border border-neutral-200 p-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-neutral-900">Tailored Resume</h2>
+              <button
+                type="button"
+                onClick={() => setResumeOpen((v) => !v)}
+                className="flex items-center gap-2 text-sm font-semibold text-neutral-900 hover:text-indigo-600 transition-colors"
+              >
+                <span className="text-xs">{resumeOpen ? "▼" : "▶"}</span>
+                Tailored Resume
+                {!resumeOpen && submission.tailoredResumeJson && (
+                  <span className="text-[11px] text-neutral-400 font-normal">
+                    (click to expand)
+                  </span>
+                )}
+              </button>
               <div className="flex items-center gap-2">
                 {submission.tailoringCostCents != null && (
                   <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
@@ -160,19 +243,21 @@ export default function SubmissionDetailPage() {
                     download={submission.resumeFilename || "tailored-resume.docx"}
                     className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
                   >
-                    ↓ Download .docx
+                    ↓ Resume
                   </a>
                 )}
               </div>
             </div>
-            {submission.tailoredResumeJson ? (
-              <TailoredResumeView resume={submission.tailoredResumeJson} />
-            ) : (
-              <p className="text-xs text-neutral-400">
-                Inline preview not available for this submission (run was before
-                the worker started capturing the structured resume). Use the
-                Download button above to view the .docx.
-              </p>
+            {resumeOpen && (
+              submission.tailoredResumeJson ? (
+                <TailoredResumeView resume={submission.tailoredResumeJson} />
+              ) : (
+                <p className="text-xs text-neutral-400">
+                  Inline preview not available for this submission (run was before
+                  the worker started capturing the structured resume). Use the
+                  Resume button above to download the .docx.
+                </p>
+              )
             )}
           </div>
         )}
