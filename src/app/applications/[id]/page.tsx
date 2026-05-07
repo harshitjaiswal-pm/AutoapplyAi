@@ -3,20 +3,23 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import type { SubmissionRecord } from "@/lib/submissions";
+import type { SubmissionRecord, SubmissionOutcome } from "@/lib/submissions";
+import { deriveOutcome, FAILURE_GUIDANCE } from "@/lib/submissions";
 import type { TenantCredsRow } from "../../api/credentials/route";
 import { CopyButton } from "@/components/CopyButton";
 import { TailoredResumeView } from "@/components/TailoredResumeView";
 
-const STATUS_STYLES: Record<SubmissionRecord["status"], string> = {
-  in_progress: "bg-blue-100 text-blue-700",
-  completed: "bg-emerald-100 text-emerald-700",
+const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
+  running: "bg-blue-100 text-blue-700",
+  submitted: "bg-emerald-100 text-emerald-700",
+  partial: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-700",
 };
 
-const STATUS_LABEL: Record<SubmissionRecord["status"], string> = {
-  in_progress: "Running",
-  completed: "Submitted",
+const OUTCOME_LABEL: Record<SubmissionOutcome, string> = {
+  running: "Running",
+  submitted: "Submitted",
+  partial: "Partial",
   failed: "Failed",
 };
 
@@ -131,8 +134,15 @@ export default function SubmissionDetailPage() {
               </p>
             </div>
             <div className="shrink-0 flex flex-col items-end gap-2">
-              <span className={`inline-block text-xs font-semibold px-3 py-1 rounded-full ${STATUS_STYLES[submission.status] ?? "bg-neutral-100 text-neutral-500"}`}>
-                {STATUS_LABEL[submission.status] ?? submission.status}
+              <span
+                className={`inline-block text-xs font-semibold px-3 py-1 rounded-full ${OUTCOME_STYLES[deriveOutcome(submission)]}`}
+                title={
+                  deriveOutcome(submission) === "partial"
+                    ? (submission.stoppedReason ?? "Wizard advanced but did not reach the confirmation page")
+                    : undefined
+                }
+              >
+                {OUTCOME_LABEL[deriveOutcome(submission)]}
               </span>
               {submission.matchScore != null && (
                 <div className="text-right">
@@ -179,7 +189,86 @@ export default function SubmissionDetailPage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        {submission.errorMessage && (
+        {/* Manual-recovery panel — visible whenever the worker did NOT reach
+            the confirmation page. Surfaces the stop reason in plain English
+            plus a checklist of artifacts the user can use to finish manually. */}
+        {(deriveOutcome(submission) === "partial" || deriveOutcome(submission) === "failed") && (() => {
+          const isPartial = deriveOutcome(submission) === "partial";
+          const hasResume = !!submission.resumeUrl;
+          const hasJobUrl = !!submission.jobUrl;
+          const hasCreds = !!tenantCreds;
+          const answerCount = submission.subjectiveAnswers?.length ?? 0;
+          // Category-specific title + guidance, falling back to a generic
+          // pair when the worker didn't classify (legacy records, edge
+          // failures). The stoppedReason is shown as a smaller mono line
+          // underneath so the user sees both the classification AND the
+          // raw machine-generated reason.
+          const cat = submission.failureCategory && FAILURE_GUIDANCE[submission.failureCategory];
+          const title = cat?.title ?? (isPartial ? "Pick up manually" : "Did not submit");
+          const guidance = cat?.guidance ?? "Sign in with the credentials below, open the job posting, upload the tailored resume, and use the answers we already gave to fill in any remaining steps.";
+          const rawReason = submission.stoppedReason ?? submission.errorMessage;
+          // Job-posting-dead is a special case: the listing is gone, so
+          // none of the recovery checklist (resume, creds, answers) is
+          // useful. Hide the checklist and lean into "find a fresh URL".
+          const isDeadListing = submission.failureCategory === "job_posting_dead";
+          return (
+            <div className={`rounded-2xl border p-5 ${isPartial ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <p className={`text-[10px] font-semibold uppercase tracking-wider ${isPartial ? "text-amber-700" : "text-red-700"}`}>
+                    {isPartial ? "Pick up manually" : "Did not submit — manual recovery"}
+                  </p>
+                  <h2 className={`text-sm font-semibold mt-0.5 ${isPartial ? "text-amber-900" : "text-red-900"}`}>
+                    {title}
+                  </h2>
+                  {rawReason && (
+                    <p className={`text-[11px] font-mono mt-1 select-text ${isPartial ? "text-amber-700" : "text-red-700"}`}>
+                      {rawReason}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <p className={`text-xs mb-3 leading-relaxed ${isPartial ? "text-amber-800" : "text-red-800"}`}>
+                {guidance}
+              </p>
+              {!isDeadListing && (
+              <ul className="text-xs space-y-1.5">
+                <li className={isPartial ? "text-amber-900" : "text-red-900"}>
+                  <span className="inline-block w-4">{hasResume ? "✓" : "·"}</span>
+                  <span className={hasResume ? "" : "opacity-50"}>
+                    Tailored resume
+                    {hasResume && submission.resumeFilename ? ` — ${submission.resumeFilename}` : ""}
+                    {!hasResume && " (not captured for this run)"}
+                  </span>
+                </li>
+                <li className={isPartial ? "text-amber-900" : "text-red-900"}>
+                  <span className="inline-block w-4">{hasJobUrl ? "✓" : "·"}</span>
+                  <span className={hasJobUrl ? "" : "opacity-50"}>Job posting URL</span>
+                </li>
+                <li className={isPartial ? "text-amber-900" : "text-red-900"}>
+                  <span className="inline-block w-4">{hasCreds ? "✓" : "·"}</span>
+                  <span className={hasCreds ? "" : "opacity-50"}>
+                    Workday account credentials
+                    {!hasCreds && " (no creds stored — would need to create the account manually)"}
+                  </span>
+                </li>
+                <li className={isPartial ? "text-amber-900" : "text-red-900"}>
+                  <span className="inline-block w-4">{answerCount > 0 ? "✓" : "·"}</span>
+                  <span className={answerCount > 0 ? "" : "opacity-50"}>
+                    Application answers ({answerCount} {answerCount === 1 ? "field" : "fields"} the worker already filled)
+                  </span>
+                </li>
+              </ul>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Raw error message — kept as a separate fallback panel for runs
+            that errored before the wizard even started (e.g. tailoring or
+            createAccount throws). Suppressed when the recovery panel above
+            is showing the same info — would otherwise duplicate the message. */}
+        {submission.errorMessage && deriveOutcome(submission) !== "partial" && deriveOutcome(submission) !== "failed" && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4">
             <p className="text-xs font-semibold text-red-700 uppercase tracking-wider">Error</p>
             <p className="text-sm text-red-700 mt-1 whitespace-pre-wrap font-mono">{submission.errorMessage}</p>
@@ -318,6 +407,45 @@ export default function SubmissionDetailPage() {
             </div>
             <div className="text-sm text-neutral-700 whitespace-pre-wrap leading-relaxed select-text">
               {submission.coverLetter}
+            </div>
+          </div>
+        )}
+
+        {/* Application Q&A — every form field the worker filled, in order.
+            Critical for manual recovery on partial/failed runs (the user
+            shouldn't retype answers we already gave). For successful runs
+            it's a useful audit trail. */}
+        {submission.subjectiveAnswers && submission.subjectiveAnswers.length > 0 && (
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-neutral-900">Application Answers</h2>
+                <p className="text-[11px] text-neutral-400 mt-0.5">
+                  {submission.subjectiveAnswers.length} field{submission.subjectiveAnswers.length === 1 ? "" : "s"} the worker filled across the wizard. Use these to finish the application manually if needed.
+                </p>
+              </div>
+              <CopyButton
+                text={submission.subjectiveAnswers
+                  .map((a) => `Q: ${a.question}\nA: ${a.answer}`)
+                  .join("\n\n")}
+                label="Copy all"
+              />
+            </div>
+            <div className="space-y-3">
+              {submission.subjectiveAnswers.map((a, i) => (
+                <div key={i} className="border-l-2 border-indigo-100 pl-3 py-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs font-medium text-neutral-700 select-text leading-snug">{a.question}</p>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {a.pageHeader && (
+                        <span className="text-[10px] text-neutral-400 whitespace-nowrap">{a.pageHeader}</span>
+                      )}
+                      <CopyButton text={a.answer} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-neutral-900 mt-1 whitespace-pre-wrap select-text leading-relaxed">{a.answer}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}
