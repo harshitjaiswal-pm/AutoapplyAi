@@ -55,6 +55,7 @@ function OnboardingContent() {
     portfolio: "",
     currentCompany: "",
     pronouns: "",
+    ethnicity: "",
     requireSponsorship: "no" as const,
     salaryExpectation: "",
   };
@@ -197,7 +198,7 @@ function OnboardingContent() {
         requireSponsorship:
           formData.requireSponsorship === "yes" ? "yes" : "no",
         howDidYouHear: "",
-        ethnicity: "",
+        ethnicity: formData.ethnicity,
         gender: "",
         disabilityStatus: "",
         veteranStatus: "",
@@ -579,6 +580,9 @@ function OnboardingContent() {
                       <option value="They/Them">They/Them</option>
                       <option value="Other">Other</option>
                     </select>
+                  </Field>
+                  <Field label="Ethnicity (voluntary)">
+                    <input type="text" value={formData.ethnicity} onChange={(e) => setFormData({ ...formData, ethnicity: e.target.value })} placeholder="e.g. Asian - India (leave blank to decline)" className={inputCls} />
                   </Field>
                 </div>
               </div>

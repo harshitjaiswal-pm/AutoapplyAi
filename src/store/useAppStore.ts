@@ -178,6 +178,7 @@ interface UserProfile {
   portfolio: string;
   currentCompany: string;
   pronouns: string;
+  ethnicity: string;
   requireSponsorship: string;
   salaryExpectation: string;
 }
