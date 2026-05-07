@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { SubmissionRecord } from "@/lib/submissions";
+import type { SubmissionRecord, SubmissionOutcome } from "@/lib/submissions";
+import { deriveOutcome } from "@/lib/submissions";
 
 function formatRelativeDate(iso?: string): string {
   if (!iso) return "—";
@@ -31,15 +32,25 @@ function formatDuration(start?: string, end?: string): string {
   return rem > 0 ? `${min}m ${rem}s` : `${min}m`;
 }
 
-const STATUS_STYLES: Record<SubmissionRecord["status"], string> = {
-  in_progress: "bg-blue-100 text-blue-700",
-  completed: "bg-emerald-100 text-emerald-700",
+/**
+ * Outcome buckets: "completed" was previously single-mapped to "Submitted",
+ * but the worker writes status="completed" on any clean exit — including
+ * partial advances that never actually clicked Submit successfully. We split
+ * on the new `applicationSubmitted` flag (or, for legacy records without it,
+ * the presence of a step="confirmation" screenshot) so the dashboard stops
+ * lying about what was actually submitted.
+ */
+const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
+  running: "bg-blue-100 text-blue-700",
+  submitted: "bg-emerald-100 text-emerald-700",
+  partial: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-700",
 };
 
-const STATUS_LABEL: Record<SubmissionRecord["status"], string> = {
-  in_progress: "Running",
-  completed: "Submitted",
+const OUTCOME_LABEL: Record<SubmissionOutcome, string> = {
+  running: "Running",
+  submitted: "Submitted",
+  partial: "Partial",
   failed: "Failed",
 };
 
@@ -77,12 +88,16 @@ export default function ApplicationsPage() {
   }, []);
 
   const counts = submissions
-    ? {
-        all: submissions.length,
-        running: submissions.filter((s) => s.status === "in_progress").length,
-        submitted: submissions.filter((s) => s.status === "completed").length,
-        failed: submissions.filter((s) => s.status === "failed").length,
-      }
+    ? (() => {
+        const outcomes = submissions.map(deriveOutcome);
+        return {
+          all: submissions.length,
+          running: outcomes.filter((o) => o === "running").length,
+          submitted: outcomes.filter((o) => o === "submitted").length,
+          partial: outcomes.filter((o) => o === "partial").length,
+          failed: outcomes.filter((o) => o === "failed").length,
+        };
+      })()
     : null;
 
   return (
@@ -95,11 +110,12 @@ export default function ApplicationsPage() {
             laptop you sign into. Auto-refreshes every 10s.
           </p>
           {counts && (
-            <div className="grid grid-cols-4 gap-3 mt-6">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6">
               {[
                 { label: "All", value: counts.all, accent: "text-white" },
                 { label: "Running", value: counts.running, accent: counts.running > 0 ? "text-blue-300" : "text-indigo-200" },
                 { label: "Submitted", value: counts.submitted, accent: counts.submitted > 0 ? "text-emerald-300" : "text-indigo-200" },
+                { label: "Partial", value: counts.partial, accent: counts.partial > 0 ? "text-amber-300" : "text-indigo-200" },
                 { label: "Failed", value: counts.failed, accent: counts.failed > 0 ? "text-red-300" : "text-indigo-200" },
               ].map((kpi) => (
                 <div key={kpi.label} className="rounded-xl bg-white/10 backdrop-blur p-3.5">
@@ -147,7 +163,9 @@ export default function ApplicationsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-50">
-                {submissions.map((s) => (
+                {submissions.map((s) => {
+                  const outcome = deriveOutcome(s);
+                  return (
                   <tr
                     key={s.applicationId}
                     onClick={() => router.push(`/applications/${s.applicationId}`)}
@@ -163,8 +181,15 @@ export default function ApplicationsPage() {
                       <p className="text-neutral-700 truncate">{s.jobTitle}</p>
                     </td>
                     <td className="px-3 py-3">
-                      <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS_STYLES[s.status] ?? "bg-neutral-100 text-neutral-500"}`}>
-                        {STATUS_LABEL[s.status] ?? s.status}
+                      <span
+                        className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${OUTCOME_STYLES[outcome]}`}
+                        title={
+                          outcome === "partial"
+                            ? (s.stoppedReason ?? "Wizard advanced but did not reach the confirmation page")
+                            : undefined
+                        }
+                      >
+                        {OUTCOME_LABEL[outcome]}
                       </span>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
@@ -190,7 +215,8 @@ export default function ApplicationsPage() {
                     <td className="px-3 py-3 text-neutral-500 tabular-nums">{s.steps?.length ?? 0}</td>
                     <td className="px-5 py-3 text-neutral-500 tabular-nums">{s.screenshots?.length ?? 0}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
