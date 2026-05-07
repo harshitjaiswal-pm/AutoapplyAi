@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { SubmissionRecord } from "@/lib/submissions";
+import { CopyButton } from "@/components/CopyButton";
+import { TailoredResumeView } from "@/components/TailoredResumeView";
 
 const STATUS_STYLES: Record<SubmissionRecord["status"], string> = {
   in_progress: "bg-blue-100 text-blue-700",
@@ -143,13 +145,15 @@ export default function SubmissionDetailPage() {
           </div>
         )}
 
-        {/* Tailored resume + cover letter — what was actually sent */}
-        {(submission.resumeUrl || submission.coverLetter || submission.tailoringChanges) && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Tailored resume + change log */}
-            <div className="bg-white rounded-2xl border border-neutral-200 p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-neutral-900">Tailored Resume</h2>
+        {/* Tailored resume — full inline preview, no need to download to read it */}
+        {(submission.tailoredResumeJson || submission.resumeUrl) && (
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-neutral-900">Tailored Resume</h2>
+              <div className="flex items-center gap-2">
+                {submission.tailoringCostCents != null && (
+                  <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
+                )}
                 {submission.resumeUrl && (
                   <a
                     href={submission.resumeUrl}
@@ -160,46 +164,48 @@ export default function SubmissionDetailPage() {
                   </a>
                 )}
               </div>
-              {submission.tailoringCostCents != null && (
-                <p className="text-[11px] text-neutral-400 mb-3">
-                  Tailoring cost: {submission.tailoringCostCents.toFixed(1)}¢
-                </p>
-              )}
-              {submission.tailoringChanges && submission.tailoringChanges.length > 0 ? (
-                <div>
-                  <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-wider mb-2">
-                    What Claude changed ({submission.tailoringChanges.length})
-                  </p>
-                  <ul className="space-y-2">
-                    {submission.tailoringChanges.slice(0, 8).map((c, i) => (
-                      <li key={i} className="text-xs text-neutral-600">
-                        <span className="inline-block bg-indigo-50 text-indigo-700 text-[10px] font-medium px-1.5 py-0.5 rounded mr-1.5">
-                          {c.category}
-                        </span>
-                        {c.text}
-                      </li>
-                    ))}
-                  </ul>
-                  {submission.tailoringChanges.length > 8 && (
-                    <p className="text-[10px] text-neutral-400 mt-2">+ {submission.tailoringChanges.length - 8} more changes</p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-neutral-400">No itemized changes recorded.</p>
-              )}
             </div>
+            {submission.tailoredResumeJson ? (
+              <TailoredResumeView resume={submission.tailoredResumeJson} />
+            ) : (
+              <p className="text-xs text-neutral-400">
+                Inline preview not available for this submission (run was before
+                the worker started capturing the structured resume). Use the
+                Download button above to view the .docx.
+              </p>
+            )}
+          </div>
+        )}
 
-            {/* Cover letter */}
-            <div className="bg-white rounded-2xl border border-neutral-200 p-5">
-              <h2 className="text-sm font-semibold text-neutral-900 mb-3">Cover Letter</h2>
-              {submission.coverLetter ? (
-                <div className="text-xs text-neutral-700 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
-                  {submission.coverLetter}
-                </div>
-              ) : (
-                <p className="text-xs text-neutral-400">No cover letter generated.</p>
-              )}
+        {/* Cover letter — full text, copyable */}
+        {submission.coverLetter && (
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-neutral-900">Cover Letter</h2>
+              <CopyButton text={submission.coverLetter} label="Copy cover letter" />
             </div>
+            <div className="text-sm text-neutral-700 whitespace-pre-wrap leading-relaxed select-text">
+              {submission.coverLetter}
+            </div>
+          </div>
+        )}
+
+        {/* What Claude changed */}
+        {submission.tailoringChanges && submission.tailoringChanges.length > 0 && (
+          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+            <h2 className="text-sm font-semibold text-neutral-900 mb-3">
+              Changes Claude made ({submission.tailoringChanges.length})
+            </h2>
+            <ul className="space-y-2">
+              {submission.tailoringChanges.map((c, i) => (
+                <li key={i} className="text-xs text-neutral-600 select-text">
+                  <span className="inline-block bg-indigo-50 text-indigo-700 text-[10px] font-medium px-1.5 py-0.5 rounded mr-1.5">
+                    {c.category}
+                  </span>
+                  {c.text}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -250,19 +256,24 @@ export default function SubmissionDetailPage() {
         {submission.steps?.length > 0 && (
           <div className="bg-white rounded-2xl border border-neutral-200 p-5">
             <h2 className="text-sm font-semibold text-neutral-900 mb-3">Step Log</h2>
-            <ol className="space-y-2">
+            <ol className="space-y-3">
               {submission.steps.map((step, i) => (
                 <li key={i} className="flex items-start gap-3 text-xs">
-                  <span className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${
+                  <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${
                     step.status === "completed" ? "bg-emerald-500"
                       : step.status === "failed" ? "bg-red-500"
                       : step.status === "running" ? "bg-blue-500 animate-pulse"
                       : "bg-neutral-300"
                   }`} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-neutral-800 font-medium">{step.name}</p>
-                    {step.note && <p className="text-neutral-500 mt-0.5">{step.note}</p>}
-                    {step.error && <p className="text-red-600 mt-0.5 font-mono">{step.error}</p>}
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-neutral-800 font-medium select-text">{step.name}</p>
+                      {(step.note || step.error) && (
+                        <CopyButton text={[step.name, step.note, step.error].filter(Boolean).join("\n")} />
+                      )}
+                    </div>
+                    {step.note && <p className="text-neutral-600 mt-1 leading-relaxed select-text">{step.note}</p>}
+                    {step.error && <p className="text-red-600 mt-1 font-mono select-text whitespace-pre-wrap">{step.error}</p>}
                   </div>
                   <span className="text-neutral-300 shrink-0 tabular-nums">
                     {step.durationMs != null ? `${(step.durationMs / 1000).toFixed(1)}s` : ""}
