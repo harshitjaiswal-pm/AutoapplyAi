@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { SubmissionRecord } from "@/lib/submissions";
 
 function formatRelativeDate(iso?: string): string {
@@ -43,6 +44,7 @@ const STATUS_LABEL: Record<SubmissionRecord["status"], string> = {
 };
 
 export default function ApplicationsPage() {
+  const router = useRouter();
   const [submissions, setSubmissions] = useState<SubmissionRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -145,11 +147,13 @@ export default function ApplicationsPage() {
               </thead>
               <tbody className="divide-y divide-neutral-50">
                 {submissions.map((s) => (
-                  <tr key={s.applicationId} className="hover:bg-neutral-50 transition-colors">
+                  <tr
+                    key={s.applicationId}
+                    onClick={() => router.push(`/applications/${s.applicationId}`)}
+                    className="hover:bg-indigo-50/50 cursor-pointer transition-colors"
+                  >
                     <td className="px-5 py-3">
-                      <Link href={`/applications/${s.applicationId}`} className="font-medium text-neutral-900 hover:text-indigo-600">
-                        {s.company}
-                      </Link>
+                      <p className="font-medium text-neutral-900">{s.company}</p>
                       {s.tenant && (
                         <p className="text-[10px] text-neutral-400 mt-0.5">{s.tenant}</p>
                       )}
