@@ -12,6 +12,7 @@ export function NavLinks() {
     <div className="flex items-center gap-0.5">
       <NavLink href="/dashboard">Dashboard</NavLink>
       <NavLink href="/applications">Submissions</NavLink>
+      <NavLink href="/credentials">Credentials</NavLink>
       <NavLink href="/tailor">Tailor resume</NavLink>
     </div>
   );
