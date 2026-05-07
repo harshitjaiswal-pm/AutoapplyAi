@@ -27,3 +27,8 @@ export const submissionKey = (email: string, applicationId: string) =>
 
 /** Key schema: submissions:index:{email} — set of applicationIds the worker wrote */
 export const submissionIndexKey = (email: string) => `submissions:index:${email}`;
+
+/** Key schema: user:{email}:tenant_creds:{tenantHost} — written by the worker
+ *  after createAccount succeeds. Reuse path also writes here. Plaintext for
+ *  v1 — see createAccount.ts:118 for the trade-off note. */
+export const tenantCredsKeyPrefix = (email: string) => `user:${email}:tenant_creds:`;
