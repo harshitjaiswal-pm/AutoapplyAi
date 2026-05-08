@@ -154,7 +154,7 @@ export default function ApplicationsPage() {
 
         {submissions && submissions.length > 0 && (
           <div className="bg-white rounded-2xl border border-neutral-200 overflow-x-auto">
-            <table className="w-full text-sm min-w-[1400px]">
+            <table className="w-full text-sm min-w-[1280px]">
               <thead>
                 <tr className="text-[11px] uppercase text-neutral-400 tracking-wider border-b border-neutral-100">
                   <th className="text-left px-5 py-3 font-semibold w-[180px]">Company</th>
@@ -163,7 +163,7 @@ export default function ApplicationsPage() {
                   <th className="text-left px-3 py-3 font-semibold w-[60px]">Match</th>
                   <th className="text-left px-3 py-3 font-semibold w-[80px]">Started</th>
                   <th className="text-left px-3 py-3 font-semibold w-[80px]">Duration</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[260px]">Failure reason</th>
+                  <th className="text-left px-3 py-3 font-semibold w-[140px]">Failure</th>
                   <th className="text-left px-3 py-3 font-semibold w-[90px]">Cost</th>
                   <th className="text-left px-3 py-3 font-semibold w-[200px]">Remark</th>
                   <th className="text-right px-5 py-3 font-semibold w-[110px]">Retrigger</th>
@@ -204,9 +204,16 @@ function SubmissionRow({
 }) {
   const outcome = deriveOutcome(submission);
   const failure = submission.failureCategory
+    ? FAILURE_GUIDANCE[submission.failureCategory]?.shortLabel
+    : null;
+  const failureFullTitle = submission.failureCategory
     ? FAILURE_GUIDANCE[submission.failureCategory]?.title
     : null;
   const failureDetail = submission.stoppedReason ?? submission.errorMessage ?? null;
+  // Tooltip on the cell shows the full descriptive title + raw reason so
+  // the 3-word label doesn't lose information — hover to read the whole
+  // story.
+  const failureTooltip = [failureFullTitle, failureDetail].filter(Boolean).join("\n\n");
 
   // Locally-edited remark with debounced save. We don't update the parent's
   // submissions array on save — the next 10s auto-refresh picks it up.
@@ -311,18 +318,11 @@ function SubmissionRow({
       <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums">
         {formatDuration(submission.startedAt, submission.completedAt)}
       </td>
-      <td className="px-3 py-3 w-[260px]">
+      <td className="px-3 py-3 w-[140px]" title={failureTooltip || undefined}>
         {failure ? (
-          <div title={failureDetail ?? undefined}>
-            <p className="text-xs text-red-700 font-medium truncate">{failure}</p>
-            {failureDetail && (
-              <p className="text-[10px] text-red-500 font-mono truncate">{failureDetail}</p>
-            )}
-          </div>
+          <p className="text-xs text-red-700 font-medium whitespace-nowrap">{failure}</p>
         ) : failureDetail ? (
-          <p className="text-xs text-neutral-500 font-mono truncate" title={failureDetail}>
-            {failureDetail}
-          </p>
+          <p className="text-xs text-neutral-500 truncate">{failureDetail}</p>
         ) : (
           <span className="text-xs text-neutral-300">—</span>
         )}
