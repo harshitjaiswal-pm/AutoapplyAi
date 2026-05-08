@@ -11,6 +11,7 @@ export function NavAuth() {
 
   if (session?.user) {
     const name = session.user.name ?? "User";
+    const email = session.user.email ?? "";
     const initials = name
       .split(" ")
       .map((n) => n[0])
@@ -24,9 +25,16 @@ export function NavAuth() {
           <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
             {initials}
           </div>
-          <span className="text-[12px] font-medium text-neutral-700 max-w-[100px] truncate">
-            {name.split(" ")[0]}
-          </span>
+          <div className="flex flex-col leading-tight max-w-[180px]">
+            <span className="text-[12px] font-medium text-neutral-700 truncate">
+              {name.split(" ")[0]}
+            </span>
+            {email && (
+              <span className="text-[10px] text-neutral-400 font-mono truncate" title={email}>
+                {email}
+              </span>
+            )}
+          </div>
         </div>
         <button
           onClick={() => signOut({ callbackUrl: "/" })}
