@@ -214,19 +214,43 @@ export interface SubmissionRecord {
    *  detect stale activity (worker died mid-step) and render a stale
    *  marker after some threshold. */
   currentActivityAt?: string;
+  /** Two-phase review gate. After tailoring, the worker writes
+   *  reviewStatus="awaiting_review" and pauses. The user reviews the
+   *  tailored resume on /applications/[id] and clicks one of:
+   *    - "Approve & Submit" → reviewStatus="approved" → worker resumes,
+   *       walks the wizard, clicks Submit. No re-tailoring (zero $).
+   *    - "Reject" → reviewStatus="rejected" → worker exits without
+   *       touching Workday. Status flips to "failed". Terminal state.
+   *  Records without this field at all are pre-gate (legacy) and behave
+   *  as one-shot — keeps the field opt-in until every writer fills it. */
+  reviewStatus?: "awaiting_review" | "approved" | "rejected";
+  /** ISO timestamp of the last reviewStatus transition. */
+  reviewStatusAt?: string;
   source: "smoke" | "queue";
 }
 
 /**
- * Derived submission outcome — three buckets (running, submitted, partial,
- * failed). For new records this comes from `applicationSubmitted` directly;
- * for legacy records (no `applicationSubmitted` field) we fall back to a
- * confirmation-screenshot heuristic so the dashboard doesn't lie about
- * old runs.
+ * Derived submission outcome — five buckets. For new records "awaiting_review"
+ * comes from reviewStatus directly (pause point between tailor and submit);
+ * the others come from status + applicationSubmitted; legacy records (no
+ * applicationSubmitted field) fall back to a confirmation-screenshot
+ * heuristic so the dashboard doesn't lie about old runs.
  */
-export type SubmissionOutcome = "running" | "submitted" | "partial" | "failed";
+export type SubmissionOutcome =
+  | "running"
+  | "awaiting_review"
+  | "submitted"
+  | "partial"
+  | "failed";
 
 export function deriveOutcome(s: SubmissionRecord): SubmissionOutcome {
+  // Review-gate state takes precedence over status — the worker keeps
+  // status="in_progress" while paused, but the dashboard needs a distinct
+  // visual so the user knows action is required.
+  if (s.reviewStatus === "awaiting_review") return "awaiting_review";
+  // "approved" is transitional — worker is actively running phase 2 — and
+  // "rejected" terminal (worker has set status=failed alongside it). Both
+  // fall through to the regular status-based logic.
   if (s.status === "in_progress") return "running";
   if (s.status === "failed") return "failed";
   // status === "completed" — but is the application actually submitted?
