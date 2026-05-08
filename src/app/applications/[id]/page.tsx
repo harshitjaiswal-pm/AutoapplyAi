@@ -147,6 +147,23 @@ export default function SubmissionDetailPage() {
             </div>
           </div>
 
+          {/* Live activity badge — pulsing indigo while the worker is
+              actively running. Auto-clears when the worker calls
+              recordSubmissionFinish (status moves to completed/failed).
+              Visibility into what the headless dispatcher is doing
+              right now without tailing Railway logs. */}
+          {submission.status === "in_progress" && submission.currentActivity && (
+            <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/20 border border-blue-400/40">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-300 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400"></span>
+              </span>
+              <span className="text-xs text-blue-100 font-medium">
+                {submission.currentActivity}
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 text-xs">
             <div>
               <p className="text-indigo-400 uppercase tracking-wider text-[10px] font-semibold">Started</p>
