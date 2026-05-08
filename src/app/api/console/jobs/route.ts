@@ -91,7 +91,12 @@ export async function POST(req: NextRequest) {
   let scrapedTitle: string | undefined;
   let scrapedCompany: string | undefined;
   if (!callerHasMetadata) {
-    const validation = await validateAndScrapeUrl(canonical);
+    // Validate against the ORIGINAL URL (with query params) rather than
+    // the canonical one — some Workday tenants render different content
+    // based on `?source=...` presence, and stripping it before fetching
+    // can cause a real listing to look dead. Canonical form is still the
+    // dedup key; original is just the liveness probe.
+    const validation = await validateAndScrapeUrl(body.url);
     if (!validation.alive) {
       return NextResponse.json(
         { error: validation.reason },

@@ -455,7 +455,10 @@ function ApplyConfirmModal({
   onConfirm: () => void;
   busy: boolean;
 }) {
-  const PARALLEL = 2;
+  // Match the dispatcher's actual concurrency (set via MAX_PARALLEL_JOBS
+  // env on Railway, default 1). Was hardcoded "2" pre-2026-05-08 when
+  // we lowered to 1 for Railway's Hobby tier — copy drifted from reality.
+  const PARALLEL = 1;
   const willRun = Math.min(count, PARALLEL);
   const willQueue = Math.max(0, count - PARALLEL);
   return (
@@ -463,7 +466,7 @@ function ApplyConfirmModal({
       <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold text-neutral-900 mb-2">Apply to {count} jobs?</h2>
         <p className="text-sm text-neutral-600 mb-4">
-          {willRun} will run now, {willQueue} will queue. The worker runs 2 in parallel; the rest are picked up as slots free up. Failed jobs can be re-queued individually.
+          {willRun} will run now, {willQueue} will queue. The worker runs {PARALLEL} application{PARALLEL === 1 ? "" : "s"} in parallel; the rest are picked up as slots free up. Failed jobs can be re-queued individually.
         </p>
         <div className="flex justify-end gap-2">
           <button
