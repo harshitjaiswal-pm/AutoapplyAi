@@ -157,26 +157,26 @@ export default function ApplicationsPage() {
             <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
               <colgroup>
                 <col style={{ width: "160px" }} />
-                <col style={{ width: "220px" }} />
+                <col style={{ width: "300px" }} />
                 <col style={{ width: "80px" }} />
-                <col style={{ width: "60px" }} />
+                <col style={{ width: "70px" }} />
                 <col style={{ width: "90px" }} />
                 <col style={{ width: "90px" }} />
                 <col style={{ width: "140px" }} />
                 <col style={{ width: "100px" }} />
-                <col style={{ width: "130px" }} />
+                <col style={{ width: "140px" }} />
               </colgroup>
               <thead>
                 <tr className="text-[11px] uppercase text-neutral-400 tracking-wider border-b border-neutral-100">
-                  <th className="text-left px-5 py-3 font-semibold">Company</th>
-                  <th className="text-left px-3 py-3 font-semibold">Title</th>
-                  <th className="text-left px-3 py-3 font-semibold">Status</th>
-                  <th className="text-left px-3 py-3 font-semibold">Match</th>
-                  <th className="text-left px-3 py-3 font-semibold">Started</th>
-                  <th className="text-left px-3 py-3 font-semibold">Duration</th>
-                  <th className="text-left px-3 py-3 font-semibold">Failure</th>
-                  <th className="text-left px-3 py-3 font-semibold">Cost</th>
-                  <th className="text-right px-5 py-3 font-semibold">Retrigger</th>
+                  <th className="text-left px-5 py-3 font-semibold border-r border-neutral-100">Company</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Title</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Status</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Match</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Started</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Duration</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Failure</th>
+                  <th className="text-left px-3 py-3 font-semibold border-r border-neutral-100">Cost</th>
+                  <th className="text-right px-5 py-3 font-semibold">Retry</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-50">
@@ -225,28 +225,20 @@ function SubmissionRow({
   // story.
   const failureTooltip = [failureFullTitle, failureDetail].filter(Boolean).join("\n\n");
 
-  const [retriggering, setRetriggering] = useState(false);
-  const onRetrigger = async (e: React.MouseEvent) => {
+  // Retrigger opens the actual Workday job URL in a new tab. The Chrome
+  // extension (chrome-extension/ats/workday.js) detects the Workday page
+  // on page load and offers to auto-fill from the user's stored profile
+  // + tailored resume. Anything the headless worker couldn't get past
+  // (CAPTCHA, tenant-specific selectors, ambiguous form fields) the user
+  // handles in their own browser session — residential IP, real cookies,
+  // human-in-the-loop. Server retrigger via dispatcher is intentionally
+  // NOT triggered here: re-running the same headless path against the
+  // same blocker would just fail again. The user can still re-queue
+  // explicitly from /console if they want to retry the worker path.
+  const onRetrigger = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setRetriggering(true);
-    try {
-      const res = await fetch(
-        `/api/applications/${submission.applicationId}/retrigger`,
-        { method: "POST" }
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert(data.error ?? `Retrigger failed: HTTP ${res.status}`);
-        return;
-      }
-      // Open /console pipeline tab in a new browser tab so the user can
-      // watch the retry run without losing their place on this list.
-      window.open("/console", "_blank", "noopener,noreferrer");
-    } catch (err) {
-      alert(`Retrigger failed: ${(err as Error).message}`);
-    } finally {
-      setRetriggering(false);
-    }
+    if (!submission.jobUrl) return;
+    window.open(submission.jobUrl, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -254,18 +246,18 @@ function SubmissionRow({
       onClick={onRowClick}
       className="hover:bg-indigo-50/50 cursor-pointer transition-colors"
     >
-      <td className="px-5 py-3">
-        <p className="font-medium text-neutral-900">{submission.company}</p>
+      <td className="px-5 py-3 border-r border-neutral-100">
+        <p className="font-medium text-neutral-900 truncate" title={submission.company}>{submission.company}</p>
         {submission.tenant && (
-          <p className="text-[10px] text-neutral-400 mt-0.5">{submission.tenant}</p>
+          <p className="text-[10px] text-neutral-400 mt-0.5 truncate">{submission.tenant}</p>
         )}
       </td>
-      <td className="px-3 py-3">
+      <td className="px-3 py-3 border-r border-neutral-100">
         <p className="text-neutral-700 truncate" title={submission.jobTitle}>
           {submission.jobTitle}
         </p>
       </td>
-      <td className="px-3 py-3">
+      <td className="px-3 py-3 border-r border-neutral-100">
         <span
           className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${OUTCOME_STYLES[outcome]}`}
           title={
@@ -277,7 +269,7 @@ function SubmissionRow({
           {OUTCOME_LABEL[outcome]}
         </span>
       </td>
-      <td className="px-3 py-3 whitespace-nowrap">
+      <td className="px-3 py-3 whitespace-nowrap border-r border-neutral-100">
         {submission.matchScore != null ? (
           <span className={`text-xs font-bold tabular-nums ${
             submission.matchScore >= 80 ? "text-emerald-600" :
@@ -295,13 +287,13 @@ function SubmissionRow({
           <span className="text-xs text-neutral-300">—</span>
         )}
       </td>
-      <td className="px-3 py-3 text-neutral-500 whitespace-nowrap">
+      <td className="px-3 py-3 text-neutral-500 whitespace-nowrap border-r border-neutral-100">
         {formatRelativeDate(submission.startedAt)}
       </td>
-      <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums">
+      <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums border-r border-neutral-100">
         {formatDuration(submission.startedAt, submission.completedAt)}
       </td>
-      <td className="px-3 py-3" title={failureTooltip || undefined}>
+      <td className="px-3 py-3 border-r border-neutral-100" title={failureTooltip || undefined}>
         {failure ? (
           <p className="text-xs text-red-700 font-medium whitespace-nowrap">{failure}</p>
         ) : failureDetail ? (
@@ -310,7 +302,7 @@ function SubmissionRow({
           <span className="text-xs text-neutral-300">—</span>
         )}
       </td>
-      <td className="px-3 py-3 whitespace-nowrap">
+      <td className="px-3 py-3 whitespace-nowrap border-r border-neutral-100">
         {/* Placeholder until per-stage cost analytics ships. Today we only
             know the tailoring cost; total per-app cost across all stages
             (parse, analyze, answer-questions) isn't tracked yet. */}
@@ -335,11 +327,11 @@ function SubmissionRow({
         <button
           type="button"
           onClick={onRetrigger}
-          disabled={retriggering || !submission.jobUrl}
+          disabled={!submission.jobUrl}
           className="text-xs bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-medium px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
-          title="Re-queue this application on the retry lane and open the Pipeline in a new tab"
+          title="Open the job posting in a new tab. The Chrome extension takes over from there to auto-fill the form."
         >
-          {retriggering ? "Queuing…" : "Retrigger ↗"}
+          Open & retry ↗
         </button>
       </td>
     </tr>
