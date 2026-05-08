@@ -294,8 +294,29 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+    // Surface the real cause in the response — was hidden behind a generic
+    // "Check your API key" message that's almost never the actual problem
+    // (Vercel auto-injects the key). The Anthropic SDK throws specific
+    // errors for billing, rate-limit, abort, network failures — bubble
+    // them up so the dashboard / on-demand fallback can show what went
+    // wrong instead of a misleading "API key" hint.
+    const err = error as { message?: string; status?: number; name?: string };
+    const detail = err?.message || String(error);
+    const cause =
+      err?.name === "APIUserAbortError" || /aborted/i.test(detail)
+        ? "timeout"
+        : err?.status === 401 || /api key|unauthorized/i.test(detail)
+          ? "auth"
+          : err?.status === 429 || /rate.?limit/i.test(detail)
+            ? "rate_limit"
+            : err?.status === 402 || /credit|billing/i.test(detail)
+              ? "billing"
+              : "unknown";
     return NextResponse.json(
-      { error: "Failed to tailor resume. Check your API key and try again." },
+      {
+        error: `Tailoring failed: ${detail}`,
+        cause,
+      },
       { status: 500 }
     );
   }
