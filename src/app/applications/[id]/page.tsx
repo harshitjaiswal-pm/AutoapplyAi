@@ -374,7 +374,7 @@ export default function SubmissionDetailPage() {
                 {submission.tailoringCostCents != null && (
                   <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
                 )}
-                {submission.resumeUrl && id && (
+                {(submission.resumeUrl || submission.tailoredResumeJson) && id && (
                   <a
                     href={`/api/applications/${id}/resume`}
                     className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
