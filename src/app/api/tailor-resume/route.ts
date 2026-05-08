@@ -27,6 +27,9 @@ import { costFromUsage, getBudgetStatus, recordCost } from "@/lib/budget";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  // Hoisted for visibility inside catch block — must always have a value
+  // by the time an error could fire on the Anthropic call.
+  let modelId: string = "(unset)";
   try {
     const body = await request.json();
     const { parsedResume, parsedJob, mode } = body;
@@ -35,6 +38,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Both a parsed resume and parsed job are required." },
         { status: 400 }
+      );
+    }
+
+    // Size guard. The Anthropic 400 `invalid_request_error` we saw in
+    // 2026-05-08's diagnostic was almost certainly a context-window
+    // overflow — some captured JDs include a full HTML page, not just
+    // the role description. 500K chars ≈ 125K tokens, well below
+    // Haiku's 200K context but with safety headroom for system prompt
+    // + output. Reject earlier with a clear error so the worker doesn't
+    // burn a retry on a permanent failure.
+    const inputChars =
+      JSON.stringify(parsedResume).length + JSON.stringify(parsedJob).length;
+    const MAX_INPUT_CHARS = 500_000;
+    if (inputChars > MAX_INPUT_CHARS) {
+      return NextResponse.json(
+        {
+          error: `Tailoring input too large: ${inputChars} chars (max ${MAX_INPUT_CHARS}). Likely a JD captured with full HTML body. Trim parsedJob.description to under ~400KB before retrying.`,
+          cause: "input_too_large",
+          inputChars,
+        },
+        { status: 413 }
       );
     }
 
@@ -77,7 +101,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Model selection: "fast" = Haiku (cheap), "pro" = Sonnet (better quality)
-    const modelId =
+    modelId =
       mode === "fast"
         ? "claude-haiku-4-5-20251001"
         : "claude-sonnet-4-20250514";
@@ -329,8 +353,8 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ tailoredResult, usage: message.usage });
   } catch (error: unknown) {
-    console.error("Tailoring error:", error);
     if (error instanceof SyntaxError) {
+      console.error("[tailor-resume] JSON.parse failed on AI response:", error);
       return NextResponse.json(
         { error: "AI returned invalid format. Please try again." },
         { status: 500 }
@@ -342,24 +366,63 @@ export async function POST(request: NextRequest) {
     // errors for billing, rate-limit, abort, network failures — bubble
     // them up so the dashboard / on-demand fallback can show what went
     // wrong instead of a misleading "API key" hint.
-    const err = error as { message?: string; status?: number; name?: string };
+    //
+    // Plus: log the FULL error body to Vercel logs (no truncation), and
+    // map Anthropic's 400 invalid_request_error to HTTP 502 (Bad Gateway)
+    // so the worker's retry-on-5xx logic doesn't pointlessly retry a
+    // request the model already rejected as malformed. 400 is permanent
+    // until the request shape changes; retrying just doubles the failures.
+    const err = error as {
+      message?: string;
+      status?: number;
+      name?: string;
+      error?: { type?: string; message?: string };
+    };
+    const upstreamStatus = err?.status;
     const detail = err?.message || String(error);
+    const anthropicErrorType = err?.error?.type;
+    const anthropicErrorMessage = err?.error?.message;
+
+    // Structured server-side log — visible in Vercel logs, easy to grep.
+    console.error("[tailor-resume] Anthropic SDK threw:", {
+      modelId,
+      upstreamStatus,
+      anthropicErrorType,
+      anthropicErrorMessage,
+      detail,
+      name: err?.name,
+    });
+
     const cause =
       err?.name === "APIUserAbortError" || /aborted/i.test(detail)
         ? "timeout"
-        : err?.status === 401 || /api key|unauthorized/i.test(detail)
+        : upstreamStatus === 401 || /api key|unauthorized/i.test(detail)
           ? "auth"
-          : err?.status === 429 || /rate.?limit/i.test(detail)
+          : upstreamStatus === 429 || /rate.?limit/i.test(detail)
             ? "rate_limit"
-            : err?.status === 402 || /credit|billing/i.test(detail)
+            : upstreamStatus === 402 || /credit|billing/i.test(detail)
               ? "billing"
-              : "unknown";
+              : upstreamStatus === 400 || anthropicErrorType === "invalid_request_error"
+                ? "invalid_request"
+                : "unknown";
+
+    // Map upstream status → our status. 400 from Anthropic is OUR bug
+    // (bad request), not a transient issue. Surface as 502 Bad Gateway so
+    // the worker's retry-on-5xx loop doesn't burn another call. 401/429/
+    // 402/aborted stay 500 (worker may decide to retry rate-limit ones).
+    const ourStatus = upstreamStatus === 400 || anthropicErrorType === "invalid_request_error"
+      ? 502
+      : 500;
+
     return NextResponse.json(
       {
         error: `Tailoring failed: ${detail}`,
         cause,
+        upstreamStatus,
+        anthropicErrorType,
+        anthropicErrorMessage,
       },
-      { status: 500 }
+      { status: ourStatus }
     );
   }
 }
