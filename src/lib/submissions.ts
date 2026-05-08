@@ -155,6 +155,13 @@ export interface SubmissionRecord {
   tailoredResumeJson?: Record<string, unknown>;
   resumeFilename?: string;
   resumeUrl?: string;
+  /** Set when the worker's tailored .docx upload to Vercel Blob failed at
+   *  apply time. The application itself may still have completed (Workday
+   *  got the .docx via direct upload during the wizard) — only the
+   *  dashboard's archival copy is missing. Surfaced loudly so the gap is
+   *  visible and engineer-actionable instead of silently looking like
+   *  "(not captured for this run)". */
+  resumeUploadError?: string;
   screenshots: SubmissionScreenshot[];
   steps: SubmissionStepLog[];
   errorMessage?: string;

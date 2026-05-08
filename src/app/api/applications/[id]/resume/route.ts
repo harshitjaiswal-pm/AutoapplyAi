@@ -45,14 +45,13 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 
   if (!submission.resumeUrl) {
+    const uploadError = submission.resumeUploadError;
     return NextResponse.json(
       {
-        error:
-          "The resume that was sent for this submission was not uploaded to Blob (older " +
-          "worker run, before upload-on-success was wired). The .docx still exists on the " +
-          "laptop where the original worker ran. To make it downloadable here, run from " +
-          "that laptop's autoapply-worker checkout: " +
-          `npx tsx scripts/backfill_submission.ts <email> ${ctx.params.id}`,
+        error: uploadError
+          ? `Resume upload to Blob failed at apply time: ${uploadError}. The Workday submission itself may have completed — only the dashboard's archival copy is missing.`
+          : "Resume not captured for this submission.",
+        resumeUploadError: uploadError,
       },
       { status: 404 }
     );
