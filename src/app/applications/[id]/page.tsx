@@ -336,50 +336,70 @@ export default function SubmissionDetailPage() {
           </div>
         )}
 
-        {/* Tailored resume — only rendered when the worker actually captured
-            one for this run (either as JSON for the inline preview, or as a
-            Blob URL for download). When neither exists, the recovery panel
-            above already shows "Tailored resume (not captured for this run)" —
-            don't add a button that would generate a fresh resume the
-            employer never received. */}
-        {id && (submission.tailoredResumeJson || submission.resumeUrl) && (
-          <div className="bg-white rounded-2xl border border-neutral-200 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <button
-                type="button"
-                onClick={() => setResumeOpen((v) => !v)}
-                disabled={!submission.tailoredResumeJson}
-                className="flex items-center gap-2 text-sm font-semibold text-neutral-900 hover:text-indigo-600 transition-colors disabled:cursor-default disabled:hover:text-neutral-900"
-              >
-                {submission.tailoredResumeJson && (
-                  <span className="text-xs">{resumeOpen ? "▼" : "▶"}</span>
-                )}
-                Tailored Resume
-                {!resumeOpen && submission.tailoredResumeJson && (
-                  <span className="text-[11px] text-neutral-400 font-normal">
-                    (click to expand)
-                  </span>
-                )}
-              </button>
-              <div className="flex items-center gap-2">
-                {submission.tailoringCostCents != null && (
-                  <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
-                )}
-                {submission.resumeUrl && (
-                  <a
-                    href={`/api/applications/${id}/resume`}
-                    className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                  >
-                    ↓ Resume
-                  </a>
-                )}
+        {/* Tailored resume — always rendered when we have an applicationId,
+            so the card is a consistent surface across every submission. The
+            inner content reflects what was actually captured at apply time:
+            preview if we have the JSON, download if we have the Blob URL,
+            an honest "(not captured for this run)" note if neither was
+            uploaded. We never tailor on demand here — the dashboard is a
+            historical record of what was applied with, not a re-tailor surface. */}
+        {id && (() => {
+          const hasJson = !!submission.tailoredResumeJson;
+          const hasUrl = !!submission.resumeUrl;
+          const captured = hasJson || hasUrl;
+          return (
+            <div className="bg-white rounded-2xl border border-neutral-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <button
+                  type="button"
+                  onClick={() => setResumeOpen((v) => !v)}
+                  disabled={!hasJson}
+                  className="flex items-center gap-2 text-sm font-semibold text-neutral-900 hover:text-indigo-600 transition-colors disabled:cursor-default disabled:hover:text-neutral-900"
+                >
+                  {hasJson && <span className="text-xs">{resumeOpen ? "▼" : "▶"}</span>}
+                  Tailored Resume
+                  {!resumeOpen && hasJson && (
+                    <span className="text-[11px] text-neutral-400 font-normal">
+                      (click to expand)
+                    </span>
+                  )}
+                  {!captured && (
+                    <span className="text-[11px] text-neutral-400 font-normal">
+                      (not captured for this run)
+                    </span>
+                  )}
+                </button>
+                <div className="flex items-center gap-2">
+                  {submission.tailoringCostCents != null && (
+                    <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
+                  )}
+                  {hasUrl && (
+                    <a
+                      href={`/api/applications/${id}/resume`}
+                      className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      ↓ Resume
+                    </a>
+                  )}
+                </div>
               </div>
+              {resumeOpen && hasJson && submission.tailoredResumeJson && (
+                <TailoredResumeView resume={submission.tailoredResumeJson} />
+              )}
+              {!captured && (
+                <p className="text-xs text-neutral-500 leading-relaxed">
+                  The worker tailored a resume for this application at apply time, but
+                  the .docx wasn&apos;t uploaded to Blob (older worker run, before the
+                  upload-on-success path was wired). To make it downloadable here, run the
+                  backfill from the laptop where the original worker ran:{" "}
+                  <code className="bg-neutral-100 px-1.5 py-0.5 rounded text-[11px]">
+                    cd autoapply-worker &amp;&amp; npx tsx scripts/backfill_submission.ts &lt;email&gt; {id}
+                  </code>
+                </p>
+              )}
             </div>
-            {resumeOpen && submission.tailoredResumeJson && (
-              <TailoredResumeView resume={submission.tailoredResumeJson} />
-            )}
-          </div>
-        )}
+          );
+        })()}
 
         {/* Cover letter — full text, copyable */}
         {submission.coverLetter && (

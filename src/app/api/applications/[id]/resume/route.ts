@@ -48,10 +48,11 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json(
       {
         error:
-          "The resume that was sent for this submission was not captured by the worker. " +
-          "To recover it, run `npx tsx scripts/backfill_submission.ts <email> <appId>` from " +
-          "the laptop where the original submission ran (the .docx is in that laptop's " +
-          "%TEMP%/autoapply-tailored/ or os.tmpdir()/autoapply-tailored/).",
+          "The resume that was sent for this submission was not uploaded to Blob (older " +
+          "worker run, before upload-on-success was wired). The .docx still exists on the " +
+          "laptop where the original worker ran. To make it downloadable here, run from " +
+          "that laptop's autoapply-worker checkout: " +
+          `npx tsx scripts/backfill_submission.ts <email> ${ctx.params.id}`,
       },
       { status: 404 }
     );
