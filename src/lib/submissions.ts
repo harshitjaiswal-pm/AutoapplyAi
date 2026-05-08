@@ -240,6 +240,7 @@ export type SubmissionOutcome =
   | "running"
   | "awaiting_review"
   | "submitted"
+  | "already_applied"
   | "partial"
   | "failed";
 
@@ -254,7 +255,11 @@ export function deriveOutcome(s: SubmissionRecord): SubmissionOutcome {
   if (s.status === "in_progress") return "running";
   if (s.status === "failed") return "failed";
   // status === "completed" — but is the application actually submitted?
-  if (s.applicationSubmitted === true) return "submitted";
+  if (s.applicationSubmitted === true) {
+    // Distinguish "submitted this run" from "already submitted in a prior run"
+    if (s.stoppedReason?.toLowerCase().includes("already applied")) return "already_applied";
+    return "submitted";
+  }
   if (s.applicationSubmitted === false) return "partial";
   // Legacy records: infer from screenshots. The worker only takes a
   // step="confirmation" shot when looksLikeConfirmation matched after
