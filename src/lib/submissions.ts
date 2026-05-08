@@ -58,73 +58,93 @@ export type FailureCategory =
   | "worker_exception";
 
 /**
- * Category → human title + actionable next step. Shown inside the
- * recovery panel so the user knows exactly what happened and what to
- * do about it. Title is one short phrase ("Listing no longer live");
- * guidance is one or two sentences ending with a concrete action.
+ * Category → short label + descriptive title + actionable guidance.
+ *
+ * - `shortLabel`: 3 words max. Used in tight surfaces (Submissions list).
+ * - `title`: descriptive phrase. Used in the recovery panel where there's room.
+ * - `guidance`: one or two sentences ending with a concrete action.
  */
-export const FAILURE_GUIDANCE: Record<FailureCategory, { title: string; guidance: string }> = {
+export const FAILURE_GUIDANCE: Record<
+  FailureCategory,
+  { shortLabel: string; title: string; guidance: string }
+> = {
   job_posting_dead: {
+    shortLabel: "Listing dead",
     title: "Listing no longer live",
     guidance: "The Workday URL returned a 'page not found' state — the company has likely pulled or expired this posting. Search the company's careers site for the same role; if it's been republished, the URL will have a new ID.",
   },
   job_posting_no_apply: {
+    shortLabel: "No apply button",
     title: "Apply button missing",
     guidance: "The job description page loaded but no Apply button was visible. The role may be past its closing date, or the company has switched to a different application channel. Check the posting manually.",
   },
   tailoring_failed: {
+    shortLabel: "Tailoring failed",
     title: "Resume tailoring failed",
     guidance: "Claude couldn't tailor the resume for this JD — usually transient (Anthropic rate limit, JSON parse error, or the JD was too short to analyze). Retry the same URL; the second run almost always succeeds.",
   },
   create_account_stuck: {
+    shortLabel: "Signup stuck",
     title: "Account creation got stuck",
     guidance: "The Workday signup form was submitted but the post-submit page wasn't a recognizable verify-email or sign-in screen. Open the tenant portal manually with the credentials below to see what state the account is in.",
   },
   create_account_email_in_use: {
+    shortLabel: "Email in use",
     title: "Email already has an account at this tenant",
     guidance: "Workday rejected the signup because this email already has an account on this tenant. Sign in with the credentials below (rather than creating a new account) to continue the application.",
   },
   otp_timeout: {
+    shortLabel: "OTP timeout",
     title: "Verification email never arrived",
     guidance: "The OTP email didn't show up within the 5-minute window. The account exists but is unverified — check the linked Gmail's spam folder and click the verification link manually, then sign in via the portal to continue.",
   },
   otp_error: {
+    shortLabel: "Gmail error",
     title: "Gmail polling errored",
     guidance: "The Gmail API returned an error while polling for the OTP. Check Gmail OAuth status (the worker may need a token refresh). Account creation likely succeeded; just retry once the Gmail link is healthy.",
   },
   verify_email_stuck: {
+    shortLabel: "Verify failed",
     title: "Verification link didn't authenticate",
     guidance: "The verification email arrived and we clicked the link, but the post-click page didn't transition us into the wizard. Sign in manually via the portal — the account is verified, just not signed in.",
   },
   wizard_stuck_step: {
+    shortLabel: "Wizard stuck",
     title: "Save & Continue silently swallowed",
     guidance: "A wizard step accepted our answers but the Save & Continue button didn't advance the page (no error, no progress). Tenant-specific issue — sign in via the portal and resume from the step shown below.",
   },
   wizard_validation_errors: {
+    shortLabel: "Validation errors",
     title: "Validation errors blocked advance",
     guidance: "The form rejected one or more of our answers and the agent couldn't recover within its retry budget. The exact errors are in the step log below — sign in via the portal, fix those fields manually, and resume.",
   },
   submit_modal_stuck: {
+    shortLabel: "Submit modal stuck",
     title: "Submit confirmation modal stuck",
     guidance: "We clicked Submit but the confirmation dialog appeared with a button shape we couldn't identify. The application is one click away — sign in via the portal and click Submit yourself.",
   },
   submit_no_button: {
+    shortLabel: "No submit button",
     title: "Submit button not clickable",
     guidance: "We reached the Review page but couldn't click any Submit button after 3 retries. Sign in via the portal — your filled answers are preserved on the Review screen, just hit Submit manually.",
   },
   submit_server_error: {
+    shortLabel: "Server error",
     title: "Workday returned a server error post-Submit",
     guidance: "After we clicked Submit, Workday's 'Something went wrong' page appeared and didn't recover after a reload. Often transient — retry the same URL in 30 minutes; if it persists, submit manually via the portal.",
   },
   submit_validation_errors: {
+    shortLabel: "Submit rejected",
     title: "Submit rejected by validation",
     guidance: "Workday rejected our submission with one or more validation errors after we clicked Submit. The errors are listed below — sign in via the portal, fix them on the Review page, and Submit manually.",
   },
   submit_no_confirmation: {
+    shortLabel: "No confirmation",
     title: "Submit clicked but no confirmation",
     guidance: "We clicked Submit successfully but no confirmation page loaded within 30 seconds. The application MAY have actually gone through — sign in via the portal and check My Applications before resubmitting.",
   },
   worker_exception: {
+    shortLabel: "Worker crashed",
     title: "Worker hit an unexpected error",
     guidance: "Something threw an exception inside the worker that wasn't classified. The error message below is the raw stack trace — share with the developer and retry the URL.",
   },
