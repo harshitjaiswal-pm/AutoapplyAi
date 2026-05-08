@@ -8,6 +8,7 @@ import { deriveOutcome, FAILURE_GUIDANCE } from "@/lib/submissions";
 import type { TenantCredsRow } from "../../api/credentials/route";
 import { CopyButton } from "@/components/CopyButton";
 import { TailoredResumeView } from "@/components/TailoredResumeView";
+import CostBreakdown from "@/components/CostBreakdown";
 
 const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
   running: "bg-blue-100 text-blue-700",
@@ -409,6 +410,11 @@ export default function SubmissionDetailPage() {
             </div>
           );
         })()}
+
+        {/* Per-app cost breakdown — renders nothing if no cost events
+            recorded yet (legacy applications, or runs that didn't hit
+            any LLM call). */}
+        {id && <CostBreakdown applicationId={id} />}
 
         {/* Cover letter — full text, copyable */}
         {submission.coverLetter && (

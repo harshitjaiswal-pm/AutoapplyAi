@@ -5,6 +5,7 @@ import {
   getMonthlyBudgetCap,
   PER_APP_BUDGET_CENTS,
   DEFAULT_MONTHLY_BUDGET_CENTS,
+  type CostEvent,
 } from "./budget";
 
 /**
@@ -172,5 +173,48 @@ describe("getMonthlyBudgetCap", () => {
   it("accepts zero as a valid override (lockout user)", () => {
     process.env.BUDGET_USER_OVERRIDES = "blocked@example.com=0";
     expect(getMonthlyBudgetCap("blocked@example.com")).toBe(0);
+  });
+});
+
+/**
+ * byStage rollup is computed inline in getCostBreakdown; aggregating
+ * here mirrors that logic so we can verify the math without hitting
+ * Redis. If getCostBreakdown ever moves the aggregation to a separate
+ * helper we should re-export and call it directly.
+ */
+function aggregateByStage(events: CostEvent[]): Record<string, number> {
+  const byStage: Record<string, number> = {};
+  for (const ev of events) {
+    byStage[ev.stage] = (byStage[ev.stage] ?? 0) + ev.cents;
+  }
+  return byStage;
+}
+
+describe("CostEvent byStage aggregation", () => {
+  it("sums cents per stage across multiple events", () => {
+    const events: CostEvent[] = [
+      { stage: "resume_tailor", model: "claude-haiku-4-5", inputTokens: 5000, outputTokens: 5000, cents: 2.4, ts: "2026-05-08T01:00:00Z" },
+      { stage: "answer_question", model: "claude-haiku-4-5", inputTokens: 500, outputTokens: 100, cents: 0.05, ts: "2026-05-08T01:01:00Z" },
+      { stage: "answer_question", model: "claude-haiku-4-5", inputTokens: 600, outputTokens: 120, cents: 0.06, ts: "2026-05-08T01:02:00Z" },
+      { stage: "answer_question", model: "claude-haiku-4-5", inputTokens: 550, outputTokens: 110, cents: 0.05, ts: "2026-05-08T01:03:00Z" },
+      { stage: "analyze_job", model: "claude-haiku-4-5", inputTokens: 1500, outputTokens: 800, cents: 0.32, ts: "2026-05-08T01:04:00Z" },
+    ];
+    const byStage = aggregateByStage(events);
+    expect(byStage.resume_tailor).toBeCloseTo(2.4, 2);
+    expect(byStage.answer_question).toBeCloseTo(0.16, 2);
+    expect(byStage.analyze_job).toBeCloseTo(0.32, 2);
+  });
+
+  it("returns empty object for empty event list", () => {
+    expect(aggregateByStage([])).toEqual({});
+  });
+
+  it("treats a single event as that stage's full spend", () => {
+    const events: CostEvent[] = [
+      { stage: "parse_resume", model: "claude-haiku-4-5", inputTokens: 2000, outputTokens: 1000, cents: 0.4, ts: "2026-05-08T00:00:00Z" },
+    ];
+    const byStage = aggregateByStage(events);
+    expect(byStage.parse_resume).toBeCloseTo(0.4, 2);
+    expect(Object.keys(byStage)).toHaveLength(1);
   });
 });

@@ -47,3 +47,12 @@ export const consoleIndexKey = (email: string) => `console:index:${email}`;
  *  reporting without growing unbounded. */
 export const monthlyBudgetKey = (email: string, monthKey: string) =>
   `budget:${email}:${monthKey}`;
+
+/** Key schema: cost:events:{applicationId} — list of per-LLM-call cost
+ *  events for one application. One push per Anthropic-billable call,
+ *  tagged with the stage (resume_tailor / parse_resume / analyze_job /
+ *  answer_question / chat / cover_letter). Powers the per-app cost
+ *  breakdown widget on /applications/[id]. 90-day TTL matches the
+ *  SubmissionRecord — both expire together. */
+export const costEventsKey = (applicationId: string) =>
+  `cost:events:${applicationId}`;

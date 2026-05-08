@@ -1,4 +1,4 @@
-import { redis, monthlyBudgetKey } from "./redis";
+import { redis, monthlyBudgetKey, costEventsKey } from "./redis";
 
 /**
  * Cost tracking + budget enforcement.
@@ -150,6 +150,43 @@ export async function getBudgetStatus(
 }
 
 /**
+ * Per-call cost stages. Each is a distinct Anthropic-billable surface;
+ * the breakdown lets the user (and us) see which step is burning what
+ * for any given application.
+ */
+export type CostStage =
+  | "resume_tailor"
+  | "cover_letter"
+  | "parse_resume"
+  | "analyze_job"
+  | "answer_question"
+  | "chat";
+
+export interface CostEvent {
+  stage: CostStage;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cents: number;
+  ts: string;
+}
+
+interface RecordCostContext {
+  /** When provided, also append to cost:events:{applicationId} so the
+   *  per-app cost breakdown can render later. Skip for non-app calls
+   *  (e.g., a /tailor page sandbox run with no submission). */
+  applicationId?: string;
+  /** Stage tag — `resume_tailor`, `parse_resume`, etc. Required when
+   *  applicationId is provided so the per-app event has meaningful
+   *  shape; otherwise optional. */
+  stage?: CostStage;
+  /** Model id used for the call. Stored verbatim. */
+  model?: string;
+  /** Anthropic usage object — input/output tokens. Stored verbatim. */
+  tokens?: { input_tokens?: number; output_tokens?: number };
+}
+
+/**
  * Increment the monthly counter atomically. Best-effort: if Redis is
  * unreachable we log and continue rather than blocking the user's
  * application — the alternative (failing the tailor call because we
@@ -157,10 +194,17 @@ export async function getBudgetStatus(
  *
  * 90-day TTL is set on the first write only — incrby on an existing
  * key keeps the existing TTL.
+ *
+ * When `ctx.applicationId` and `ctx.stage` are both provided, ALSO
+ * append a CostEvent to `cost:events:{applicationId}` so the per-app
+ * cost breakdown widget can render the call later. Failure to append
+ * the event doesn't fail the monthly-counter increment — they're
+ * independent best-effort writes.
  */
 export async function recordCost(
   email: string,
   cents: number,
+  ctx: RecordCostContext = {},
   date: Date = new Date()
 ): Promise<void> {
   if (!email || cents <= 0) return;
@@ -172,8 +216,81 @@ export async function recordCost(
     await redis.incrby(key, hundredths);
     await redis.expire(key, 60 * 60 * 24 * 90);
   } catch (e) {
-    console.warn(`[budget] failed to record cost for ${email}: ${(e as Error).message}`);
+    console.warn(`[budget] failed to record monthly cost for ${email}: ${(e as Error).message}`);
   }
+
+  // Per-app event log — only when caller provides applicationId + stage.
+  if (ctx.applicationId && ctx.stage) {
+    try {
+      const event: CostEvent = {
+        stage: ctx.stage,
+        model: ctx.model ?? "unknown",
+        inputTokens: ctx.tokens?.input_tokens ?? 0,
+        outputTokens: ctx.tokens?.output_tokens ?? 0,
+        cents,
+        ts: date.toISOString(),
+      };
+      const k = costEventsKey(ctx.applicationId);
+      // RPUSH stores in chronological order. Read with LRANGE 0 -1.
+      await redis.rpush(k, JSON.stringify(event));
+      await redis.expire(k, 60 * 60 * 24 * 90);
+    } catch (e) {
+      console.warn(
+        `[budget] failed to record per-app cost event for ${ctx.applicationId}: ${(e as Error).message}`
+      );
+    }
+  }
+}
+
+/**
+ * Fetch the per-app cost breakdown for the dashboard.
+ * Returns `null` if the key doesn't exist (e.g., older app from before
+ * the analytics shipped). Returns `{ events, totalCents, byStage }`
+ * otherwise — totalCents is the sum across all events, byStage sums
+ * per stage.
+ */
+export interface CostBreakdown {
+  events: CostEvent[];
+  totalCents: number;
+  byStage: Partial<Record<CostStage, number>>;
+}
+
+export async function getCostBreakdown(
+  applicationId: string
+): Promise<CostBreakdown | null> {
+  if (!applicationId) return null;
+  const key = costEventsKey(applicationId);
+  let raw: unknown[];
+  try {
+    raw = (await redis.lrange(key, 0, -1)) as unknown[];
+  } catch (e) {
+    console.warn(`[budget] failed to read cost events for ${applicationId}: ${(e as Error).message}`);
+    return null;
+  }
+  if (!raw || raw.length === 0) return null;
+
+  const events: CostEvent[] = [];
+  for (const item of raw) {
+    try {
+      // Upstash returns auto-deserialized JSON; in some configurations it
+      // returns string. Handle both.
+      const ev = typeof item === "string" ? (JSON.parse(item) as CostEvent) : (item as CostEvent);
+      if (!ev || typeof ev.cents !== "number" || !ev.stage) continue;
+      events.push(ev);
+    } catch {
+      /* skip malformed event */
+    }
+  }
+  if (events.length === 0) return null;
+
+  let totalCents = 0;
+  const byStage: Partial<Record<CostStage, number>> = {};
+  for (const ev of events) {
+    totalCents += ev.cents;
+    byStage[ev.stage] = (byStage[ev.stage] ?? 0) + ev.cents;
+  }
+  totalCents = Math.round(totalCents * 100) / 100;
+  return { events, totalCents, byStage };
 }
 
 /**
