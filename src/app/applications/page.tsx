@@ -106,8 +106,9 @@ export default function ApplicationsPage() {
         <div className="max-w-6xl mx-auto">
           <h1 className="text-2xl font-bold">Submissions</h1>
           <p className="text-indigo-300 text-sm mt-1">
-            Every Workday application your worker has run, written from any
-            laptop you sign into. Auto-refreshes every 10s.
+            Every Workday application the worker has run for you, with the
+            tailored resume, cover letter, and step-by-step evidence.
+            Auto-refreshes every 10s.
           </p>
           {counts && (
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6">
@@ -141,8 +142,12 @@ export default function ApplicationsPage() {
           <div className="bg-white rounded-2xl border border-neutral-200 p-10 text-center">
             <p className="text-sm font-semibold text-neutral-700">No submissions yet</p>
             <p className="text-xs text-neutral-400 mt-1 max-w-md mx-auto">
-              Run <code className="bg-neutral-100 px-1.5 py-0.5 rounded">smoke_full_apply.ts</code> on your
-              laptop with a Workday URL. It writes here as it runs.
+              Capture jobs in the{" "}
+              <Link href="/console" className="text-indigo-600 hover:text-indigo-700 underline">
+                Console
+              </Link>
+              {" "}and click Apply — the worker will run them and write here as
+              each application progresses.
             </p>
           </div>
         )}
