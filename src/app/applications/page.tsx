@@ -103,7 +103,7 @@ export default function ApplicationsPage() {
   return (
     <div className="min-h-screen bg-neutral-50">
       <div className="bg-gradient-to-br from-indigo-950 via-indigo-900 to-violet-900 text-white px-6 py-8">
-        <div className="max-w-7xl mx-auto">
+        <div className="max-w-[1600px] mx-auto">
           <h1 className="text-2xl font-bold">Submissions</h1>
           <p className="text-indigo-300 text-sm mt-1">
             Every Workday application the worker has run for you, with the
@@ -129,7 +129,7 @@ export default function ApplicationsPage() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      <div className="max-w-[1600px] mx-auto px-6 py-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-4 text-sm">{error}</div>
         )}
@@ -153,8 +153,19 @@ export default function ApplicationsPage() {
         )}
 
         {submissions && submissions.length > 0 && (
-          <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-white rounded-2xl border border-neutral-200 overflow-x-auto">
+            <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: "160px" }} />
+                <col style={{ width: "220px" }} />
+                <col style={{ width: "80px" }} />
+                <col style={{ width: "60px" }} />
+                <col style={{ width: "90px" }} />
+                <col style={{ width: "90px" }} />
+                <col style={{ width: "140px" }} />
+                <col style={{ width: "100px" }} />
+                <col style={{ width: "130px" }} />
+              </colgroup>
               <thead>
                 <tr className="text-[11px] uppercase text-neutral-400 tracking-wider border-b border-neutral-100">
                   <th className="text-left px-5 py-3 font-semibold">Company</th>
@@ -249,7 +260,7 @@ function SubmissionRow({
           <p className="text-[10px] text-neutral-400 mt-0.5">{submission.tenant}</p>
         )}
       </td>
-      <td className="px-3 py-3 max-w-[260px]">
+      <td className="px-3 py-3">
         <p className="text-neutral-700 truncate" title={submission.jobTitle}>
           {submission.jobTitle}
         </p>
