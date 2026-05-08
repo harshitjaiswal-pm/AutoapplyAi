@@ -2,25 +2,25 @@
  * Server-side capture-time validator for job-posting URLs.
  *
  * Two jobs:
- *   1. Detect dead listings BEFORE they enter the queue, so the user
- *      gets immediate feedback ("this listing appears to be expired")
- *      instead of finding out 2 minutes later when the dispatcher's
- *      worker bails on it. Eliminates the 24% `job_posting_dead`
- *      failure category at the source.
- *   2. Scrape title + company from the JD page when it IS alive, so
- *      pasted-URL captures don't show "—" placeholders for those
- *      fields. Defaults the user can override or accept.
+ *   1. Reject HARD-dead listings (HTTP 4xx) before they enter the queue.
+ *   2. Scrape title + company from the JD page when alive, so paste-flow
+ *      rows don't show "—" placeholders for those fields.
  *
- * Soft-404 detection mirrors `autoapply-worker/scripts/smoke_full_apply.ts`'s
- * `isDeadListing()` so behavior is consistent: if the worker would bail
- * on the URL, we reject at capture instead.
+ * What we DO NOT do anymore (removed 2026-05-09 morning):
+ *   - Body-text soft-404 detection. Workday tenants are SPAs that hydrate
+ *     dead-listing notices client-side AFTER the server returns 200, so
+ *     this validator never sees the "Posting not found" text. Worse: the
+ *     same generic phrases ("no longer available", "page not found")
+ *     appear incidentally in legit pages — footer accessibility notices,
+ *     tenant boilerplate, search-no-results messages — causing real
+ *     listings to be falsely rejected (Thomson Reuters wd5 case caught
+ *     2026-05-09). The worker (smoke_full_apply.ts) still does the
+ *     full Playwright-rendered soft-404 check on every actual run; that
+ *     remains the source of truth for SPA-rendered dead listings.
  */
 
-const SOFT_NOT_FOUND_RE =
-  /the page you are looking for doesn['']?t exist|page not found|no longer available|requisition (?:is )?closed|posting (?:has )?expired/i;
-
 const FETCH_TIMEOUT_MS = 5000;
-const MAX_BODY_BYTES = 1_000_000; // 1MB — typical Workday JD is 50-300KB; cap protects us from runaway downloads
+const MAX_BODY_BYTES = 200_000; // 200KB — only scraping <title>; don't need the whole page
 
 export type ValidationResult =
   | { alive: false; reason: string }
@@ -65,13 +65,14 @@ export async function validateAndScrapeUrl(url: string): Promise<ValidationResul
   }
 
   // Hard 4xx/5xx (excluding auth-required) → definitively dead.
-  if (res.status >= 400 && res.status !== 401 && res.status !== 403) {
+  // 401/403 mean "page exists, requires auth" — different signal, not
+  // a dead listing. 5xx is treated as transient (alive but degraded);
+  // worker will pick it up later and decide.
+  if (res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 403) {
     return { alive: false, reason: `Listing returned HTTP ${res.status}. Likely expired or pulled — find a fresh URL.` };
   }
 
-  // Read up to MAX_BODY_BYTES. Workday JDs render in JS, so the
-  // initial HTML is often a small SPA bootstrap; the soft-404 patterns
-  // we care about are usually in the static SSR-ed body or meta tags.
+  // Read up to MAX_BODY_BYTES — only need the <head> for <title> scrape.
   let body = "";
   try {
     const reader = res.body?.getReader();
@@ -91,13 +92,6 @@ export async function validateAndScrapeUrl(url: string): Promise<ValidationResul
   } catch {
     // Couldn't read body — treat as alive (we got a 2xx/3xx status).
     return { alive: true };
-  }
-
-  if (SOFT_NOT_FOUND_RE.test(body)) {
-    return {
-      alive: false,
-      reason: 'Page rendered "not found" content despite 200 status. Listing was pulled or expired — find a fresh URL.',
-    };
   }
 
   // Alive. Best-effort scrape of the page <title> and a company guess
