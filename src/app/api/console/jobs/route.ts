@@ -15,6 +15,7 @@ import {
   listConsoleJobs,
   saveConsoleJob,
 } from "@/lib/console";
+import { validateAndScrapeUrl } from "@/lib/jdValidator";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -59,6 +60,8 @@ export async function POST(req: NextRequest) {
   const source: ConsoleJobSource = body.source ?? "paste";
 
   // Dedup-merge if a row with this canonical URL already exists.
+  // Skip the validator round-trip — we already have this URL, no
+  // point re-checking it on every dedup.
   const existing = await findByUrl(email, canonical);
   if (existing) {
     const merged: ConsoleJob = {
@@ -77,6 +80,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ job: merged, merged: true });
   }
 
+  // Capture-time validation. Server-side fetch the URL to detect dead
+  // listings before they pollute the queue (24% of historical failures
+  // were `job_posting_dead`). Bonus: scrape title + company from the
+  // page when alive, so paste-flow rows don't show "—" placeholders.
+  // Skip when the caller already supplied both title AND company (the
+  // Chrome extension's LinkedIn capture sends real values), avoiding
+  // an unnecessary fetch.
+  const callerHasMetadata = !!(body.title?.trim() && body.company?.trim());
+  let scrapedTitle: string | undefined;
+  let scrapedCompany: string | undefined;
+  if (!callerHasMetadata) {
+    const validation = await validateAndScrapeUrl(canonical);
+    if (!validation.alive) {
+      return NextResponse.json(
+        { error: validation.reason },
+        { status: 422 }
+      );
+    }
+    scrapedTitle = validation.title;
+    scrapedCompany = validation.company;
+  }
+
   const job: ConsoleJob = {
     id: randomUUID(),
     state: "captured",
@@ -85,8 +110,8 @@ export async function POST(req: NextRequest) {
     lastSeenAt: now,
     url: canonical,
     rawUrls: [body.url],
-    title: body.title?.trim() || "—",
-    company: body.company?.trim() || "—",
+    title: body.title?.trim() || scrapedTitle || "—",
+    company: body.company?.trim() || scrapedCompany || "—",
     location: body.location?.trim() || "",
     ats: detectAts(canonical),
     matchScore: body.matchScore,
