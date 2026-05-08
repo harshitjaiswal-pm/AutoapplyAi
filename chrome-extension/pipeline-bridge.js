@@ -10,8 +10,13 @@
   const path = window.location.pathname;
   const isPipeline = path.includes("/pipeline");
   const isDashboard = path.includes("/dashboard");
+  // The new Console (/console) is the canonical capture surface going
+  // forward — replaces the legacy /pipeline event-bus pattern. When the
+  // user lands here, we POST any pendingJobs straight to /api/console/jobs
+  // (auth cookie rides on same-origin credentials).
+  const isConsole = path.includes("/console");
 
-  if (!isPipeline && !isDashboard) return;
+  if (!isPipeline && !isDashboard && !isConsole) return;
 
   /* ── QA Test Helper: Allow page to override autoapplyUrl for API failure testing ── */
   // If localStorage has 'autoapply-test-api-url', write it into chrome.storage so
@@ -35,16 +40,58 @@
   }
 
   /* ── Job Import: Extension → React App ── */
-  chrome.storage.local.get(["pendingJobs"], (result) => {
+  chrome.storage.local.get(["pendingJobs"], async (result) => {
     const jobs = result.pendingJobs;
     if (!jobs || !Array.isArray(jobs) || jobs.length === 0) return;
 
     console.log(`AutoApply Bridge: Found ${jobs.length} jobs from extension`);
-    localStorage.setItem("autoapply-extension-jobs", JSON.stringify(jobs));
 
-    window.dispatchEvent(
-      new CustomEvent("autoapply-extension-import", { detail: { jobs } })
-    );
+    if (isConsole) {
+      // New path: POST each job to /api/console/jobs. The Console UI's
+      // existing GET /api/console/jobs poll will pick them up on its next
+      // refresh tick, so no React event bus needed. Log per-job so the
+      // user can debug failures from devtools.
+      let posted = 0;
+      let failed = 0;
+      for (const job of jobs) {
+        const url = job.jobUrl || job.url;
+        if (!url) {
+          console.warn("AutoApply Bridge: skipping job with no URL", job);
+          continue;
+        }
+        try {
+          const res = await fetch("/api/console/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              url,
+              title: job.title || job.jobTitle || undefined,
+              company: job.company || undefined,
+              location: job.location || undefined,
+              source: "extension",
+            }),
+          });
+          if (res.ok) {
+            posted++;
+          } else {
+            failed++;
+            console.warn(`AutoApply Bridge: POST /api/console/jobs failed (${res.status}) for ${url}`);
+          }
+        } catch (e) {
+          failed++;
+          console.warn(`AutoApply Bridge: POST /api/console/jobs errored for ${url}:`, e);
+        }
+      }
+      console.log(`AutoApply Bridge: imported ${posted}/${jobs.length} jobs to /api/console/jobs (${failed} failed)`);
+    } else {
+      // Legacy path: dispatch the event bus the /pipeline + /dashboard
+      // pages still listen for. Kept until those pages are retired.
+      localStorage.setItem("autoapply-extension-jobs", JSON.stringify(jobs));
+      window.dispatchEvent(
+        new CustomEvent("autoapply-extension-import", { detail: { jobs } })
+      );
+    }
 
     chrome.storage.local.remove(["pendingJobs"], () => {
       console.log("AutoApply Bridge: Cleared pending jobs from storage");
