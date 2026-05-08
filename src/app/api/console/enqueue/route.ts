@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getConsoleJob, saveConsoleJob } from "@/lib/console";
+import { getBudgetStatus } from "@/lib/budget";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -33,6 +34,22 @@ export async function POST(req: NextRequest) {
   const ids = Array.isArray(body.jobIds) ? body.jobIds.filter((x): x is string => typeof x === "string") : [];
   if (ids.length === 0) {
     return NextResponse.json({ error: "jobIds (non-empty array of strings) is required" }, { status: 400 });
+  }
+
+  // Refuse to enqueue if user is at/over their monthly cap. Better to
+  // catch here than to spawn a worker that burns createAccount + OTP
+  // cycles only to bounce off the budget check at tailor-time.
+  const budget = await getBudgetStatus(email);
+  if (budget.isOver) {
+    return NextResponse.json(
+      {
+        error: `Monthly budget exhausted: $${(budget.spendCents / 100).toFixed(2)} of $${(budget.capCents / 100).toFixed(2)} cap for ${budget.monthKey}. Wait for next month or ask the operator to raise your cap.`,
+        spendCents: budget.spendCents,
+        capCents: budget.capCents,
+        monthKey: budget.monthKey,
+      },
+      { status: 402 }
+    );
   }
 
   const now = new Date().toISOString();
