@@ -261,13 +261,26 @@ function SubmissionRow({
         <span
           className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${OUTCOME_STYLES[outcome]}`}
           title={
-            outcome === "partial"
-              ? (submission.stoppedReason ?? "Wizard advanced but did not reach the confirmation page")
-              : undefined
+            outcome === "running" && submission.currentActivity
+              ? submission.currentActivity
+              : outcome === "partial"
+                ? (submission.stoppedReason ?? "Wizard advanced but did not reach the confirmation page")
+                : undefined
           }
         >
           {OUTCOME_LABEL[outcome]}
         </span>
+        {/* Live activity sub-text — pulses while the worker is mid-run.
+            Hover the Status badge for the same text in tooltip form. */}
+        {outcome === "running" && submission.currentActivity && (
+          <p className="text-[10px] text-blue-600 mt-1 truncate flex items-center gap-1.5">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500"></span>
+            </span>
+            <span className="truncate">{submission.currentActivity}</span>
+          </p>
+        )}
       </td>
       <td className="px-3 py-3 whitespace-nowrap border-r border-neutral-100">
         {submission.matchScore != null ? (

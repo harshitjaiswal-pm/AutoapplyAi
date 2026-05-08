@@ -204,6 +204,16 @@ export interface SubmissionRecord {
    *  "need to follow up", etc. Persists across worker re-runs because
    *  it's user-set, not worker-set. */
   userRemark?: string;
+  /** Live activity label updated by the worker between major checkpoints
+   *  (e.g. "Creating account at td.wd3…", "Polling Gmail for OTP…",
+   *  "Wizard step 2/4: My Information"). Powers the pulsing live-status
+   *  badge on the application detail page while status === "in_progress".
+   *  Auto-cleared when the worker calls recordSubmissionFinish. */
+  currentActivity?: string;
+  /** ISO timestamp of the last currentActivity update. UI uses this to
+   *  detect stale activity (worker died mid-step) and render a stale
+   *  marker after some threshold. */
+  currentActivityAt?: string;
   source: "smoke" | "queue";
 }
 
