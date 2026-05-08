@@ -9,9 +9,11 @@ import type { TenantCredsRow } from "../../api/credentials/route";
 import { CopyButton } from "@/components/CopyButton";
 import { TailoredResumeView } from "@/components/TailoredResumeView";
 import CostBreakdown from "@/components/CostBreakdown";
+import ApprovalButtons from "@/components/ApprovalButtons";
 
 const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
   running: "bg-blue-100 text-blue-700",
+  awaiting_review: "bg-amber-100 text-amber-800",
   submitted: "bg-emerald-100 text-emerald-700",
   partial: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-700",
@@ -19,6 +21,7 @@ const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
 
 const OUTCOME_LABEL: Record<SubmissionOutcome, string> = {
   running: "Running",
+  awaiting_review: "Awaiting Review",
   submitted: "Submitted",
   partial: "Partial",
   failed: "Failed",
@@ -190,6 +193,41 @@ export default function SubmissionDetailPage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+        {/* Review gate — visible when reviewStatus === "awaiting_review".
+            The worker has tailored the resume and is paused; user clicks
+            Approve to continue (worker submits) or Reject (worker exits,
+            nothing reaches the company). Pinned at the top so it's the
+            first thing the user sees on a fresh review. */}
+        {id && submission.reviewStatus === "awaiting_review" && (
+          <ApprovalButtons
+            applicationId={id}
+            onChange={async () => {
+              // Refetch immediately so the buttons disappear without
+              // waiting for the 8s polling interval.
+              try {
+                const res = await fetch(`/api/applications/${id}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  setSubmission(data.submission);
+                }
+              } catch { /* tolerate */ }
+            }}
+          />
+        )}
+
+        {/* Read-only banner for terminal review states (approved means
+            phase 2 is in flight; rejected means terminal). */}
+        {submission.reviewStatus === "approved" && submission.status === "in_progress" && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800">
+            Approved at {fmtTime(submission.reviewStatusAt)} — worker is now walking the wizard and will click Submit. Watch the live activity badge above.
+          </div>
+        )}
+        {submission.reviewStatus === "rejected" && (
+          <div className="bg-neutral-100 border border-neutral-300 rounded-xl p-3 text-xs text-neutral-700">
+            Rejected at {fmtTime(submission.reviewStatusAt)} — nothing was sent to the company. Use Retrigger above to start a fresh attempt.
+          </div>
+        )}
+
         {/* Manual-recovery panel — visible whenever the worker did NOT reach
             the confirmation page. Surfaces the stop reason in plain English
             plus a checklist of artifacts the user can use to finish manually. */}

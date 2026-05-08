@@ -79,6 +79,51 @@ describe("deriveOutcome", () => {
     ).toBe("partial");
   });
 
+  // ── Review-gate transitions ─────────────────────────────────────────
+  it("returns 'awaiting_review' when reviewStatus is awaiting_review, even if status=in_progress", () => {
+    expect(
+      deriveOutcome(
+        makeSubmission({ status: "in_progress", reviewStatus: "awaiting_review" })
+      )
+    ).toBe("awaiting_review");
+  });
+
+  it("returns 'running' when reviewStatus=approved (worker resumed phase 2)", () => {
+    // After approve, worker is actively running phase 2. Status stays
+    // in_progress until wizard finishes. Outcome should look like a normal
+    // running run.
+    expect(
+      deriveOutcome(
+        makeSubmission({ status: "in_progress", reviewStatus: "approved" })
+      )
+    ).toBe("running");
+  });
+
+  it("returns 'failed' when reviewStatus=rejected (terminal)", () => {
+    // The /reject endpoint flips status=failed alongside reviewStatus=rejected.
+    // Outcome should reflect failed.
+    expect(
+      deriveOutcome(
+        makeSubmission({ status: "failed", reviewStatus: "rejected" })
+      )
+    ).toBe("failed");
+  });
+
+  it("legacy records without reviewStatus behave exactly as before (no regression)", () => {
+    // No reviewStatus field set → fall through to legacy logic. Critical
+    // because old SubmissionRecords in Redis have no reviewStatus, and the
+    // dashboard must keep rendering them correctly.
+    const legacySubmitted = makeSubmission({
+      status: "completed",
+      applicationSubmitted: true,
+    });
+    expect(legacySubmitted.reviewStatus).toBeUndefined();
+    expect(deriveOutcome(legacySubmitted)).toBe("submitted");
+
+    const legacyRunning = makeSubmission({ status: "in_progress" });
+    expect(deriveOutcome(legacyRunning)).toBe("running");
+  });
+
   describe("legacy records (no applicationSubmitted flag)", () => {
     it("returns 'submitted' if a confirmation screenshot was captured", () => {
       expect(

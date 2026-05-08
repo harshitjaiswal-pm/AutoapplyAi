@@ -42,6 +42,7 @@ function formatDuration(start?: string, end?: string): string {
  */
 const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
   running: "bg-blue-100 text-blue-700",
+  awaiting_review: "bg-amber-100 text-amber-800 ring-2 ring-amber-400",
   submitted: "bg-emerald-100 text-emerald-700",
   already_applied: "bg-teal-100 text-teal-700",
   partial: "bg-amber-100 text-amber-800",
@@ -50,6 +51,7 @@ const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
 
 const OUTCOME_LABEL: Record<SubmissionOutcome, string> = {
   running: "Running",
+  awaiting_review: "Review needed",
   submitted: "Submitted",
   already_applied: "Already Applied",
   partial: "Partial",
@@ -95,6 +97,7 @@ export default function ApplicationsPage() {
         return {
           all: submissions.length,
           running: outcomes.filter((o) => o === "running").length,
+          awaiting: outcomes.filter((o) => o === "awaiting_review").length,
           submitted: outcomes.filter((o) => o === "submitted" || o === "already_applied").length,
           partial: outcomes.filter((o) => o === "partial").length,
           failed: outcomes.filter((o) => o === "failed").length,
@@ -113,10 +116,11 @@ export default function ApplicationsPage() {
             Auto-refreshes every 10s.
           </p>
           {counts && (
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mt-6">
               {[
                 { label: "All", value: counts.all, accent: "text-white" },
                 { label: "Running", value: counts.running, accent: counts.running > 0 ? "text-blue-300" : "text-indigo-200" },
+                { label: "Awaiting", value: counts.awaiting, accent: counts.awaiting > 0 ? "text-amber-300" : "text-indigo-200" },
                 { label: "Submitted", value: counts.submitted, accent: counts.submitted > 0 ? "text-emerald-300" : "text-indigo-200" },
                 { label: "Partial", value: counts.partial, accent: counts.partial > 0 ? "text-amber-300" : "text-indigo-200" },
                 { label: "Failed", value: counts.failed, accent: counts.failed > 0 ? "text-red-300" : "text-indigo-200" },
