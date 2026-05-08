@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { SubmissionRecord, SubmissionOutcome } from "@/lib/submissions";
@@ -103,7 +103,7 @@ export default function ApplicationsPage() {
   return (
     <div className="min-h-screen bg-neutral-50">
       <div className="bg-gradient-to-br from-indigo-950 via-indigo-900 to-violet-900 text-white px-6 py-8">
-        <div className="max-w-screen-2xl mx-auto">
+        <div className="max-w-7xl mx-auto">
           <h1 className="text-2xl font-bold">Submissions</h1>
           <p className="text-indigo-300 text-sm mt-1">
             Every Workday application the worker has run for you, with the
@@ -129,7 +129,7 @@ export default function ApplicationsPage() {
         </div>
       </div>
 
-      <div className="max-w-screen-2xl mx-auto px-6 py-6">
+      <div className="max-w-7xl mx-auto px-6 py-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-4 text-sm">{error}</div>
         )}
@@ -153,20 +153,19 @@ export default function ApplicationsPage() {
         )}
 
         {submissions && submissions.length > 0 && (
-          <div className="bg-white rounded-2xl border border-neutral-200 overflow-x-auto">
-            <table className="w-full text-sm min-w-[1280px]">
+          <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+            <table className="w-full text-sm">
               <thead>
                 <tr className="text-[11px] uppercase text-neutral-400 tracking-wider border-b border-neutral-100">
-                  <th className="text-left px-5 py-3 font-semibold w-[180px]">Company</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[220px]">Title</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[80px]">Status</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[60px]">Match</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[80px]">Started</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[80px]">Duration</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[140px]">Failure</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[90px]">Cost</th>
-                  <th className="text-left px-3 py-3 font-semibold w-[200px]">Remark</th>
-                  <th className="text-right px-5 py-3 font-semibold w-[110px]">Retrigger</th>
+                  <th className="text-left px-5 py-3 font-semibold">Company</th>
+                  <th className="text-left px-3 py-3 font-semibold">Title</th>
+                  <th className="text-left px-3 py-3 font-semibold">Status</th>
+                  <th className="text-left px-3 py-3 font-semibold">Match</th>
+                  <th className="text-left px-3 py-3 font-semibold">Started</th>
+                  <th className="text-left px-3 py-3 font-semibold">Duration</th>
+                  <th className="text-left px-3 py-3 font-semibold">Failure</th>
+                  <th className="text-left px-3 py-3 font-semibold">Cost</th>
+                  <th className="text-right px-5 py-3 font-semibold">Retrigger</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-50">
@@ -215,33 +214,6 @@ function SubmissionRow({
   // story.
   const failureTooltip = [failureFullTitle, failureDetail].filter(Boolean).join("\n\n");
 
-  // Locally-edited remark with debounced save. We don't update the parent's
-  // submissions array on save — the next 10s auto-refresh picks it up.
-  const [remark, setRemark] = useState<string>(submission.userRemark ?? "");
-  const [savingState, setSavingState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const onRemarkChange = (next: string) => {
-    setRemark(next);
-    setSavingState("saving");
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/applications/${submission.applicationId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userRemark: next }),
-        });
-        setSavingState(res.ok ? "saved" : "error");
-        if (res.ok) {
-          setTimeout(() => setSavingState("idle"), 1500);
-        }
-      } catch {
-        setSavingState("error");
-      }
-    }, 800);
-  };
-
   const [retriggering, setRetriggering] = useState(false);
   const onRetrigger = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -277,7 +249,7 @@ function SubmissionRow({
           <p className="text-[10px] text-neutral-400 mt-0.5">{submission.tenant}</p>
         )}
       </td>
-      <td className="px-3 py-3 w-[220px]">
+      <td className="px-3 py-3 max-w-[260px]">
         <p className="text-neutral-700 truncate" title={submission.jobTitle}>
           {submission.jobTitle}
         </p>
@@ -318,7 +290,7 @@ function SubmissionRow({
       <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums">
         {formatDuration(submission.startedAt, submission.completedAt)}
       </td>
-      <td className="px-3 py-3 w-[140px]" title={failureTooltip || undefined}>
+      <td className="px-3 py-3" title={failureTooltip || undefined}>
         {failure ? (
           <p className="text-xs text-red-700 font-medium whitespace-nowrap">{failure}</p>
         ) : failureDetail ? (
@@ -347,27 +319,6 @@ function SubmissionRow({
             —
           </span>
         )}
-      </td>
-      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-        <div className="relative">
-          <input
-            type="text"
-            value={remark}
-            onChange={(e) => onRemarkChange(e.target.value)}
-            placeholder="Add note…"
-            maxLength={1000}
-            className="w-full text-xs bg-transparent border border-neutral-200 hover:border-neutral-300 focus:border-indigo-400 focus:outline-none rounded px-2 py-1"
-          />
-          {savingState === "saving" && (
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-neutral-400">…</span>
-          )}
-          {savingState === "saved" && (
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-emerald-500">saved</span>
-          )}
-          {savingState === "error" && (
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-red-500">err</span>
-          )}
-        </div>
       </td>
       <td className="px-5 py-3 text-right" onClick={(e) => e.stopPropagation()}>
         <button
