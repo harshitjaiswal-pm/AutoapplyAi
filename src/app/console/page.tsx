@@ -1,0 +1,487 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ConsoleJob, ConsoleJobState } from "@/lib/console";
+
+type Tab = "captured" | "pipeline" | "archived";
+
+const TAB_TITLES: Record<Tab, string> = {
+  captured: "Captured",
+  pipeline: "Pipeline",
+  archived: "Archived",
+};
+
+const STATE_BADGE: Record<ConsoleJobState, string> = {
+  captured: "bg-neutral-100 text-neutral-700",
+  queued: "bg-indigo-100 text-indigo-700",
+  running: "bg-blue-100 text-blue-700",
+  submitted: "bg-emerald-100 text-emerald-700",
+  failed: "bg-red-100 text-red-700",
+  archived: "bg-neutral-200 text-neutral-500",
+};
+
+function relativeTime(iso: string): string {
+  const d = new Date(iso).getTime();
+  const diffMin = Math.round((Date.now() - d) / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const h = Math.round(diffMin / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.round(h / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+export default function ConsolePage() {
+  const [jobs, setJobs] = useState<ConsoleJob[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("captured");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pasteUrl, setPasteUrl] = useState("");
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [confirmApply, setConfirmApply] = useState<{ ids: string[] } | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/console/jobs");
+      if (!res.ok) {
+        if (res.status === 401) setError("Sign in to use the Console.");
+        else setError(`Load failed: ${res.status}`);
+        return;
+      }
+      const data = (await res.json()) as { jobs: ConsoleJob[] };
+      setJobs(data.jobs ?? []);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Pipeline tab polls every 5s for live worker status updates.
+  useEffect(() => {
+    if (tab !== "pipeline") return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [tab, load]);
+
+  const filtered = useMemo(() => {
+    if (!jobs) return [];
+    switch (tab) {
+      case "captured":
+        return jobs
+          .filter((j) => j.state === "captured")
+          .sort((a, b) => (b.matchScore ?? -1) - (a.matchScore ?? -1));
+      case "pipeline":
+        return jobs.filter((j) =>
+          j.state === "queued" || j.state === "running" || j.state === "failed" || j.state === "submitted"
+        );
+      case "archived":
+        return jobs.filter((j) => j.state === "archived");
+      default:
+        return [];
+    }
+  }, [jobs, tab]);
+
+  const counts = useMemo(() => {
+    const c: Record<Tab, number> = { captured: 0, pipeline: 0, archived: 0 };
+    if (!jobs) return c;
+    for (const j of jobs) {
+      if (j.state === "captured") c.captured++;
+      else if (j.state === "archived") c.archived++;
+      else c.pipeline++;
+    }
+    return c;
+  }, [jobs]);
+
+  const allSelected = filtered.length > 0 && filtered.every((j) => selected.has(j.id));
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(filtered.map((j) => j.id)));
+  };
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handlePaste = async () => {
+    const url = pasteUrl.trim();
+    if (!url) return;
+    setBusyAction("paste");
+    try {
+      const res = await fetch("/api/console/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, source: "paste" }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || `Add failed: ${res.status}`);
+      } else {
+        setPasteUrl("");
+        await load();
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const requestApplySelected = () => {
+    if (selected.size === 0) return;
+    setConfirmApply({ ids: Array.from(selected) });
+  };
+
+  const performApply = async () => {
+    if (!confirmApply) return;
+    setBusyAction("apply");
+    try {
+      const res = await fetch("/api/console/enqueue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobIds: confirmApply.ids }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || `Enqueue failed: ${res.status}`);
+      } else {
+        setSelected(new Set());
+        setTab("pipeline");
+        await load();
+      }
+    } finally {
+      setBusyAction(null);
+      setConfirmApply(null);
+    }
+  };
+
+  const handleArchive = async (id: string) => {
+    setBusyAction(`archive:${id}`);
+    try {
+      await fetch(`/api/console/jobs/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archive: true }),
+      });
+      await load();
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleRequeue = async (id: string) => {
+    setBusyAction(`requeue:${id}`);
+    try {
+      const res = await fetch("/api/console/requeue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: id }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || `Re-queue failed: ${res.status}`);
+      } else {
+        await load();
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleUnarchive = async (id: string) => {
+    setBusyAction(`unarchive:${id}`);
+    try {
+      await fetch(`/api/console/jobs/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unarchive: true }),
+      });
+      await load();
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-neutral-900">Console</h1>
+        <p className="text-sm text-neutral-500 mt-1">
+          Capture jobs, pick what to apply for, ship to the worker pipeline.
+        </p>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-neutral-200 mb-4">
+        {(Object.keys(TAB_TITLES) as Tab[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => {
+              setTab(t);
+              setSelected(new Set());
+            }}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === t
+                ? "border-indigo-600 text-indigo-700"
+                : "border-transparent text-neutral-500 hover:text-neutral-900"
+            }`}
+          >
+            {TAB_TITLES[t]} <span className="text-neutral-400 ml-1">{counts[t]}</span>
+          </button>
+        ))}
+      </div>
+
+      {error && (
+        <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+      )}
+
+      {/* Add-by-URL bar (Captured tab only) */}
+      {tab === "captured" && (
+        <div className="flex gap-2 mb-4">
+          <input
+            type="url"
+            value={pasteUrl}
+            onChange={(e) => setPasteUrl(e.target.value)}
+            placeholder="Paste a Workday/Greenhouse/Lever job URL"
+            className="flex-1 px-3 py-2 text-sm border border-neutral-200 rounded-lg focus:outline-none focus:border-indigo-400"
+            onKeyDown={(e) => e.key === "Enter" && handlePaste()}
+          />
+          <button
+            onClick={handlePaste}
+            disabled={!pasteUrl.trim() || busyAction === "paste"}
+            className="px-4 py-2 text-sm font-medium bg-neutral-900 text-white rounded-lg hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Add
+          </button>
+        </div>
+      )}
+
+      {/* Bulk action bar (Captured tab only) */}
+      {tab === "captured" && selected.size > 0 && (
+        <div className="flex items-center justify-between mb-3 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-lg">
+          <span className="text-sm text-indigo-900 font-medium">
+            {selected.size} selected
+          </span>
+          <button
+            onClick={requestApplySelected}
+            disabled={busyAction === "apply"}
+            className="px-4 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40"
+          >
+            Apply selected ({selected.size})
+          </button>
+        </div>
+      )}
+
+      {/* Table */}
+      {jobs === null ? (
+        <div className="text-sm text-neutral-500">Loading…</div>
+      ) : filtered.length === 0 ? (
+        <EmptyState tab={tab} />
+      ) : (
+        <div className="border border-neutral-200 rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-50 text-left">
+              <tr className="text-[11px] font-semibold text-neutral-500 uppercase tracking-wider">
+                {tab === "captured" && (
+                  <th className="px-3 py-2 w-8">
+                    <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+                  </th>
+                )}
+                {tab === "captured" && <th className="px-3 py-2 w-16">Match</th>}
+                <th className="px-3 py-2">Company</th>
+                <th className="px-3 py-2">Title</th>
+                <th className="px-3 py-2">Location</th>
+                <th className="px-3 py-2">ATS</th>
+                {tab !== "captured" && <th className="px-3 py-2">State</th>}
+                <th className="px-3 py-2">Captured</th>
+                <th className="px-3 py-2 w-32">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((j) => (
+                <tr key={j.id} className="border-t border-neutral-100 hover:bg-neutral-50">
+                  {tab === "captured" && (
+                    <td className="px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(j.id)}
+                        onChange={() => toggleOne(j.id)}
+                      />
+                    </td>
+                  )}
+                  {tab === "captured" && (
+                    <td className="px-3 py-2.5 font-medium text-neutral-700">
+                      {typeof j.matchScore === "number" ? `${j.matchScore}%` : "—"}
+                    </td>
+                  )}
+                  <td className="px-3 py-2.5 font-medium text-neutral-900">{j.company}</td>
+                  <td className="px-3 py-2.5 text-neutral-700">
+                    <a href={j.url} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-700 hover:underline">
+                      {j.title}
+                    </a>
+                    {j.sources.length > 1 && (
+                      <span className="ml-2 text-[11px] text-neutral-400">seen {j.sources.length}x</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-neutral-500">{j.location || "—"}</td>
+                  <td className="px-3 py-2.5 text-neutral-500 capitalize">{j.ats}</td>
+                  {tab !== "captured" && (
+                    <td className="px-3 py-2.5">
+                      <span className={`inline-block px-2 py-0.5 text-[11px] font-medium rounded ${STATE_BADGE[j.state]}`}>
+                        {j.state}
+                        {j.queueLane === "retry" && " (retry)"}
+                      </span>
+                    </td>
+                  )}
+                  <td className="px-3 py-2.5 text-neutral-500">{relativeTime(j.capturedAt)}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    <RowActions
+                      job={j}
+                      tab={tab}
+                      busyAction={busyAction}
+                      onArchive={() => handleArchive(j.id)}
+                      onUnarchive={() => handleUnarchive(j.id)}
+                      onRequeue={() => handleRequeue(j.id)}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Confirm dialog */}
+      {confirmApply && (
+        <ApplyConfirmModal
+          count={confirmApply.ids.length}
+          onCancel={() => setConfirmApply(null)}
+          onConfirm={performApply}
+          busy={busyAction === "apply"}
+        />
+      )}
+    </div>
+  );
+}
+
+function RowActions({
+  job,
+  tab,
+  busyAction,
+  onArchive,
+  onUnarchive,
+  onRequeue,
+}: {
+  job: ConsoleJob;
+  tab: Tab;
+  busyAction: string | null;
+  onArchive: () => void;
+  onUnarchive: () => void;
+  onRequeue: () => void;
+}) {
+  if (tab === "captured") {
+    return (
+      <button
+        onClick={onArchive}
+        disabled={busyAction === `archive:${job.id}`}
+        className="text-xs text-neutral-500 hover:text-neutral-900"
+      >
+        Archive
+      </button>
+    );
+  }
+  if (tab === "archived") {
+    return (
+      <button
+        onClick={onUnarchive}
+        disabled={busyAction === `unarchive:${job.id}`}
+        className="text-xs text-neutral-500 hover:text-neutral-900"
+      >
+        Unarchive
+      </button>
+    );
+  }
+  // pipeline tab
+  if (job.state === "failed") {
+    return (
+      <button
+        onClick={onRequeue}
+        disabled={busyAction === `requeue:${job.id}`}
+        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+      >
+        Re-queue
+      </button>
+    );
+  }
+  if (job.state === "submitted" && job.applicationId) {
+    return (
+      <a
+        href={`/applications/${job.applicationId}`}
+        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+      >
+        Review →
+      </a>
+    );
+  }
+  return <span className="text-xs text-neutral-400">—</span>;
+}
+
+function EmptyState({ tab }: { tab: Tab }) {
+  return (
+    <div className="border border-dashed border-neutral-200 rounded-lg p-12 text-center">
+      <p className="text-sm text-neutral-500">
+        {tab === "captured" && "No captured jobs yet. Paste a URL above, or send jobs from the Chrome extension."}
+        {tab === "pipeline" && "Nothing in flight or queued. Apply to a captured job to start."}
+        {tab === "archived" && "No archived jobs."}
+      </p>
+    </div>
+  );
+}
+
+function ApplyConfirmModal({
+  count,
+  onCancel,
+  onConfirm,
+  busy,
+}: {
+  count: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+  busy: boolean;
+}) {
+  const PARALLEL = 2;
+  const willRun = Math.min(count, PARALLEL);
+  const willQueue = Math.max(0, count - PARALLEL);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onCancel}>
+      <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-neutral-900 mb-2">Apply to {count} jobs?</h2>
+        <p className="text-sm text-neutral-600 mb-4">
+          {willRun} will run now, {willQueue} will queue. The worker runs 2 in parallel; the rest are picked up as slots free up. Failed jobs can be re-queued individually.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-100 rounded-lg"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40"
+          >
+            {busy ? "Queuing…" : `Apply to ${count}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
