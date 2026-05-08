@@ -353,20 +353,31 @@ export default function SubmissionDetailPage() {
           </div>
         )}
 
-        {/* Tailored resume — collapsible inline preview */}
-        {(submission.tailoredResumeJson || submission.resumeUrl) && (
+        {/* Tailored resume — always rendered when we have an applicationId,
+            even if the worker run never captured a resume to Blob. The
+            download endpoint falls back to on-demand tailoring in that case
+            so every submission has a working Resume button. */}
+        {id && (
           <div className="bg-white rounded-2xl border border-neutral-200 p-5">
             <div className="flex items-center justify-between mb-4">
               <button
                 type="button"
                 onClick={() => setResumeOpen((v) => !v)}
-                className="flex items-center gap-2 text-sm font-semibold text-neutral-900 hover:text-indigo-600 transition-colors"
+                disabled={!submission.tailoredResumeJson}
+                className="flex items-center gap-2 text-sm font-semibold text-neutral-900 hover:text-indigo-600 transition-colors disabled:cursor-default disabled:hover:text-neutral-900"
               >
-                <span className="text-xs">{resumeOpen ? "▼" : "▶"}</span>
+                {submission.tailoredResumeJson && (
+                  <span className="text-xs">{resumeOpen ? "▼" : "▶"}</span>
+                )}
                 Tailored Resume
                 {!resumeOpen && submission.tailoredResumeJson && (
                   <span className="text-[11px] text-neutral-400 font-normal">
                     (click to expand)
+                  </span>
+                )}
+                {!submission.tailoredResumeJson && (
+                  <span className="text-[11px] text-amber-600 font-normal">
+                    (will tailor fresh on download — ~30-60s)
                   </span>
                 )}
               </button>
@@ -374,26 +385,34 @@ export default function SubmissionDetailPage() {
                 {submission.tailoringCostCents != null && (
                   <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
                 )}
-                {submission.resumeUrl && id && (
-                  <a
-                    href={`/api/applications/${id}/resume`}
-                    className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                  >
-                    ↓ Resume
-                  </a>
-                )}
+                <a
+                  href={`/api/applications/${id}/resume`}
+                  className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  ↓ Resume
+                </a>
               </div>
             </div>
-            {resumeOpen && (
-              submission.tailoredResumeJson ? (
-                <TailoredResumeView resume={submission.tailoredResumeJson} />
-              ) : (
-                <p className="text-xs text-neutral-400">
-                  Inline preview not available for this submission (run was before
-                  the worker started capturing the structured resume). Use the
-                  Resume button above to download the .docx.
-                </p>
-              )
+            {resumeOpen && submission.tailoredResumeJson && (
+              <TailoredResumeView resume={submission.tailoredResumeJson} />
+            )}
+            {!submission.tailoredResumeJson && (
+              <p className="text-xs text-neutral-500 leading-relaxed">
+                The worker didn&apos;t capture a structured resume for this run
+                (Blob upload skipped, or older worker code). Click <strong>↓ Resume</strong> to
+                generate a fresh tailored .docx now — uses the resume on
+                file from your profile and tailors against this job&apos;s
+                title and company. Filename: <code className="bg-neutral-100 px-1 py-0.5 rounded">
+                  {(() => {
+                    const safe = (s: string) => s.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+                    const c = safe(submission.company || submission.tenant?.split(".")[0] || "")
+                      .split("_")
+                      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                      .join("_");
+                    return c ? `${c}_Kiran_Shahi_Resume.docx` : `Kiran_Shahi_Resume.docx`;
+                  })()}
+                </code>
+              </p>
             )}
           </div>
         )}
