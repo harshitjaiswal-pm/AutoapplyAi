@@ -40,3 +40,10 @@ export const consoleJobKey = (email: string, jobId: string) =>
 
 /** Key schema: console:index:{email} — set of jobIds for fast list. */
 export const consoleIndexKey = (email: string) => `console:index:${email}`;
+
+/** Key schema: budget:{email}:{YYYY-MM} — running cents-spent counter for
+ *  this user this calendar month. Reset implicitly by month rollover (the
+ *  next month's key starts at 0). 90-day TTL keeps history queryable for
+ *  reporting without growing unbounded. */
+export const monthlyBudgetKey = (email: string, monthKey: string) =>
+  `budget:${email}:${monthKey}`;

@@ -10,6 +10,7 @@ import {
   ResumeDefect,
 } from "@/store/useAppStore";
 import { runBatch, generateJobId } from "@/lib/batchProcessor";
+import BudgetWidget from "@/components/BudgetWidget";
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Types                                                                       */
@@ -426,6 +427,8 @@ function DashboardPage() {
               </div>
             ))}
           </div>
+
+          <BudgetWidget />
         </div>
       </div>
 

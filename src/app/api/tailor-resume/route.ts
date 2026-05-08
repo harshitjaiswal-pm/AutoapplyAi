@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { RESUME_TAILOR_SYSTEM } from "@/lib/prompts";
+import { costFromUsage, getBudgetStatus, recordCost } from "@/lib/budget";
 
 /**
  * API ROUTE: POST /api/tailor-resume
@@ -25,7 +28,8 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
-    const { parsedResume, parsedJob, mode } = await request.json();
+    const body = await request.json();
+    const { parsedResume, parsedJob, mode } = body;
 
     if (!parsedResume || !parsedJob) {
       return NextResponse.json(
@@ -40,6 +44,36 @@ export async function POST(request: NextRequest) {
         { error: "Anthropic API key not configured. Add it to .env.local" },
         { status: 500 }
       );
+    }
+
+    // Resolve user identity for budget accounting. Two callers:
+    //   - UI (TailorEngine, batchProcessor): runs in a logged-in browser,
+    //     reads email from the NextAuth session.
+    //   - autoapply-worker (prepareTailoredResume): no cookie; passes
+    //     `email` in body. Authoritative — the worker has the user's
+    //     email already and has no other identity it could spoof.
+    const session = await getServerSession(authOptions);
+    const sessionEmail = session?.user?.email ?? null;
+    const bodyEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : null;
+    const email = sessionEmail ?? bodyEmail;
+
+    // Pre-call budget check. If the user is at/over their monthly cap,
+    // refuse with HTTP 402 (Payment Required). Anonymous calls (no
+    // resolvable email) skip the gate so unauthenticated dev/preview
+    // testing still works — the chokepoint is intentionally per-user.
+    if (email) {
+      const status = await getBudgetStatus(email);
+      if (status.isOver) {
+        return NextResponse.json(
+          {
+            error: `Monthly budget exhausted for ${email}: spent ${(status.spendCents / 100).toFixed(2)} of cap $${(status.capCents / 100).toFixed(2)} for ${status.monthKey}. Add the user to BUDGET_USER_OVERRIDES env to raise the cap.`,
+            spendCents: status.spendCents,
+            capCents: status.capCents,
+            monthKey: status.monthKey,
+          },
+          { status: 402 }
+        );
+      }
     }
 
     // Model selection: "fast" = Haiku (cheap), "pro" = Sonnet (better quality)
@@ -285,6 +319,14 @@ export async function POST(request: NextRequest) {
       sanitizeRuleZero(tailoredResult);
     }
 
+    // Best-effort cost recording. Compute the same cents the worker would
+    // (same model + same Anthropic usage), increment the user's monthly
+    // counter. Failure to record doesn't fail the request — the user's
+    // tailoring is what matters, the accounting is a side effect.
+    if (email) {
+      const costCents = costFromUsage(modelId, message.usage);
+      await recordCost(email, costCents);
+    }
     return NextResponse.json({ tailoredResult, usage: message.usage });
   } catch (error: unknown) {
     console.error("Tailoring error:", error);
