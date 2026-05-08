@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { SubmissionRecord, SubmissionOutcome } from "@/lib/submissions";
-import { deriveOutcome } from "@/lib/submissions";
+import { deriveOutcome, FAILURE_GUIDANCE } from "@/lib/submissions";
 
 function formatRelativeDate(iso?: string): string {
   if (!iso) return "—";
@@ -163,70 +163,221 @@ export default function ApplicationsPage() {
                   <th className="text-left px-3 py-3 font-semibold">Match</th>
                   <th className="text-left px-3 py-3 font-semibold">Started</th>
                   <th className="text-left px-3 py-3 font-semibold">Duration</th>
-                  <th className="text-left px-3 py-3 font-semibold">Steps</th>
-                  <th className="text-left px-5 py-3 font-semibold">Shots</th>
+                  <th className="text-left px-3 py-3 font-semibold">Failure reason</th>
+                  <th className="text-left px-3 py-3 font-semibold">Cost</th>
+                  <th className="text-left px-3 py-3 font-semibold">Remark</th>
+                  <th className="text-right px-5 py-3 font-semibold">Retrigger</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-50">
-                {submissions.map((s) => {
-                  const outcome = deriveOutcome(s);
-                  return (
-                  <tr
+                {submissions.map((s) => (
+                  <SubmissionRow
                     key={s.applicationId}
-                    onClick={() => router.push(`/applications/${s.applicationId}`)}
-                    className="hover:bg-indigo-50/50 cursor-pointer transition-colors"
-                  >
-                    <td className="px-5 py-3">
-                      <p className="font-medium text-neutral-900">{s.company}</p>
-                      {s.tenant && (
-                        <p className="text-[10px] text-neutral-400 mt-0.5">{s.tenant}</p>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 max-w-[280px]">
-                      <p className="text-neutral-700 truncate">{s.jobTitle}</p>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span
-                        className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${OUTCOME_STYLES[outcome]}`}
-                        title={
-                          outcome === "partial"
-                            ? (s.stoppedReason ?? "Wizard advanced but did not reach the confirmation page")
-                            : undefined
-                        }
-                      >
-                        {OUTCOME_LABEL[outcome]}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 whitespace-nowrap">
-                      {s.matchScore != null ? (
-                        <span className={`text-xs font-bold tabular-nums ${
-                          s.matchScore >= 80 ? "text-emerald-600" :
-                          s.matchScore >= 60 ? "text-amber-600" :
-                          "text-neutral-400"
-                        }`}>
-                          {s.matchScore}
-                          {s.originalMatchScore != null && s.matchScore > s.originalMatchScore && (
-                            <span className="text-[10px] text-emerald-500 font-normal ml-1">
-                              +{s.matchScore - s.originalMatchScore}
-                            </span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-neutral-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-neutral-500 whitespace-nowrap">{formatRelativeDate(s.startedAt)}</td>
-                    <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums">{formatDuration(s.startedAt, s.completedAt)}</td>
-                    <td className="px-3 py-3 text-neutral-500 tabular-nums">{s.steps?.length ?? 0}</td>
-                    <td className="px-5 py-3 text-neutral-500 tabular-nums">{s.screenshots?.length ?? 0}</td>
-                  </tr>
-                  );
-                })}
+                    submission={s}
+                    onRowClick={() => router.push(`/applications/${s.applicationId}`)}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One row in the Submissions table. Encapsulates the inline-editable
+ * remark + retrigger button — both need their own state and click
+ * handlers, which would clutter the parent's JSX.
+ *
+ * Click anywhere on the row drills into /applications/[id], EXCEPT on
+ * the remark textarea or the retrigger button (their handlers stop
+ * propagation so editing/retriggering doesn't accidentally navigate).
+ */
+function SubmissionRow({
+  submission,
+  onRowClick,
+}: {
+  submission: SubmissionRecord;
+  onRowClick: () => void;
+}) {
+  const outcome = deriveOutcome(submission);
+  const failure = submission.failureCategory
+    ? FAILURE_GUIDANCE[submission.failureCategory]?.title
+    : null;
+  const failureDetail = submission.stoppedReason ?? submission.errorMessage ?? null;
+
+  // Locally-edited remark with debounced save. We don't update the parent's
+  // submissions array on save — the next 10s auto-refresh picks it up.
+  const [remark, setRemark] = useState<string>(submission.userRemark ?? "");
+  const [savingState, setSavingState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onRemarkChange = (next: string) => {
+    setRemark(next);
+    setSavingState("saving");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/applications/${submission.applicationId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userRemark: next }),
+        });
+        setSavingState(res.ok ? "saved" : "error");
+        if (res.ok) {
+          setTimeout(() => setSavingState("idle"), 1500);
+        }
+      } catch {
+        setSavingState("error");
+      }
+    }, 800);
+  };
+
+  const [retriggering, setRetriggering] = useState(false);
+  const onRetrigger = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRetriggering(true);
+    try {
+      const res = await fetch(
+        `/api/applications/${submission.applicationId}/retrigger`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error ?? `Retrigger failed: HTTP ${res.status}`);
+        return;
+      }
+      // Open /console pipeline tab in a new browser tab so the user can
+      // watch the retry run without losing their place on this list.
+      window.open("/console", "_blank", "noopener,noreferrer");
+    } catch (err) {
+      alert(`Retrigger failed: ${(err as Error).message}`);
+    } finally {
+      setRetriggering(false);
+    }
+  };
+
+  return (
+    <tr
+      onClick={onRowClick}
+      className="hover:bg-indigo-50/50 cursor-pointer transition-colors"
+    >
+      <td className="px-5 py-3">
+        <p className="font-medium text-neutral-900">{submission.company}</p>
+        {submission.tenant && (
+          <p className="text-[10px] text-neutral-400 mt-0.5">{submission.tenant}</p>
+        )}
+      </td>
+      <td className="px-3 py-3 max-w-[240px]">
+        <p className="text-neutral-700 truncate">{submission.jobTitle}</p>
+      </td>
+      <td className="px-3 py-3">
+        <span
+          className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${OUTCOME_STYLES[outcome]}`}
+          title={
+            outcome === "partial"
+              ? (submission.stoppedReason ?? "Wizard advanced but did not reach the confirmation page")
+              : undefined
+          }
+        >
+          {OUTCOME_LABEL[outcome]}
+        </span>
+      </td>
+      <td className="px-3 py-3 whitespace-nowrap">
+        {submission.matchScore != null ? (
+          <span className={`text-xs font-bold tabular-nums ${
+            submission.matchScore >= 80 ? "text-emerald-600" :
+            submission.matchScore >= 60 ? "text-amber-600" :
+            "text-neutral-400"
+          }`}>
+            {submission.matchScore}
+            {submission.originalMatchScore != null && submission.matchScore > submission.originalMatchScore && (
+              <span className="text-[10px] text-emerald-500 font-normal ml-1">
+                +{submission.matchScore - submission.originalMatchScore}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-xs text-neutral-300">—</span>
+        )}
+      </td>
+      <td className="px-3 py-3 text-neutral-500 whitespace-nowrap">
+        {formatRelativeDate(submission.startedAt)}
+      </td>
+      <td className="px-3 py-3 text-neutral-500 whitespace-nowrap tabular-nums">
+        {formatDuration(submission.startedAt, submission.completedAt)}
+      </td>
+      <td className="px-3 py-3 max-w-[260px]">
+        {failure ? (
+          <div title={failureDetail ?? undefined}>
+            <p className="text-xs text-red-700 font-medium truncate">{failure}</p>
+            {failureDetail && (
+              <p className="text-[10px] text-red-500 font-mono truncate">{failureDetail}</p>
+            )}
+          </div>
+        ) : failureDetail ? (
+          <p className="text-xs text-neutral-500 font-mono truncate" title={failureDetail}>
+            {failureDetail}
+          </p>
+        ) : (
+          <span className="text-xs text-neutral-300">—</span>
+        )}
+      </td>
+      <td className="px-3 py-3 whitespace-nowrap">
+        {/* Placeholder until per-stage cost analytics ships. Today we only
+            know the tailoring cost; total per-app cost across all stages
+            (parse, analyze, answer-questions) isn't tracked yet. */}
+        {submission.tailoringCostCents != null ? (
+          <span
+            className="text-xs text-neutral-600 tabular-nums"
+            title="Tailoring step only — full per-stage breakdown coming with cost-analytics"
+          >
+            {submission.tailoringCostCents.toFixed(1)}¢
+            <span className="text-[10px] text-neutral-300 ml-1">tailor</span>
+          </span>
+        ) : (
+          <span
+            className="text-xs text-neutral-300"
+            title="Cost analytics not yet wired for this run"
+          >
+            —
+          </span>
+        )}
+      </td>
+      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+        <div className="relative">
+          <input
+            type="text"
+            value={remark}
+            onChange={(e) => onRemarkChange(e.target.value)}
+            placeholder="Add note…"
+            maxLength={1000}
+            className="w-full text-xs bg-transparent border border-neutral-200 hover:border-neutral-300 focus:border-indigo-400 focus:outline-none rounded px-2 py-1"
+          />
+          {savingState === "saving" && (
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-neutral-400">…</span>
+          )}
+          {savingState === "saved" && (
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-emerald-500">saved</span>
+          )}
+          {savingState === "error" && (
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-red-500">err</span>
+          )}
+        </div>
+      </td>
+      <td className="px-5 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          onClick={onRetrigger}
+          disabled={retriggering || !submission.jobUrl}
+          className="text-xs bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-medium px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+          title="Re-queue this application on the retry lane and open the Pipeline in a new tab"
+        >
+          {retriggering ? "Queuing…" : "Retrigger ↗"}
+        </button>
+      </td>
+    </tr>
   );
 }
