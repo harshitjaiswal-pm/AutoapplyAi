@@ -571,6 +571,97 @@
     return false;
   }
 
+  /**
+   * Pro Mode: Sign in to an EXISTING Workday account.
+   * Called before createWorkdayAccount — if the account already exists for this
+   * tenant (worker already created it, or user signed up manually), this skips
+   * the create flow and goes straight to sign-in.
+   *
+   * Strategy:
+   *  1. Ensure we're on the Sign In form (not Create Account).
+   *  2. Fill email + password and click Sign In.
+   *  3. Wait up to 12s for the step to advance past "login".
+   *
+   * Returns true on success, false on any failure — NEVER throws or reloads.
+   */
+  async function signInToWorkday(userProfile, password) {
+    if (!userProfile?.email || !password) {
+      LOG("Pro Mode sign-in: missing email or password");
+      return false;
+    }
+
+    LOG(`Pro Mode: attempting sign-in for ${userProfile.email}`);
+
+    // Ensure we're on the Sign In form (1 password field), not Create Account (2 fields).
+    const ensureSignInMode = async () => {
+      const pwdFields = document.querySelectorAll('input[type="password"]');
+      if (pwdFields.length === 1) return true; // Already on sign-in form
+      // Look for a "Sign In" link/tab to switch from Create Account mode
+      const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+      const switchBtn = candidates.find(el => {
+        const t = (el.textContent || "").trim().toLowerCase();
+        return t === "sign in" || t === "sign in to existing account" || t === "already have an account";
+      });
+      if (switchBtn) { LOG("Pro Mode sign-in: clicking Sign In tab"); switchBtn.click(); await sleep(800); }
+      return document.querySelectorAll('input[type="password"]').length === 1;
+    };
+
+    const onSignInForm = await ensureSignInMode();
+    if (!onSignInForm) {
+      LOG("Pro Mode sign-in: couldn't find sign-in form (may only have Create Account)");
+      return false;
+    }
+
+    // Fill email
+    const emailInput =
+      document.querySelector('input[data-automation-id="email"]') ||
+      document.querySelector('input[type="email"]') ||
+      document.querySelector('input[name="email" i]');
+    if (!emailInput) { LOG("Pro Mode sign-in: no email field"); return false; }
+    setWorkdayValue(emailInput, userProfile.email);
+    await sleep(300);
+
+    // Fill password
+    const passwordInput =
+      document.querySelector('input[data-automation-id="password"]') ||
+      document.querySelectorAll('input[type="password"]')[0];
+    if (!passwordInput) { LOG("Pro Mode sign-in: no password field"); return false; }
+    setWorkdayValue(passwordInput, password);
+    await sleep(200);
+
+    // Click Sign In
+    const signInBtn =
+      document.querySelector('[data-automation-id="signInSubmitButton"]') ||
+      document.querySelector('[data-automation-id="click_filter"]') ||
+      Array.from(document.querySelectorAll('button, [role="button"]')).find(b => {
+        const t = (b.textContent || "").trim().toLowerCase();
+        return t === "sign in";
+      });
+    if (!signInBtn) { LOG("Pro Mode sign-in: no Sign In button found"); return false; }
+
+    LOG(`Pro Mode sign-in: submitting for ${userProfile.email}`);
+    signInBtn.click();
+
+    // Wait up to 12s for the step to advance
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const s = getCurrentStep();
+      if (s !== "login") {
+        LOG("Pro Mode sign-in: succeeded — now on step", s);
+        return true;
+      }
+      // Check for error messages (wrong password / no account)
+      const errors = (typeof collectErrorTexts === "function" ? collectErrorTexts() : []);
+      if (errors.length) {
+        LOG("Pro Mode sign-in: rejected —", errors.join(" | "));
+        return false;
+      }
+    }
+    LOG("Pro Mode sign-in: timed out waiting for step advance");
+    return false;
+  }
+
   /* ═══════════════════ STEP PROCESSING ═══════════════════ */
 
   async function processCurrentStep(pendingJob) {
@@ -624,37 +715,52 @@
         });
 
       if (step === "login") {
-        // Workday is showing a "Create Account / Sign In" gate — not a fillable form step.
+        // Workday is showing a "Create Account / Sign In" gate.
         //
-        // Pro Mode: if the user has enabled Pro Mode and stored a default password,
-        // AutoApply will attempt to CREATE the account automatically so the flow
-        // doesn't break mid-application. Otherwise we fall back to prompting the
-        // user to sign in and click Retry.
+        // Pro Mode flow (sign-in first, create-account fallback):
+        //   1. Try signInToWorkday() with userProfile.email + stored password.
+        //      This handles tenants where the worker already created an account.
+        //   2. If sign-in fails, try createWorkdayAccount() for fresh tenants.
+        //   3. If both fail, show a manual banner and STOP — no retry loop.
+        //      The old behaviour of re-triggering on every page reload caused
+        //      the infinite "goes crazy" loop when credentials were wrong.
         const proCfg = await new Promise((resolve) =>
           chrome.storage.local.get(["_aa_proMode", "_aa_proPassword", "userProfile"], resolve)
         );
         if (proCfg._aa_proMode && proCfg._aa_proPassword) {
+          const userProfile = proCfg.userProfile || {};
+
+          // Step 1: Try sign-in (handles existing accounts — e.g. worker already created one)
+          showBanner(
+            "Pro Mode: signing in to your account…",
+            "ai",
+            { subtext: `Signing in as ${userProfile.email || "your profile email"}…` }
+          );
+          const signedIn = await signInToWorkday(userProfile, proCfg._aa_proPassword);
+          if (signedIn) {
+            await sleep(2000);
+            showBanner("Signed in ✓ — resuming your application…", "ai");
+            return processCurrentStep(pendingJob);
+          }
+
+          // Step 2: Sign-in failed — try creating a new account
           showBanner(
             "Pro Mode: creating your Workday account…",
             "ai",
             { subtext: "We'll sign you up so the application can continue without stopping." }
           );
-          const ok = await createWorkdayAccount(
-            proCfg.userProfile || {},
-            proCfg._aa_proPassword
-          );
-          if (ok) {
-            // Account created / signed in — re-run the state machine now that we
-            // should be on the actual form. Give Workday a moment to navigate.
+          const created = await createWorkdayAccount(userProfile, proCfg._aa_proPassword);
+          if (created) {
             await sleep(2500);
             showBanner("Account created ✓ — resuming your application…", "ai");
             return processCurrentStep(pendingJob);
           }
-          // Fallthrough: creation failed, show manual banner
+
+          // Step 3: Both failed — stop cleanly (no loop)
           showBanner(
-            "Couldn't create the account automatically — please sign in or create one, then click Retry.",
+            "Couldn't sign in or create the account — please sign in manually, then click Retry.",
             "user",
-            { subtext: "Pro Mode hit a snag on this Workday instance. AutoApply will resume after you sign in." }
+            { subtext: "Pro Mode couldn't authenticate. Sign in yourself and AutoApply will resume.", showResume: true }
           );
           return;
         }
