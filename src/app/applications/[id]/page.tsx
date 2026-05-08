@@ -167,6 +167,28 @@ export default function SubmissionDetailPage() {
             </div>
           )}
 
+          {/* Pinned-to-hero review CTA — when the worker is paused for
+              human approval, the buttons must be visible immediately
+              without scrolling. Same component used below the hero for
+              the post-approval read-only banner is repurposed here so
+              there's only one source of truth. */}
+          {id && submission.reviewStatus === "awaiting_review" && (
+            <div className="mt-6">
+              <ApprovalButtons
+                applicationId={id}
+                onChange={async () => {
+                  try {
+                    const res = await fetch(`/api/applications/${id}`);
+                    if (res.ok) {
+                      const data = await res.json();
+                      setSubmission(data.submission);
+                    }
+                  } catch { /* tolerate */ }
+                }}
+              />
+            </div>
+          )}
+
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 text-xs">
             <div>
               <p className="text-indigo-400 uppercase tracking-wider text-[10px] font-semibold">Started</p>
@@ -193,27 +215,9 @@ export default function SubmissionDetailPage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        {/* Review gate — visible when reviewStatus === "awaiting_review".
-            The worker has tailored the resume and is paused; user clicks
-            Approve to continue (worker submits) or Reject (worker exits,
-            nothing reaches the company). Pinned at the top so it's the
-            first thing the user sees on a fresh review. */}
-        {id && submission.reviewStatus === "awaiting_review" && (
-          <ApprovalButtons
-            applicationId={id}
-            onChange={async () => {
-              // Refetch immediately so the buttons disappear without
-              // waiting for the 8s polling interval.
-              try {
-                const res = await fetch(`/api/applications/${id}`);
-                if (res.ok) {
-                  const data = await res.json();
-                  setSubmission(data.submission);
-                }
-              } catch { /* tolerate */ }
-            }}
-          />
-        )}
+        {/* Note: Approve/Reject CTA lives INSIDE the hero above so it's
+            always above the fold. Below this point we only render the
+            terminal-state banners (approved/rejected). */}
 
         {/* Read-only banner for terminal review states (approved means
             phase 2 is in flight; rejected means terminal). */}
