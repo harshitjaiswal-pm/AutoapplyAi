@@ -32,3 +32,11 @@ export const submissionIndexKey = (email: string) => `submissions:index:${email}
  *  after createAccount succeeds. Reuse path also writes here. Plaintext for
  *  v1 — see createAccount.ts:118 for the trade-off note. */
 export const tenantCredsKeyPrefix = (email: string) => `user:${email}:tenant_creds:`;
+
+/** Key schema: console:{email}:{jobId} — Console job record (staging surface
+ *  before the worker pipeline). One row per job the user has captured. */
+export const consoleJobKey = (email: string, jobId: string) =>
+  `console:${email}:${jobId}`;
+
+/** Key schema: console:index:{email} — set of jobIds for fast list. */
+export const consoleIndexKey = (email: string) => `console:index:${email}`;
