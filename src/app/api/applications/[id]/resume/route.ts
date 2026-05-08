@@ -20,10 +20,11 @@
  * but gets the same recruiter-ready .docx.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { put } from "@vercel/blob";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getSubmission } from "@/lib/submissions";
-import { redis, userResumeKey } from "@/lib/redis";
+import { redis, userResumeKey, submissionKey } from "@/lib/redis";
 
 function buildResumeFilename(s: { company?: string; tenant?: string; tailoredResumeJson?: Record<string, unknown> }): string {
   const safe = (str: string) => str.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -55,7 +56,14 @@ async function tailorOnDemand(
   parsedResume: Record<string, unknown>,
   parsedJob: { title: string; company: string; description?: string },
   cookieHeader: string
-): Promise<{ buffer: ArrayBuffer; tailoredResumeJson?: Record<string, unknown> } | { error: string; status: number }> {
+): Promise<
+  | {
+      buffer: ArrayBuffer;
+      tailoredResumeJson?: Record<string, unknown>;
+      rawTailorOuter?: Record<string, unknown>;
+    }
+  | { error: string; status: number }
+> {
   // 1. Tailor — Haiku for speed since this is on-demand from a UI click.
   const tailorRes = await fetch(`${origin}/api/tailor-resume`, {
     method: "POST",
@@ -89,7 +97,7 @@ async function tailorOnDemand(
     return { error: `Export failed (HTTP ${exportRes.status}): ${body.slice(0, 200)}`, status: 502 };
   }
   const buffer = await exportRes.arrayBuffer();
-  return { buffer, tailoredResumeJson: resumePayload };
+  return { buffer, tailoredResumeJson: resumePayload, rawTailorOuter: outer };
 }
 
 export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
@@ -166,6 +174,57 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     tailoredResumeJson: result.tailoredResumeJson,
   });
 
+  // ── Save the result back to Blob + Upstash so subsequent views are
+  //    instant from cache and the dashboard's other panels (inline
+  //    preview, cover letter, tailoring changes) populate too. The
+  //    laptop the worker ran on is no longer relevant — once a resume
+  //    has been generated for an application, it lives on the server
+  //    and is downloadable forever from the dashboard.
+  let resumeUrl: string | undefined;
+  try {
+    const safeEmail = email.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const blobKey = `submissions/${safeEmail}/${ctx.params.id}/${filename}`;
+    const putResult = await put(blobKey, Buffer.from(result.buffer), {
+      access: "public",
+      contentType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+    });
+    resumeUrl = putResult.url;
+  } catch (e) {
+    // Blob save failed — still serve the .docx so the user gets their
+    // download, but log so we know the cache isn't being populated.
+    console.warn(
+      "[resume] on-demand Blob save failed; serving without caching:",
+      (e as Error).message
+    );
+  }
+
+  // Patch the submission record with everything we just generated. Future
+  // dashboard loads see the cached resume URL, the inline preview JSON,
+  // and the cover letter / tailoring changes if we got them back from
+  // the tailor route.
+  try {
+    const tailorOuter = result.rawTailorOuter;
+    const patch: Record<string, unknown> = {
+      ...submission,
+      tailoredResumeJson: result.tailoredResumeJson,
+      resumeFilename: filename,
+    };
+    if (resumeUrl) patch.resumeUrl = resumeUrl;
+    if (tailorOuter) {
+      if (typeof tailorOuter.matchScore === "number") patch.matchScore = tailorOuter.matchScore;
+      if (typeof tailorOuter.originalMatchScore === "number")
+        patch.originalMatchScore = tailorOuter.originalMatchScore;
+      if (typeof tailorOuter.coverLetter === "string") patch.coverLetter = tailorOuter.coverLetter;
+      if (Array.isArray(tailorOuter.changes)) patch.tailoringChanges = tailorOuter.changes;
+    }
+    await redis.set(submissionKey(email, ctx.params.id), patch, { ex: 60 * 60 * 24 * 90 });
+  } catch (e) {
+    console.warn("[resume] failed to patch submission record:", (e as Error).message);
+  }
+
   return new NextResponse(result.buffer, {
     status: 200,
     headers: {
@@ -173,7 +232,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "Content-Disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
       "Cache-Control": "private, max-age=0",
-      "X-Resume-Source": "on-demand",
+      "X-Resume-Source": resumeUrl ? "on-demand-cached" : "on-demand",
     },
   });
 }
