@@ -33,23 +33,6 @@ function fmtDate(iso?: string): string {
   return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-/** Build a human-readable filename for the tailored resume download.
- *  Format: "{Company}_{Candidate_Name}_Resume.docx".
- *  Falls back to whatever's on the record if metadata is missing. */
-function buildResumeFilename(s: SubmissionRecord): string {
-  const safe = (str: string) => str.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  const companyRaw = s.company || s.tenant?.split(".")[0] || "";
-  // Capitalize first letter of each word in company name
-  const company = safe(companyRaw)
-    .split("_")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join("_");
-  const contact = (s.tailoredResumeJson as { contactInfo?: { name?: string } } | undefined)?.contactInfo;
-  const candidate = safe(contact?.name || "Resume");
-  if (!company) return `${candidate}_Resume.docx`;
-  return `${company}_${candidate}_Resume.docx`;
-}
-
 export default function SubmissionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -353,11 +336,13 @@ export default function SubmissionDetailPage() {
           </div>
         )}
 
-        {/* Tailored resume — always rendered when we have an applicationId,
-            even if the worker run never captured a resume to Blob. The
-            download endpoint falls back to on-demand tailoring in that case
-            so every submission has a working Resume button. */}
-        {id && (
+        {/* Tailored resume — only rendered when the worker actually captured
+            one for this run (either as JSON for the inline preview, or as a
+            Blob URL for download). When neither exists, the recovery panel
+            above already shows "Tailored resume (not captured for this run)" —
+            don't add a button that would generate a fresh resume the
+            employer never received. */}
+        {id && (submission.tailoredResumeJson || submission.resumeUrl) && (
           <div className="bg-white rounded-2xl border border-neutral-200 p-5">
             <div className="flex items-center justify-between mb-4">
               <button
@@ -375,44 +360,23 @@ export default function SubmissionDetailPage() {
                     (click to expand)
                   </span>
                 )}
-                {!submission.tailoredResumeJson && (
-                  <span className="text-[11px] text-amber-600 font-normal">
-                    (will tailor fresh on download — ~30-60s)
-                  </span>
-                )}
               </button>
               <div className="flex items-center gap-2">
                 {submission.tailoringCostCents != null && (
                   <span className="text-[11px] text-neutral-400">{submission.tailoringCostCents.toFixed(1)}¢ to tailor</span>
                 )}
-                <a
-                  href={`/api/applications/${id}/resume`}
-                  className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  ↓ Resume
-                </a>
+                {submission.resumeUrl && (
+                  <a
+                    href={`/api/applications/${id}/resume`}
+                    className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    ↓ Resume
+                  </a>
+                )}
               </div>
             </div>
             {resumeOpen && submission.tailoredResumeJson && (
               <TailoredResumeView resume={submission.tailoredResumeJson} />
-            )}
-            {!submission.tailoredResumeJson && (
-              <p className="text-xs text-neutral-500 leading-relaxed">
-                The worker didn&apos;t capture a structured resume for this run
-                (Blob upload skipped, or older worker code). Click <strong>↓ Resume</strong> to
-                generate a fresh tailored .docx now — uses the resume on
-                file from your profile and tailors against this job&apos;s
-                title and company. Filename: <code className="bg-neutral-100 px-1 py-0.5 rounded">
-                  {(() => {
-                    const safe = (s: string) => s.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-                    const c = safe(submission.company || submission.tenant?.split(".")[0] || "")
-                      .split("_")
-                      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                      .join("_");
-                    return c ? `${c}_Kiran_Shahi_Resume.docx` : `Kiran_Shahi_Resume.docx`;
-                  })()}
-                </code>
-              </p>
             )}
           </div>
         )}
