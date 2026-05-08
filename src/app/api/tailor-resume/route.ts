@@ -33,6 +33,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { parsedResume, parsedJob, mode } = body;
+    // Optional applicationId for per-app cost tracking (worker passes
+    // this; UI sandbox /tailor page does not).
+    const applicationId =
+      typeof body.applicationId === "string" && body.applicationId.length > 0
+        ? body.applicationId
+        : undefined;
 
     if (!parsedResume || !parsedJob) {
       return NextResponse.json(
@@ -349,7 +355,12 @@ export async function POST(request: NextRequest) {
     // tailoring is what matters, the accounting is a side effect.
     if (email) {
       const costCents = costFromUsage(modelId, message.usage);
-      await recordCost(email, costCents);
+      await recordCost(email, costCents, {
+        applicationId,
+        stage: "resume_tailor",
+        model: modelId,
+        tokens: message.usage,
+      });
     }
     return NextResponse.json({ tailoredResult, usage: message.usage });
   } catch (error: unknown) {

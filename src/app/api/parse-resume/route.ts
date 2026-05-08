@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { RESUME_PARSER_SYSTEM } from "@/lib/prompts";
+import { costFromUsage, recordCost } from "@/lib/budget";
 
 /**
  * API ROUTE: POST /api/parse-resume
@@ -21,9 +24,20 @@ import { RESUME_PARSER_SYSTEM } from "@/lib/prompts";
  */
 
 export async function POST(request: NextRequest) {
+  const modelId = "claude-haiku-4-5-20251001";
   try {
     // Step 1: Get the resume text from the request
-    const { resumeText } = await request.json();
+    const body = await request.json();
+    const { resumeText } = body;
+    const applicationId =
+      typeof body.applicationId === "string" && body.applicationId.length > 0
+        ? body.applicationId
+        : undefined;
+    // Email for cost tracking — session preferred, body fallback for worker callers.
+    const session = await getServerSession(authOptions);
+    const sessionEmail = session?.user?.email ?? null;
+    const bodyEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : null;
+    const email = sessionEmail ?? bodyEmail;
 
     if (!resumeText || typeof resumeText !== "string" || resumeText.trim().split(/\s+/).length < 20) {
       return NextResponse.json(
@@ -47,7 +61,7 @@ export async function POST(request: NextRequest) {
     const timeout = setTimeout(() => controller.abort(), 30000);
 
     const message = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",  // Haiku — fast & cheap, perfect for extraction
+      model: modelId,  // Haiku — fast & cheap, perfect for extraction
       max_tokens: 4096,
       system: RESUME_PARSER_SYSTEM,
       messages: [
@@ -58,6 +72,17 @@ export async function POST(request: NextRequest) {
       ],
     });
     clearTimeout(timeout);
+
+    // Best-effort cost tracking (no throw on failure).
+    if (email) {
+      const costCents = costFromUsage(modelId, message.usage);
+      await recordCost(email, costCents, {
+        applicationId,
+        stage: "parse_resume",
+        model: modelId,
+        tokens: message.usage,
+      });
+    }
 
     // Step 4: Extract the text response and clean it
     let responseText =

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { JOB_ANALYZER_SYSTEM } from "@/lib/prompts";
+import { costFromUsage, recordCost } from "@/lib/budget";
 
 /**
  * API ROUTE: POST /api/analyze-job
@@ -10,8 +13,18 @@ import { JOB_ANALYZER_SYSTEM } from "@/lib/prompts";
  */
 
 export async function POST(request: NextRequest) {
+  const modelId = "claude-haiku-4-5-20251001";
   try {
-    const { jobDescription } = await request.json();
+    const body = await request.json();
+    const { jobDescription } = body;
+    const applicationId =
+      typeof body.applicationId === "string" && body.applicationId.length > 0
+        ? body.applicationId
+        : undefined;
+    const session = await getServerSession(authOptions);
+    const sessionEmail = session?.user?.email ?? null;
+    const bodyEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : null;
+    const email = sessionEmail ?? bodyEmail;
 
     if (!jobDescription || jobDescription.trim().length < 50) {
       return NextResponse.json(
@@ -35,7 +48,7 @@ export async function POST(request: NextRequest) {
     const timeout = setTimeout(() => controller.abort(), 20000);
 
     const message = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",  // Haiku — fast & cheap, perfect for extraction
+      model: modelId,  // Haiku — fast & cheap, perfect for extraction
       max_tokens: 4096,
       system: JOB_ANALYZER_SYSTEM,
       messages: [
@@ -46,6 +59,16 @@ export async function POST(request: NextRequest) {
       ],
     }, { signal: controller.signal });
     clearTimeout(timeout);
+
+    if (email) {
+      const costCents = costFromUsage(modelId, message.usage);
+      await recordCost(email, costCents, {
+        applicationId,
+        stage: "analyze_job",
+        model: modelId,
+        tokens: message.usage,
+      });
+    }
 
     let responseText =
       message.content?.[0]?.type === "text" ? message.content[0].text : "";

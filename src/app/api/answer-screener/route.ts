@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { costFromUsage, recordCost } from "@/lib/budget";
 
 /**
  * POST /api/answer-screener
@@ -92,7 +93,12 @@ export async function POST(request: NextRequest) {
       questions?: ScreenerQuestion[];
       parsedResume?: unknown;
       parsedJob?: { title?: string; company?: string; location?: string; description?: string };
+      applicationId?: string;
+      email?: string;
     };
+    const applicationId =
+      typeof body.applicationId === "string" && body.applicationId.length > 0 ? body.applicationId : undefined;
+    const bodyEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : null;
 
     if (!Array.isArray(body.questions) || body.questions.length === 0) {
       return NextResponse.json({ error: "questions array required" }, { status: 400 });
@@ -141,9 +147,10 @@ export async function POST(request: NextRequest) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 25000);
 
+    const SCREENER_MODEL = "claude-haiku-4-5-20251001";
     const message = await anthropic.messages.create(
       {
-        model: "claude-haiku-4-5-20251001",
+        model: SCREENER_MODEL,
         max_tokens: 2048,
         system: SYSTEM,
         messages: [{ role: "user", content: userContent }],
@@ -151,6 +158,16 @@ export async function POST(request: NextRequest) {
       { signal: controller.signal }
     );
     clearTimeout(timeout);
+
+    if (bodyEmail) {
+      const costCents = costFromUsage(SCREENER_MODEL, message.usage);
+      await recordCost(bodyEmail, costCents, {
+        applicationId,
+        stage: "answer_question",
+        model: SCREENER_MODEL,
+        tokens: message.usage,
+      });
+    }
 
     let responseText =
       message.content?.[0]?.type === "text" ? message.content[0].text : "";

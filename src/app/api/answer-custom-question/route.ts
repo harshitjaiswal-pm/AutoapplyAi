@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { costFromUsage, recordCost } from "@/lib/budget";
 
 /**
  * API ROUTE: POST /api/answer-custom-question
@@ -117,8 +118,15 @@ function classifyAsDefaultYes(question: string): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  const modelId = "claude-haiku-4-5-20251001";
   try {
-    const { question, resumeSummary, jobTitle, company, jobDescription } = await request.json();
+    const body = await request.json();
+    const { question, resumeSummary, jobTitle, company, jobDescription } = body;
+    const applicationId =
+      typeof body.applicationId === "string" && body.applicationId.length > 0
+        ? body.applicationId
+        : undefined;
+    const bodyEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : null;
 
     if (!question) {
       return NextResponse.json({ error: "question is required" }, { status: 400, headers: CORS_HEADERS });
@@ -185,11 +193,21 @@ Application question: ${question}
 Write the answer:`;
 
     const message = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model: modelId,
       max_tokens: 400,
       system: systemPrompt,
       messages: [{ role: "user", content: userContent }],
     });
+
+    if (bodyEmail) {
+      const costCents = costFromUsage(modelId, message.usage);
+      await recordCost(bodyEmail, costCents, {
+        applicationId,
+        stage: "answer_question",
+        model: modelId,
+        tokens: message.usage,
+      });
+    }
 
     const answer = message.content?.[0]?.type === "text"
       ? message.content[0].text.trim()
