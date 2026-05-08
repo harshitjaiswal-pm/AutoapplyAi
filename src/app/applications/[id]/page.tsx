@@ -346,6 +346,7 @@ export default function SubmissionDetailPage() {
         {id && (() => {
           const hasJson = !!submission.tailoredResumeJson;
           const hasUrl = !!submission.resumeUrl;
+          const uploadError = submission.resumeUploadError;
           const captured = hasJson || hasUrl;
           return (
             <div className="bg-white rounded-2xl border border-neutral-200 p-5">
@@ -363,9 +364,14 @@ export default function SubmissionDetailPage() {
                       (click to expand)
                     </span>
                   )}
-                  {!captured && (
+                  {!captured && !uploadError && (
                     <span className="text-[11px] text-neutral-400 font-normal">
                       (not captured for this run)
+                    </span>
+                  )}
+                  {!captured && uploadError && (
+                    <span className="text-[11px] text-red-600 font-normal">
+                      (upload failed)
                     </span>
                   )}
                 </button>
@@ -386,16 +392,19 @@ export default function SubmissionDetailPage() {
               {resumeOpen && hasJson && submission.tailoredResumeJson && (
                 <TailoredResumeView resume={submission.tailoredResumeJson} />
               )}
-              {!captured && (
-                <p className="text-xs text-neutral-500 leading-relaxed">
-                  The worker tailored a resume for this application at apply time, but
-                  the .docx wasn&apos;t uploaded to Blob (older worker run, before the
-                  upload-on-success path was wired). To make it downloadable here, run the
-                  backfill from the laptop where the original worker ran:{" "}
-                  <code className="bg-neutral-100 px-1.5 py-0.5 rounded text-[11px]">
-                    cd autoapply-worker &amp;&amp; npx tsx scripts/backfill_submission.ts &lt;email&gt; {id}
-                  </code>
-                </p>
+              {!captured && uploadError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <p className="text-[11px] font-semibold text-red-700 uppercase tracking-wider">
+                    Resume upload to Blob failed
+                  </p>
+                  <p className="text-xs text-red-700 mt-1 font-mono whitespace-pre-wrap select-text leading-relaxed">
+                    {uploadError}
+                  </p>
+                  <p className="text-[11px] text-red-600 mt-2 leading-relaxed">
+                    The application may still have completed — Workday received the .docx during
+                    the wizard upload step. Only the dashboard&apos;s archival copy is missing.
+                  </p>
+                </div>
               )}
             </div>
           );
