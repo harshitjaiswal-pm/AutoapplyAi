@@ -179,6 +179,11 @@ export interface SubmissionRecord {
   /** Typed failure category for non-submitted runs. Drives the recovery
    *  panel's category-specific guidance. */
   failureCategory?: FailureCategory;
+  /** User-entered note. Free-form. Edited in-line on the Submissions
+   *  list — useful for tagging "manually finished", "bad role, ignore",
+   *  "need to follow up", etc. Persists across worker re-runs because
+   *  it's user-set, not worker-set. */
+  userRemark?: string;
   source: "smoke" | "queue";
 }
 
