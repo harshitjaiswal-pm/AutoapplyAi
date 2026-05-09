@@ -70,6 +70,7 @@
               company: job.company || undefined,
               location: job.location || undefined,
               source: "extension",
+              manualOnly: !!job.manualOnly,
             }),
           });
           if (res.ok) {
