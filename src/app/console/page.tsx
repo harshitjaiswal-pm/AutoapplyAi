@@ -73,22 +73,28 @@ export default function ConsolePage() {
       setError("Title and location are required for LinkedIn pull.");
       return;
     }
-    // Build LinkedIn search URL — f_WT=2 = Remote. f_TPR=r604800 = past
-    // week (recent listings). The trigger config rides on the URL hash
-    // (`#aa_pull=<base64-json>`) — page JS cannot write chrome.storage
-    // directly (content scripts are isolated), so the hash is the
-    // simplest cross-context channel. linkedin-pull.js decodes it on
-    // arrival.
+    // Build LinkedIn search URL — f_WT=2 = Remote, f_TPR=r604800 =
+    // past week (recent listings only).
     const params = new URLSearchParams();
     params.set("keywords", keywords);
     params.set("location", loc);
     params.set("f_TPR", "r604800");
     if (pullRemote) params.set("f_WT", "2");
+    const linkedinUrl = `https://www.linkedin.com/jobs/search/?${params.toString()}`;
     const consoleUrl = window.location.origin + "/console";
     const cfg = { keywords, location: loc, remote: pullRemote, count: 25, consoleUrl };
-    const cfgEncoded = btoa(JSON.stringify(cfg));
-    const linkedinUrl = `https://www.linkedin.com/jobs/search/?${params.toString()}#aa_pull=${cfgEncoded}`;
 
+    // Hand the trigger to pipeline-bridge.js (a content script running on
+    // this page in the extension's isolated world). It writes the config
+    // into chrome.storage.local, where linkedin-pull.js can read it on
+    // the next LinkedIn page load. We can't write chrome.storage directly
+    // from page-side JS — content scripts are sandboxed away from us.
+    window.postMessage({ __aa_trigger: "linkedin_pull", cfg }, "*");
+
+    // Open LinkedIn synchronously so the new tab is created inside the
+    // user's click gesture (avoids Chrome's popup blocker). The bridge's
+    // storage write is fast — linkedin-pull.js polls a few times after
+    // its 2s render delay, so a slight race is tolerated.
     setPullOpen(false);
     window.open(linkedinUrl, "_blank");
   };

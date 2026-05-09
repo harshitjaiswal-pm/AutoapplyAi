@@ -3,23 +3,23 @@
  *
  * Flow:
  *   1. User on /console clicks "Pull from LinkedIn", fills filter form.
- *   2. Console encodes {keywords, location, remote, count, consoleUrl} as
- *      base64 JSON and appends it to the LinkedIn URL hash:
- *        https://www.linkedin.com/jobs/search/?...#aa_pull=<base64>
- *      (Hash is used because page JS can't write chrome.storage from an
- *      isolated content-script world. URL hash is the simplest neutral
- *      channel between the two contexts.)
- *   3. THIS SCRIPT runs on the search page, decodes the hash, scrapes
- *      visible job cards, filters out Easy Apply, resolves each survivor's
- *      external ATS apply URL via fetch(), stuffs results into
+ *   2. /console postMessages the trigger config to pipeline-bridge.js (a
+ *      content script that runs on the same page). pipeline-bridge.js
+ *      writes chrome.storage.local._aa_pull_linkedin = {keywords, location,
+ *      remote, count, consoleUrl}. Page-side JS can't write chrome.storage
+ *      directly because content scripts run in an isolated world.
+ *   3. /console opens linkedin.com/jobs/search?... in a new tab.
+ *   4. THIS SCRIPT runs on the search page, reads the storage trigger,
+ *      scrapes visible job cards, filters out Easy Apply, resolves each
+ *      survivor's external ATS apply URL via fetch(), stuffs results into
  *      chrome.storage.local.pendingJobs, and navigates back to /console.
- *   4. /console runs pipeline-bridge.js which POSTs each pending job to
+ *   5. /console runs pipeline-bridge.js which POSTs each pending job to
  *      /api/console/jobs. That endpoint validates, dedupes, and enforces
  *      the 100/day cap.
  *
  * Why a separate file (not bolted onto content.js): content.js has a 3000+
  * line floating-panel + Easy Apply autofill flow. This is a small auto
- * scraper that only fires when the URL hash carries the trigger token.
+ * scraper that only fires when the trigger flag is set.
  */
 
 (() => {
@@ -27,20 +27,31 @@
   // and the AI-powered /jobs/search-results URLs.
   if (!/^\/jobs\/search/.test(location.pathname)) return;
 
-  // Look for the trigger token in the URL hash. Bail silently if it's
-  // missing so a normal LinkedIn search session is unaffected.
-  const cfg = parsePullConfig(location.hash);
-  if (!cfg) return;
+  // Race tolerance: the page postMessages the config, the bridge writes
+  // it to chrome.storage, then the new tab opens. Storage write is fast
+  // but not instant; if the LinkedIn page loads before the storage
+  // write completes, we'd bail. So we poll a few times before giving up.
+  pollForTrigger(0);
 
-  // Strip the trigger from the URL so a back-button or refresh doesn't
-  // re-fire the scrape (and so it doesn't show up in the user's history).
-  history.replaceState(null, "", location.pathname + location.search);
+  function pollForTrigger(attempt) {
+    chrome.storage.local.get(["_aa_pull_linkedin"], (data) => {
+      const cfg = data._aa_pull_linkedin;
+      if (cfg) {
+        // Clear it so a refresh / back-button doesn't re-fire.
+        chrome.storage.local.remove(["_aa_pull_linkedin"], () => {
+          // Wait for LinkedIn to render result cards (~2s after document_idle).
+          setTimeout(() => start(cfg), 2000);
+        });
+        return;
+      }
+      // No trigger yet. Try a few more times — bridge's write may not
+      // have landed when the new tab loaded. After 4 attempts (~3s) bail.
+      if (attempt >= 4) return;
+      setTimeout(() => pollForTrigger(attempt + 1), 600);
+    });
+  }
 
-  // Run AFTER document_idle to give LinkedIn time to render the lazy-loaded
-  // result cards. Two seconds covers the SSR + first hydration window.
-  setTimeout(start, 2000);
-
-  function start() {
+  function start(cfg) {
     console.log("[AutoApply LinkedIn pull] trigger detected, scraping…", cfg);
     showOverlay("Scanning LinkedIn for jobs…");
 
@@ -117,19 +128,6 @@
     }
   }
 
-  /** Decode the base64 JSON config from the URL hash. Returns null if
-   *  the hash is missing the trigger token or fails to decode — caller
-   *  treats null as "this is a normal LinkedIn search, do nothing". */
-  function parsePullConfig(hash) {
-    const m = (hash || "").match(/aa_pull=([A-Za-z0-9+/=]+)/);
-    if (!m) return null;
-    try {
-      return JSON.parse(atob(m[1]));
-    } catch (e) {
-      console.warn("[AutoApply LinkedIn pull] failed to decode trigger:", e);
-      return null;
-    }
-  }
 
   /** Fetch the LinkedIn JD page (uses the user's session cookies), parse
    *  the HTML, and pull out the external Apply URL.

@@ -98,6 +98,28 @@
     });
   });
 
+  /* ── LinkedIn Pull Trigger: Console page → Extension storage ──
+     Page-side JS can't write chrome.storage from an isolated content-
+     script world. So /console postMessages the trigger config and we
+     (a content script in the page's content-script world) relay it
+     into chrome.storage.local where linkedin-pull.js can read it on
+     the next LinkedIn search page load. */
+  window.addEventListener("message", (e) => {
+    if (e.source !== window) return;
+    const data = e.data;
+    if (!data || data.__aa_trigger !== "linkedin_pull") return;
+    if (!data.cfg || typeof data.cfg !== "object") {
+      console.warn("AutoApply Bridge: linkedin_pull trigger missing cfg");
+      return;
+    }
+    chrome.storage.local.set({ _aa_pull_linkedin: data.cfg }, () => {
+      console.log("AutoApply Bridge: stored LinkedIn pull trigger", data.cfg);
+      // ACK the page so it can open the LinkedIn tab synchronously
+      // (still inside the user's click gesture if the round-trip is fast).
+      window.postMessage({ __aa_trigger_ack: "linkedin_pull" }, "*");
+    });
+  });
+
   /* ── Resume & Profile Sync: React App → Extension ── */
   window.addEventListener("autoapply-sync-resume", (event) => {
     const { parsedResume, userProfile } = event.detail || {};
