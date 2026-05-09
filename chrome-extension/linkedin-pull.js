@@ -74,21 +74,22 @@
       const external = jobs.filter((j) => !j.easyApply).slice(0, targetCount);
       const skippedEasyApply = jobs.length - jobs.filter((j) => !j.easyApply).length;
 
-      // Resolve the actual ATS apply URL for each captured job. We're
-      // already on linkedin.com in the user's authenticated browser, so
-      // fetch('/jobs/view/<id>') uses their cookies and returns the full
-      // JD HTML. We pull the external Apply URL out of the HTML and use
-      // THAT as the worker's target — without it the worker would just
-      // hit LinkedIn (which 401s server-side) and fail every job.
+      // Try to resolve each job's external ATS URL. Modern LinkedIn doesn't
+      // ship the apply URL in the SSR HTML for /jobs/view/<id> — it's
+      // fetched lazily via voyager API at click-time. So our fetch-and-grep
+      // succeeds rarely. When it fails, FALL BACK to the LinkedIn URL
+      // itself: the user can still click into the captured row from /console,
+      // LinkedIn redirects to the ATS, and the existing extension takes over.
+      // Better than dropping the job entirely.
       showOverlay(`Resolving apply URLs for ${external.length} jobs…`);
       const resolved = [];
+      let resolvedCount = 0;
       for (let i = 0; i < external.length; i++) {
         const j = external[i];
-        showOverlay(`Resolving apply URL ${i + 1}/${external.length}: ${j.title}`);
+        showOverlay(`Resolving ${i + 1}/${external.length}: ${j.title}`);
         const applyUrl = await resolveApplyUrl(j.linkedinJobId);
-        // If we couldn't find an external apply URL, skip the job — keeping
-        // it would just make the worker fail on LinkedIn-side auth.
         if (applyUrl) {
+          resolvedCount++;
           resolved.push({
             jobUrl: applyUrl,
             title: j.title,
@@ -96,8 +97,16 @@
             location: j.location,
             source: "extension",
           });
-        } else {
-          console.log(`[AutoApply LinkedIn pull] no external apply URL for "${j.title}" — skipping`);
+        } else if (j.linkedinJobId) {
+          // Fall back to the LinkedIn URL — capture is still useful as a
+          // staging row even if we can't auto-apply.
+          resolved.push({
+            jobUrl: `https://www.linkedin.com/jobs/view/${j.linkedinJobId}/`,
+            title: j.title,
+            company: j.company,
+            location: j.location,
+            source: "extension",
+          });
         }
         // Tiny stagger so we don't hammer LinkedIn with 25 fetches in
         // ~one event-loop tick. 200ms keeps the user's request rate
@@ -105,19 +114,17 @@
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      const skippedNoUrl = external.length - resolved.length;
       if (resolved.length === 0) {
-        showOverlay(
-          `Couldn't resolve any apply URLs. ${skippedEasyApply} Easy Apply, ${skippedNoUrl} unresolved.`,
-          "error"
-        );
+        showOverlay(`No jobs to capture — ${skippedEasyApply} Easy Apply skipped.`, "error");
         return;
       }
+      const linkedinFallbackCount = resolved.length - resolvedCount;
 
       chrome.storage.local.set({ pendingJobs: resolved }, () => {
         const parts = [`Captured ${resolved.length} jobs`];
-        if (skippedEasyApply) parts.push(`skipped ${skippedEasyApply} Easy Apply`);
-        if (skippedNoUrl) parts.push(`${skippedNoUrl} no external URL`);
+        if (resolvedCount > 0) parts.push(`${resolvedCount} resolved to ATS`);
+        if (linkedinFallbackCount > 0) parts.push(`${linkedinFallbackCount} via LinkedIn URL`);
+        if (skippedEasyApply) parts.push(`${skippedEasyApply} Easy Apply skipped`);
         showOverlay(`${parts.join(", ")}. Returning to Console…`, "ok");
         // Hand off to the Console — pipeline-bridge.js will POST each
         // pending job to /api/console/jobs as the page loads.
