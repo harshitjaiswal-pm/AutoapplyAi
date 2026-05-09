@@ -234,12 +234,44 @@
         }
         title = title.replace(/\s+with verification$/i, "").replace(/\s*\(Verified job\)/gi, "").trim();
         if (!title || title.length < 3) {
-          failures++;
-          console.log(`[AutoApply LinkedIn pull] card ${idx}: no usable title (link=${!!titleLink})`);
-          return;
+          // Last resort: scroll the card into view and re-read after a
+          // beat. Some cards are still hydrating when we hit them.
+          card.scrollIntoView({ block: "center", behavior: "auto" });
+          // sync re-read — can't await inside forEach but the scroll
+          // alone often wakes hydration enough for a second look.
+          const retryLink =
+            card.querySelector("a.job-card-container__link") ||
+            card.querySelector('a[href*="/jobs/view/"]');
+          if (retryLink) {
+            title = (retryLink.querySelector("strong")?.textContent?.trim() ||
+                     retryLink.getAttribute("aria-label") ||
+                     retryLink.textContent?.trim() || "")
+              .replace(/\s+with verification$/i, "")
+              .replace(/\s*\(Verified job\)/gi, "")
+              .trim();
+          }
+          if (!title || title.length < 3) {
+            failures++;
+            return;
+          }
         }
 
-        const { company, location: locationStr, easyApply } = parseCardText(card.innerText, title);
+        // Use card.innerText if it has content; otherwise pull title/company
+        // from direct DOM nodes. Some virtualized cards have partial render
+        // (links present but innerText empty).
+        let cardText = card.innerText || "";
+        if (cardText.trim().length < 20) {
+          // Build a minimal text blob from the visible spans inside the card.
+          const spans = card.querySelectorAll("span");
+          const parts = [];
+          spans.forEach((s) => {
+            const t = (s.textContent || "").trim();
+            if (t && t.length < 100 && parts.indexOf(t) === -1) parts.push(t);
+          });
+          cardText = parts.join("\n");
+        }
+
+        const { company, location: locationStr, easyApply } = parseCardText(cardText, title);
         out.push({ linkedinJobId: jobId, title, company, location: locationStr, easyApply });
       } catch (e) {
         failures++;
@@ -314,22 +346,32 @@
     return { company, location, easyApply };
   }
 
-  /** Scroll the results list in chunks to fully lazy-load all 25 cards.
-   *  LinkedIn renders cards as you scroll past them — a single jump to
-   *  scrollHeight only loads the cards near the visible area, leaving
-   *  cards in the middle un-rendered with empty innerText. Scrolling
-   *  in 6-8 increments forces every chunk into the viewport at least
-   *  once so the full card content is present when we scrape. */
+  /** Scroll each LinkedIn job card directly into viewport so its content
+   *  hydrates. LinkedIn uses occlusion-based virtualization — the <li>
+   *  exists but its title/company/location only render when the card
+   *  enters the viewport. Naive bottom-scroll only renders the cards
+   *  near our scroll-stop positions; cards in between stay empty.
+   *
+   *  This iterates over every card[data-occludable-job-id], scrolls it
+   *  into view, waits for its innerText to fill (or 800ms max), then
+   *  moves on. By the time we return, every card the scrape will see
+   *  has its content rendered. ~5-8 seconds for 25 cards. */
   async function autoScroll() {
     const list = document.querySelector(".jobs-search-results-list, .scaffold-layout__list");
     if (!list) return;
-    const steps = 8;
-    const totalHeight = list.scrollHeight;
-    for (let i = 1; i <= steps; i++) {
-      list.scrollTo({ top: (totalHeight * i) / steps, behavior: "auto" });
-      await new Promise((r) => setTimeout(r, 350));
+    const cards = document.querySelectorAll("li[data-occludable-job-id]");
+    for (const card of cards) {
+      card.scrollIntoView({ block: "center", behavior: "auto" });
+      // Wait until the card's text is non-empty, capped at 800ms. Most
+      // cards render within ~150ms after entering viewport.
+      const start = Date.now();
+      while (Date.now() - start < 800) {
+        if ((card.innerText || "").trim().length > 30) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
     }
-    // Scroll back to the top so the first card is in view, then settle.
+    // Scroll back to the top so the first card is in view, settle for
+    // any final renders.
     list.scrollTo({ top: 0, behavior: "auto" });
     await new Promise((r) => setTimeout(r, 600));
   }
