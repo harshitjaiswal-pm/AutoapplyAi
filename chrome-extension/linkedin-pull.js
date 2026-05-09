@@ -3,19 +3,23 @@
  *
  * Flow:
  *   1. User on /console clicks "Pull from LinkedIn", fills filter form.
- *   2. Console writes chrome.storage.local._aa_pull_linkedin = {keywords, location, remote, count, consoleUrl}
- *   3. Console opens linkedin.com/jobs/search?keywords=…&location=…&f_WT=2 in a new tab.
- *   4. THIS SCRIPT runs on the search page, sees the trigger flag, scrapes
- *      visible job cards, filters out Easy Apply, stuffs the survivors into
- *      chrome.storage.local.pendingJobs, and navigates the tab back to /console.
- *   5. /console runs `pipeline-bridge.js` which POSTs each pending job to
- *      /api/console/jobs. That endpoint validates, dedupes, and enforces the
- *      100/day cap.
+ *   2. Console encodes {keywords, location, remote, count, consoleUrl} as
+ *      base64 JSON and appends it to the LinkedIn URL hash:
+ *        https://www.linkedin.com/jobs/search/?...#aa_pull=<base64>
+ *      (Hash is used because page JS can't write chrome.storage from an
+ *      isolated content-script world. URL hash is the simplest neutral
+ *      channel between the two contexts.)
+ *   3. THIS SCRIPT runs on the search page, decodes the hash, scrapes
+ *      visible job cards, filters out Easy Apply, resolves each survivor's
+ *      external ATS apply URL via fetch(), stuffs results into
+ *      chrome.storage.local.pendingJobs, and navigates back to /console.
+ *   4. /console runs pipeline-bridge.js which POSTs each pending job to
+ *      /api/console/jobs. That endpoint validates, dedupes, and enforces
+ *      the 100/day cap.
  *
  * Why a separate file (not bolted onto content.js): content.js has a 3000+
- * line floating-panel + Easy Apply autofill flow. This is a 100-line auto
- * scraper that only fires when the trigger flag is set. Keeping them apart
- * means the main content.js path is unaffected.
+ * line floating-panel + Easy Apply autofill flow. This is a small auto
+ * scraper that only fires when the URL hash carries the trigger token.
  */
 
 (() => {
@@ -23,107 +27,123 @@
   // and the AI-powered /jobs/search-results URLs.
   if (!/^\/jobs\/search/.test(location.pathname)) return;
 
+  // Look for the trigger token in the URL hash. Bail silently if it's
+  // missing so a normal LinkedIn search session is unaffected.
+  const cfg = parsePullConfig(location.hash);
+  if (!cfg) return;
+
+  // Strip the trigger from the URL so a back-button or refresh doesn't
+  // re-fire the scrape (and so it doesn't show up in the user's history).
+  history.replaceState(null, "", location.pathname + location.search);
+
   // Run AFTER document_idle to give LinkedIn time to render the lazy-loaded
   // result cards. Two seconds covers the SSR + first hydration window.
   setTimeout(start, 2000);
 
   function start() {
-    chrome.storage.local.get(["_aa_pull_linkedin"], (data) => {
-      const cfg = data._aa_pull_linkedin;
-      if (!cfg) return; // No active pull request — bail silently.
+    console.log("[AutoApply LinkedIn pull] trigger detected, scraping…", cfg);
+    showOverlay("Scanning LinkedIn for jobs…");
 
-      console.log("[AutoApply LinkedIn pull] trigger detected, scraping…", cfg);
-      showOverlay("Scanning LinkedIn for jobs…");
-
-      // Two passes: scroll once to lazy-load more cards, then scrape.
-      autoScroll().then(scrapeAndForward).catch((e) => {
-        console.error("[AutoApply LinkedIn pull] scrape failed:", e);
-        showOverlay(`Scrape failed: ${e.message || e}`, "error");
-      });
-
-      async function scrapeAndForward() {
-        const jobs = scrapeCards();
-        if (!jobs.length) {
-          showOverlay("No jobs found on this page. Try a different filter.", "error");
-          return;
-        }
-        const targetCount = Math.min(jobs.length, cfg.count || 25);
-        // Skip Easy Apply (worker can't drive LinkedIn's internal flow).
-        // Take the top N external listings; if there aren't enough, take
-        // what we've got rather than failing the whole pull.
-        const external = jobs.filter((j) => !j.easyApply).slice(0, targetCount);
-        const skippedEasyApply = jobs.length - jobs.filter((j) => !j.easyApply).length;
-
-        // Resolve the actual ATS apply URL for each captured job. We're
-        // already on linkedin.com in the user's authenticated browser, so
-        // fetch('/jobs/view/<id>') uses their cookies and returns the full
-        // JD HTML. We pull the external Apply URL out of the HTML and use
-        // THAT as the worker's target — without it the worker would just
-        // hit LinkedIn (which 401s server-side) and fail every job.
-        showOverlay(`Resolving apply URLs for ${external.length} jobs…`);
-        const resolved = [];
-        for (let i = 0; i < external.length; i++) {
-          const j = external[i];
-          showOverlay(`Resolving apply URL ${i + 1}/${external.length}: ${j.title}`);
-          const applyUrl = await resolveApplyUrl(j.linkedinJobId);
-          // If we couldn't find an external apply URL, skip the job — keeping
-          // it would just make the worker fail on LinkedIn-side auth.
-          if (applyUrl) {
-            resolved.push({
-              jobUrl: applyUrl,
-              title: j.title,
-              company: j.company,
-              location: j.location,
-              source: "extension",
-            });
-          } else {
-            console.log(`[AutoApply LinkedIn pull] no external apply URL for "${j.title}" — skipping`);
-          }
-          // Tiny stagger so we don't hammer LinkedIn with 25 fetches in
-          // ~one event-loop tick. 200ms keeps the user's request rate
-          // indistinguishable from a person clicking through results.
-          await new Promise((r) => setTimeout(r, 200));
-        }
-
-        const skippedNoUrl = external.length - resolved.length;
-        if (resolved.length === 0) {
-          showOverlay(
-            `Couldn't resolve any apply URLs. ${skippedEasyApply} Easy Apply, ${skippedNoUrl} unresolved.`,
-            "error"
-          );
-          return;
-        }
-
-        chrome.storage.local.set({ pendingJobs: resolved }, () => {
-          // Clear the trigger so a refresh of this tab doesn't re-fire.
-          chrome.storage.local.remove(["_aa_pull_linkedin"], () => {
-            const parts = [`Captured ${resolved.length} jobs`];
-            if (skippedEasyApply) parts.push(`skipped ${skippedEasyApply} Easy Apply`);
-            if (skippedNoUrl) parts.push(`${skippedNoUrl} no external URL`);
-            showOverlay(`${parts.join(", ")}. Returning to Console…`, "ok");
-            // Hand off to the Console — pipeline-bridge.js will POST each
-            // pending job to /api/console/jobs as the page loads.
-            setTimeout(() => {
-              location.href = cfg.consoleUrl || "/";
-            }, 1500);
-          });
-        });
-      }
+    // Two passes: scroll once to lazy-load more cards, then scrape.
+    autoScroll().then(scrapeAndForward).catch((e) => {
+      console.error("[AutoApply LinkedIn pull] scrape failed:", e);
+      showOverlay(`Scrape failed: ${e.message || e}`, "error");
     });
+
+    async function scrapeAndForward() {
+      const jobs = scrapeCards();
+      if (!jobs.length) {
+        showOverlay("No jobs found on this page. Try a different filter.", "error");
+        return;
+      }
+      const targetCount = Math.min(jobs.length, cfg.count || 25);
+      // Skip Easy Apply (worker can't drive LinkedIn's internal flow).
+      // Take the top N external listings; if there aren't enough, take
+      // what we've got rather than failing the whole pull.
+      const external = jobs.filter((j) => !j.easyApply).slice(0, targetCount);
+      const skippedEasyApply = jobs.length - jobs.filter((j) => !j.easyApply).length;
+
+      // Resolve the actual ATS apply URL for each captured job. We're
+      // already on linkedin.com in the user's authenticated browser, so
+      // fetch('/jobs/view/<id>') uses their cookies and returns the full
+      // JD HTML. We pull the external Apply URL out of the HTML and use
+      // THAT as the worker's target — without it the worker would just
+      // hit LinkedIn (which 401s server-side) and fail every job.
+      showOverlay(`Resolving apply URLs for ${external.length} jobs…`);
+      const resolved = [];
+      for (let i = 0; i < external.length; i++) {
+        const j = external[i];
+        showOverlay(`Resolving apply URL ${i + 1}/${external.length}: ${j.title}`);
+        const applyUrl = await resolveApplyUrl(j.linkedinJobId);
+        // If we couldn't find an external apply URL, skip the job — keeping
+        // it would just make the worker fail on LinkedIn-side auth.
+        if (applyUrl) {
+          resolved.push({
+            jobUrl: applyUrl,
+            title: j.title,
+            company: j.company,
+            location: j.location,
+            source: "extension",
+          });
+        } else {
+          console.log(`[AutoApply LinkedIn pull] no external apply URL for "${j.title}" — skipping`);
+        }
+        // Tiny stagger so we don't hammer LinkedIn with 25 fetches in
+        // ~one event-loop tick. 200ms keeps the user's request rate
+        // indistinguishable from a person clicking through results.
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      const skippedNoUrl = external.length - resolved.length;
+      if (resolved.length === 0) {
+        showOverlay(
+          `Couldn't resolve any apply URLs. ${skippedEasyApply} Easy Apply, ${skippedNoUrl} unresolved.`,
+          "error"
+        );
+        return;
+      }
+
+      chrome.storage.local.set({ pendingJobs: resolved }, () => {
+        const parts = [`Captured ${resolved.length} jobs`];
+        if (skippedEasyApply) parts.push(`skipped ${skippedEasyApply} Easy Apply`);
+        if (skippedNoUrl) parts.push(`${skippedNoUrl} no external URL`);
+        showOverlay(`${parts.join(", ")}. Returning to Console…`, "ok");
+        // Hand off to the Console — pipeline-bridge.js will POST each
+        // pending job to /api/console/jobs as the page loads.
+        setTimeout(() => {
+          location.href = cfg.consoleUrl || "/";
+        }, 1500);
+      });
+    }
+  }
+
+  /** Decode the base64 JSON config from the URL hash. Returns null if
+   *  the hash is missing the trigger token or fails to decode — caller
+   *  treats null as "this is a normal LinkedIn search, do nothing". */
+  function parsePullConfig(hash) {
+    const m = (hash || "").match(/aa_pull=([A-Za-z0-9+/=]+)/);
+    if (!m) return null;
+    try {
+      return JSON.parse(atob(m[1]));
+    } catch (e) {
+      console.warn("[AutoApply LinkedIn pull] failed to decode trigger:", e);
+      return null;
+    }
   }
 
   /** Fetch the LinkedIn JD page (uses the user's session cookies), parse
    *  the HTML, and pull out the external Apply URL.
    *
-   *  Two patterns we look for, ordered most → least specific:
+   *  Three extraction patterns, ordered most-specific → least:
    *    1. <code id="applyUrl">"https://..."</code> — LinkedIn includes
    *       this hidden code block on external listings as part of their
    *       SSR data; cleanest extraction.
    *    2. data-tracking-control-name="public_jobs_apply-link-onsite|offsite"
-   *       on an anchor — fallback for layouts that don't carry the
-   *       applyUrl code block.
+   *       on an anchor — fallback for layouts without the applyUrl block.
+   *    3. Last-resort regex against known ATS hosts — narrow enough to
+   *       not grab a company-website link by mistake.
    *
-   *  Returns null if neither yields a usable URL — caller treats that
+   *  Returns null if none yields a usable URL — caller treats that
    *  as "skip this job, can't apply automatically". */
   async function resolveApplyUrl(linkedinJobId) {
     if (!linkedinJobId) return null;
@@ -152,9 +172,8 @@
         return decodeHtmlEntities(anchorMatch[1]);
       }
 
-      // Pattern 3: any href that looks like an external apply URL.
-      // Last-resort — narrow to known ATS hosts so we don't grab a
-      // company-website link by mistake.
+      // Pattern 3: any href that looks like an external apply URL on a
+      // known ATS host. Last-resort.
       const ats = html.match(
         /href=["'](https?:\/\/[^"']*(?:myworkdayjobs\.com|greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|icims\.com|successfactors\.com|brainhunter\.com|taleo\.net)[^"']*)["']/
       );
@@ -201,8 +220,6 @@
 
         const text = card.innerText || "";
         const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
-        // First line is usually the title (skip it); next non-empty is company,
-        // then location. LinkedIn varies — fall back to "" rather than picking junk.
         const titleIdx = lines.findIndex((l) => l.toLowerCase() === title.toLowerCase());
         const company = (lines[titleIdx + 1] || "").slice(0, 80);
         const locationStr = (lines[titleIdx + 2] || "").slice(0, 120);

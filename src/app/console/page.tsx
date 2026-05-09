@@ -73,40 +73,24 @@ export default function ConsolePage() {
       setError("Title and location are required for LinkedIn pull.");
       return;
     }
-    // Build LinkedIn search URL — f_WT=2 = Remote, f_WT=1 = On-site. Omit
-    // when the user wants both. f_TPR=r604800 = past week (recent listings only).
+    // Build LinkedIn search URL — f_WT=2 = Remote. f_TPR=r604800 = past
+    // week (recent listings). The trigger config rides on the URL hash
+    // (`#aa_pull=<base64-json>`) — page JS cannot write chrome.storage
+    // directly (content scripts are isolated), so the hash is the
+    // simplest cross-context channel. linkedin-pull.js decodes it on
+    // arrival.
     const params = new URLSearchParams();
     params.set("keywords", keywords);
     params.set("location", loc);
     params.set("f_TPR", "r604800");
     if (pullRemote) params.set("f_WT", "2");
-    const linkedinUrl = `https://www.linkedin.com/jobs/search/?${params.toString()}`;
     const consoleUrl = window.location.origin + "/console";
+    const cfg = { keywords, location: loc, remote: pullRemote, count: 25, consoleUrl };
+    const cfgEncoded = btoa(JSON.stringify(cfg));
+    const linkedinUrl = `https://www.linkedin.com/jobs/search/?${params.toString()}#aa_pull=${cfgEncoded}`;
 
-    // Hand the trigger to the extension via chrome.storage.local. The
-    // linkedin-pull.js content script reads this on the search page, scrapes,
-    // stuffs results into pendingJobs, and redirects back here.
-    if (typeof window === "undefined" || !(window as unknown as { chrome?: { storage?: unknown } }).chrome) {
-      setError("Chrome extension not detected — install the AutoApply extension first.");
-      return;
-    }
-    type ChromeWindow = Window & {
-      chrome?: { storage?: { local?: { set: (data: Record<string, unknown>, cb?: () => void) => void } } };
-    };
-    const ext = (window as unknown as ChromeWindow).chrome;
-    if (!ext?.storage?.local) {
-      setError("Extension storage not accessible — reload this page after installing the extension.");
-      return;
-    }
-    ext.storage.local.set(
-      { _aa_pull_linkedin: { keywords, location: loc, remote: pullRemote, count: 25, consoleUrl } },
-      () => {
-        setPullOpen(false);
-        // Open in same window's new tab. The extension's content script
-        // will redirect this tab back to /console once the pull finishes.
-        window.open(linkedinUrl, "_blank");
-      }
-    );
+    setPullOpen(false);
+    window.open(linkedinUrl, "_blank");
   };
 
   const load = useCallback(async () => {
