@@ -103,13 +103,21 @@
       for (let i = 0; i < external.length; i++) {
         const j = external[i];
         showOverlay(`Resolving ${i + 1}/${external.length}: ${j.title}`);
-        const applyUrl = await resolveApplyUrl(j.linkedinJobId);
-        if (applyUrl) {
+        const meta = await resolveJobMeta(j.linkedinJobId);
+
+        // Use scraped values where available; fall back to fetched HTML
+        // values when the card scrape produced placeholders or empty.
+        const isPlaceholder = j._parseFailed || /^LinkedIn job /.test(j.title) || j.title === "—";
+        const isUnparsedCompany = j.company === "(unparsed)" || !j.company;
+        const finalTitle = (isPlaceholder && meta.title) ? meta.title : j.title;
+        const finalCompany = (isUnparsedCompany && meta.company) ? meta.company : j.company;
+
+        if (meta.applyUrl) {
           resolvedCount++;
           resolved.push({
-            jobUrl: applyUrl,
-            title: j.title,
-            company: j.company,
+            jobUrl: meta.applyUrl,
+            title: finalTitle,
+            company: finalCompany,
             location: j.location,
             source: "extension",
           });
@@ -118,8 +126,8 @@
           // staging row even if we can't auto-apply.
           resolved.push({
             jobUrl: `https://www.linkedin.com/jobs/view/${j.linkedinJobId}/`,
-            title: j.title,
-            company: j.company,
+            title: finalTitle,
+            company: finalCompany,
             location: j.location,
             source: "extension",
           });
@@ -188,21 +196,19 @@
 
 
   /** Fetch the LinkedIn JD page (uses the user's session cookies), parse
-   *  the HTML, and pull out the external Apply URL.
+   *  the HTML, and extract { applyUrl, title, company }. We get all three
+   *  from the same fetch so we can both find the external apply URL AND
+   *  recover title/company when card-level DOM scraping failed (placeholder
+   *  rows). Returns { applyUrl: null, title: null, company: null } if the
+   *  fetch itself fails — caller treats fields as missing.
    *
-   *  Three extraction patterns, ordered most-specific → least:
-   *    1. <code id="applyUrl">"https://..."</code> — LinkedIn includes
-   *       this hidden code block on external listings as part of their
-   *       SSR data; cleanest extraction.
-   *    2. data-tracking-control-name="public_jobs_apply-link-onsite|offsite"
-   *       on an anchor — fallback for layouts without the applyUrl block.
-   *    3. Last-resort regex against known ATS hosts — narrow enough to
-   *       not grab a company-website link by mistake.
-   *
-   *  Returns null if none yields a usable URL — caller treats that
-   *  as "skip this job, can't apply automatically". */
-  async function resolveApplyUrl(linkedinJobId) {
-    if (!linkedinJobId) return null;
+   *  Title extraction: <title>Job Title - Company - LinkedIn</title> is
+   *  always present; we split on " - " and take the first segment.
+   *  Company extraction: same split, second segment. Both gracefully
+   *  fall back to null if the format isn't as expected. */
+  async function resolveJobMeta(linkedinJobId) {
+    const empty = { applyUrl: null, title: null, company: null };
+    if (!linkedinJobId) return empty;
     try {
       const res = await fetch(`https://www.linkedin.com/jobs/view/${linkedinJobId}/`, {
         credentials: "include",
@@ -210,36 +216,73 @@
       });
       if (!res.ok) {
         console.warn(`[AutoApply LinkedIn pull] fetch /jobs/view/${linkedinJobId} → ${res.status}`);
-        return null;
+        return empty;
       }
       const html = await res.text();
-
-      // Pattern 1: <code id="applyUrl">"https://..."</code>
-      const codeMatch = html.match(/<code[^>]*id=["']applyUrl["'][^>]*>\s*"([^"]+)"\s*<\/code>/);
-      if (codeMatch) {
-        return decodeHtmlEntities(codeMatch[1]);
-      }
-
-      // Pattern 2: anchor with data-tracking-control-name
-      const anchorMatch = html.match(
-        /<a[^>]*data-tracking-control-name=["']public_jobs_apply-link-(?:onsite|offsite)["'][^>]*\shref=["']([^"']+)["']/
-      );
-      if (anchorMatch) {
-        return decodeHtmlEntities(anchorMatch[1]);
-      }
-
-      // Pattern 3: any href that looks like an external apply URL on a
-      // known ATS host. Last-resort.
-      const ats = html.match(
-        /href=["'](https?:\/\/[^"']*(?:myworkdayjobs\.com|greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|icims\.com|successfactors\.com|brainhunter\.com|taleo\.net)[^"']*)["']/
-      );
-      if (ats) return decodeHtmlEntities(ats[1]);
-
-      return null;
+      return {
+        applyUrl: extractApplyUrl(html),
+        title: extractTitleFromHtml(html),
+        company: extractCompanyFromHtml(html),
+      };
     } catch (e) {
-      console.warn(`[AutoApply LinkedIn pull] resolve failed for ${linkedinJobId}:`, e);
-      return null;
+      console.warn(`[AutoApply LinkedIn pull] resolveJobMeta failed for ${linkedinJobId}:`, e);
+      return empty;
     }
+  }
+
+  /** Three extraction patterns for the apply URL, ordered most-specific →
+   *  least. Returns null if none yields a usable URL. */
+  function extractApplyUrl(html) {
+    // Pattern 1: <code id="applyUrl">"https://..."</code>
+    const codeMatch = html.match(/<code[^>]*id=["']applyUrl["'][^>]*>\s*"([^"]+)"\s*<\/code>/);
+    if (codeMatch) return decodeHtmlEntities(codeMatch[1]);
+
+    // Pattern 2: anchor with data-tracking-control-name
+    const anchorMatch = html.match(
+      /<a[^>]*data-tracking-control-name=["']public_jobs_apply-link-(?:onsite|offsite)["'][^>]*\shref=["']([^"']+)["']/
+    );
+    if (anchorMatch) return decodeHtmlEntities(anchorMatch[1]);
+
+    // Pattern 3: any href on a known ATS host (last-resort).
+    const ats = html.match(
+      /href=["'](https?:\/\/[^"']*(?:myworkdayjobs\.com|greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|icims\.com|successfactors\.com|brainhunter\.com|taleo\.net)[^"']*)["']/
+    );
+    if (ats) return decodeHtmlEntities(ats[1]);
+
+    return null;
+  }
+
+  /** Extract job title from the HTML <title> tag. LinkedIn formats it
+   *  as "Job Title - Company - LinkedIn" or "Job Title hiring … | LinkedIn".
+   *  Returns null on no match. */
+  function extractTitleFromHtml(html) {
+    const m = html.match(/<title>([^<]+)<\/title>/);
+    if (!m) return null;
+    let t = decodeHtmlEntities(m[1]).trim();
+    // Strip the trailing " - LinkedIn" or " | LinkedIn"
+    t = t.replace(/\s*[-|]\s*LinkedIn\s*$/i, "").trim();
+    // If the title is "Job Title - Company", split on " - " and take first.
+    // If it's "Company hiring Job Title in Location", take after "hiring".
+    const hiringMatch = t.match(/.+\s+hiring\s+(.+?)\s+in\s+/i);
+    if (hiringMatch) return hiringMatch[1].trim();
+    const dashIdx = t.lastIndexOf(" - ");
+    if (dashIdx > 0) return t.substring(0, dashIdx).trim();
+    return t || null;
+  }
+
+  /** Extract company name. LinkedIn embeds it in og:site_name occasionally
+   *  but more reliably in the <title> as "Job Title - Company - LinkedIn"
+   *  or "Company hiring Job Title in Location". */
+  function extractCompanyFromHtml(html) {
+    const m = html.match(/<title>([^<]+)<\/title>/);
+    if (!m) return null;
+    let t = decodeHtmlEntities(m[1]).trim();
+    t = t.replace(/\s*[-|]\s*LinkedIn\s*$/i, "").trim();
+    const hiringMatch = t.match(/^(.+?)\s+hiring\s+/i);
+    if (hiringMatch) return hiringMatch[1].trim();
+    const dashIdx = t.lastIndexOf(" - ");
+    if (dashIdx > 0) return t.substring(dashIdx + 3).trim();
+    return null;
   }
 
   function decodeHtmlEntities(s) {
