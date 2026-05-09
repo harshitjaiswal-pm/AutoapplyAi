@@ -272,11 +272,23 @@
 
     for (const line of lines) {
       const lineLower = line.toLowerCase().replace(/\(verified job\)/i, "").trim();
-      if (!foundTitle && (lineLower === titleLower || lineLower.includes(titleLower) || titleLower.includes(lineLower))) {
+      // Strip the "with verification" suffix LinkedIn appends to some
+      // title renderings before comparing — so the second occurrence
+      // ("Title with verification") still matches and gets skipped, not
+      // grabbed as the company. Same for any line whose stripped form
+      // equals or wraps the title.
+      const lineLowerStripped = lineLower.replace(/\s+with verification$/i, "").trim();
+      const isTitleLine =
+        lineLower === titleLower ||
+        lineLowerStripped === titleLower ||
+        lineLower.includes(titleLower) ||
+        titleLower.includes(lineLower);
+
+      if (!foundTitle && isTitleLine) {
         foundTitle = true;
         continue;
       }
-      if (foundTitle && lineLower === titleLower) continue;
+      if (foundTitle && isTitleLine) continue;
       if (noiseWords.some((n) => lineLower === n || lineLower.startsWith(n))) continue;
       if (line.length < 2) continue;
       if (/^\d+\s+(day|hour|minute|week|month)s?\s+ago$/i.test(line)) continue;
