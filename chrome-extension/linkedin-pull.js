@@ -302,7 +302,27 @@
               .trim();
           }
           if (!title || title.length < 3) {
-            failures++;
+            // Guardrail: rather than silently drop the card, capture it as
+            // a placeholder with the LinkedIn URL so nothing slips through.
+            // User can audit unparseable rows on /console — safer than
+            // dropping a non-Easy-Apply listing because of a scraping
+            // edge case. We mark it Easy Apply only if we can detect that
+            // — otherwise treat as external (the safer assumption).
+            if (jobId) {
+              const isEasyApply = /easy apply/i.test(card.innerText || "");
+              out.push({
+                linkedinJobId: jobId,
+                title: `LinkedIn job ${jobId}`,
+                company: "(unparsed)",
+                location: "",
+                easyApply: isEasyApply,
+                _parseFailed: true,
+              });
+              console.log(`[AutoApply LinkedIn pull] card ${idx}: kept as fallback — title parse failed (jobId=${jobId})`);
+            } else {
+              failures++;
+              console.log(`[AutoApply LinkedIn pull] card ${idx}: dropped — no title and no jobId`);
+            }
             return;
           }
         }
