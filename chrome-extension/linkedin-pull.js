@@ -134,15 +134,16 @@
   /** Fetch the LinkedIn JD page (uses the user's session cookies), parse
    *  the HTML, and pull out the external Apply URL.
    *
-   *  Two patterns we look for, ordered most → least specific:
+   *  Three extraction patterns, ordered most-specific → least:
    *    1. <code id="applyUrl">"https://..."</code> — LinkedIn includes
    *       this hidden code block on external listings as part of their
    *       SSR data; cleanest extraction.
    *    2. data-tracking-control-name="public_jobs_apply-link-onsite|offsite"
-   *       on an anchor — fallback for layouts that don't carry the
-   *       applyUrl code block.
+   *       on an anchor — fallback for layouts without the applyUrl block.
+   *    3. Last-resort regex against known ATS hosts — narrow enough to
+   *       not grab a company-website link by mistake.
    *
-   *  Returns null if neither yields a usable URL — caller treats that
+   *  Returns null if none yields a usable URL — caller treats that
    *  as "skip this job, can't apply automatically". */
   async function resolveApplyUrl(linkedinJobId) {
     if (!linkedinJobId) return null;
@@ -171,9 +172,8 @@
         return decodeHtmlEntities(anchorMatch[1]);
       }
 
-      // Pattern 3: any href that looks like an external apply URL.
-      // Last-resort — narrow to known ATS hosts so we don't grab a
-      // company-website link by mistake.
+      // Pattern 3: any href that looks like an external apply URL on a
+      // known ATS host. Last-resort.
       const ats = html.match(
         /href=["'](https?:\/\/[^"']*(?:myworkdayjobs\.com|greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|icims\.com|successfactors\.com|brainhunter\.com|taleo\.net)[^"']*)["']/
       );
@@ -220,8 +220,6 @@
 
         const text = card.innerText || "";
         const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
-        // First line is usually the title (skip it); next non-empty is company,
-        // then location. LinkedIn varies — fall back to "" rather than picking junk.
         const titleIdx = lines.findIndex((l) => l.toLowerCase() === title.toLowerCase());
         const company = (lines[titleIdx + 1] || "").slice(0, 80);
         const locationStr = (lines[titleIdx + 2] || "").slice(0, 120);
