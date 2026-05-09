@@ -41,7 +41,7 @@
         showOverlay(`Scrape failed: ${e.message || e}`, "error");
       });
 
-      function scrapeAndForward() {
+      async function scrapeAndForward() {
         const jobs = scrapeCards();
         if (!jobs.length) {
           showOverlay("No jobs found on this page. Try a different filter.", "error");
@@ -54,22 +54,53 @@
         const external = jobs.filter((j) => !j.easyApply).slice(0, targetCount);
         const skippedEasyApply = jobs.length - jobs.filter((j) => !j.easyApply).length;
 
-        const pending = external.map((j) => ({
-          jobUrl: j.linkedinJobId
-            ? `https://www.linkedin.com/jobs/view/${j.linkedinJobId}/`
-            : location.href,
-          title: j.title,
-          company: j.company,
-          location: j.location,
-        }));
+        // Resolve the actual ATS apply URL for each captured job. We're
+        // already on linkedin.com in the user's authenticated browser, so
+        // fetch('/jobs/view/<id>') uses their cookies and returns the full
+        // JD HTML. We pull the external Apply URL out of the HTML and use
+        // THAT as the worker's target — without it the worker would just
+        // hit LinkedIn (which 401s server-side) and fail every job.
+        showOverlay(`Resolving apply URLs for ${external.length} jobs…`);
+        const resolved = [];
+        for (let i = 0; i < external.length; i++) {
+          const j = external[i];
+          showOverlay(`Resolving apply URL ${i + 1}/${external.length}: ${j.title}`);
+          const applyUrl = await resolveApplyUrl(j.linkedinJobId);
+          // If we couldn't find an external apply URL, skip the job — keeping
+          // it would just make the worker fail on LinkedIn-side auth.
+          if (applyUrl) {
+            resolved.push({
+              jobUrl: applyUrl,
+              title: j.title,
+              company: j.company,
+              location: j.location,
+              source: "extension",
+            });
+          } else {
+            console.log(`[AutoApply LinkedIn pull] no external apply URL for "${j.title}" — skipping`);
+          }
+          // Tiny stagger so we don't hammer LinkedIn with 25 fetches in
+          // ~one event-loop tick. 200ms keeps the user's request rate
+          // indistinguishable from a person clicking through results.
+          await new Promise((r) => setTimeout(r, 200));
+        }
 
-        chrome.storage.local.set({ pendingJobs: pending }, () => {
+        const skippedNoUrl = external.length - resolved.length;
+        if (resolved.length === 0) {
+          showOverlay(
+            `Couldn't resolve any apply URLs. ${skippedEasyApply} Easy Apply, ${skippedNoUrl} unresolved.`,
+            "error"
+          );
+          return;
+        }
+
+        chrome.storage.local.set({ pendingJobs: resolved }, () => {
           // Clear the trigger so a refresh of this tab doesn't re-fire.
           chrome.storage.local.remove(["_aa_pull_linkedin"], () => {
-            showOverlay(
-              `Captured ${pending.length} jobs (skipped ${skippedEasyApply} Easy Apply). Returning to Console…`,
-              "ok"
-            );
+            const parts = [`Captured ${resolved.length} jobs`];
+            if (skippedEasyApply) parts.push(`skipped ${skippedEasyApply} Easy Apply`);
+            if (skippedNoUrl) parts.push(`${skippedNoUrl} no external URL`);
+            showOverlay(`${parts.join(", ")}. Returning to Console…`, "ok");
             // Hand off to the Console — pipeline-bridge.js will POST each
             // pending job to /api/console/jobs as the page loads.
             setTimeout(() => {
@@ -79,6 +110,71 @@
         });
       }
     });
+  }
+
+  /** Fetch the LinkedIn JD page (uses the user's session cookies), parse
+   *  the HTML, and pull out the external Apply URL.
+   *
+   *  Two patterns we look for, ordered most → least specific:
+   *    1. <code id="applyUrl">"https://..."</code> — LinkedIn includes
+   *       this hidden code block on external listings as part of their
+   *       SSR data; cleanest extraction.
+   *    2. data-tracking-control-name="public_jobs_apply-link-onsite|offsite"
+   *       on an anchor — fallback for layouts that don't carry the
+   *       applyUrl code block.
+   *
+   *  Returns null if neither yields a usable URL — caller treats that
+   *  as "skip this job, can't apply automatically". */
+  async function resolveApplyUrl(linkedinJobId) {
+    if (!linkedinJobId) return null;
+    try {
+      const res = await fetch(`https://www.linkedin.com/jobs/view/${linkedinJobId}/`, {
+        credentials: "include",
+        headers: { Accept: "text/html" },
+      });
+      if (!res.ok) {
+        console.warn(`[AutoApply LinkedIn pull] fetch /jobs/view/${linkedinJobId} → ${res.status}`);
+        return null;
+      }
+      const html = await res.text();
+
+      // Pattern 1: <code id="applyUrl">"https://..."</code>
+      const codeMatch = html.match(/<code[^>]*id=["']applyUrl["'][^>]*>\s*"([^"]+)"\s*<\/code>/);
+      if (codeMatch) {
+        return decodeHtmlEntities(codeMatch[1]);
+      }
+
+      // Pattern 2: anchor with data-tracking-control-name
+      const anchorMatch = html.match(
+        /<a[^>]*data-tracking-control-name=["']public_jobs_apply-link-(?:onsite|offsite)["'][^>]*\shref=["']([^"']+)["']/
+      );
+      if (anchorMatch) {
+        return decodeHtmlEntities(anchorMatch[1]);
+      }
+
+      // Pattern 3: any href that looks like an external apply URL.
+      // Last-resort — narrow to known ATS hosts so we don't grab a
+      // company-website link by mistake.
+      const ats = html.match(
+        /href=["'](https?:\/\/[^"']*(?:myworkdayjobs\.com|greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|icims\.com|successfactors\.com|brainhunter\.com|taleo\.net)[^"']*)["']/
+      );
+      if (ats) return decodeHtmlEntities(ats[1]);
+
+      return null;
+    } catch (e) {
+      console.warn(`[AutoApply LinkedIn pull] resolve failed for ${linkedinJobId}:`, e);
+      return null;
+    }
+  }
+
+  function decodeHtmlEntities(s) {
+    return s
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#x2F;/g, "/")
+      .replace(/&#39;/g, "'");
   }
 
   /** Scrape visible job cards. Mirrors content.js's Strategy A — but kept
