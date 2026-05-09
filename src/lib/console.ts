@@ -63,6 +63,12 @@ export interface ConsoleJob {
     finishedAt?: string;
     status?: string;
   };
+
+  /** Set when a capture's URL is a LinkedIn /jobs/view/ URL rather than
+   *  a real ATS URL — the worker can't drive LinkedIn, so these rows
+   *  must be applied to manually. /api/console/enqueue refuses these
+   *  with a 422 + actionable error. */
+  manualOnly?: boolean;
 }
 
 /**

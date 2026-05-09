@@ -122,14 +122,18 @@
             source: "extension",
           });
         } else if (j.linkedinJobId) {
-          // Fall back to the LinkedIn URL — capture is still useful as a
-          // staging row even if we can't auto-apply.
+          // Fall back to the LinkedIn URL with a manualOnly flag. The
+          // capture is still useful for visibility — user can click to
+          // LinkedIn and drive the apply manually. But the worker can't
+          // process LinkedIn URLs, so the enqueue endpoint will refuse
+          // these and the UI shows "Open in LinkedIn" instead of "Apply".
           resolved.push({
             jobUrl: `https://www.linkedin.com/jobs/view/${j.linkedinJobId}/`,
             title: finalTitle,
             company: finalCompany,
             location: j.location,
             source: "extension",
+            manualOnly: true,
           });
         }
         // Tiny stagger so we don't hammer LinkedIn with 25 fetches in
@@ -209,6 +213,18 @@
   async function resolveJobMeta(linkedinJobId) {
     const empty = { applyUrl: null, title: null, company: null };
     if (!linkedinJobId) return empty;
+
+    // First try LinkedIn's voyager API — it returns structured job data
+    // including the external companyApplyUrl. Way more reliable than
+    // grepping the SSR HTML, which doesn't carry the apply URL on most
+    // modern listings. Voyager needs the JSESSIONID-derived CSRF token
+    // and runs against the user's logged-in session, so it works only
+    // from the browser context (not server-side).
+    const fromVoyager = await resolveViaVoyager(linkedinJobId);
+    if (fromVoyager.applyUrl) return fromVoyager;
+
+    // Fallback: scrape the JD page HTML for both URL and meta. May yield
+    // title/company even when applyUrl can't be found.
     try {
       const res = await fetch(`https://www.linkedin.com/jobs/view/${linkedinJobId}/`, {
         credentials: "include",
@@ -216,16 +232,80 @@
       });
       if (!res.ok) {
         console.warn(`[AutoApply LinkedIn pull] fetch /jobs/view/${linkedinJobId} → ${res.status}`);
-        return empty;
+        return { ...empty, ...fromVoyager };
       }
       const html = await res.text();
       return {
-        applyUrl: extractApplyUrl(html),
-        title: extractTitleFromHtml(html),
-        company: extractCompanyFromHtml(html),
+        applyUrl: fromVoyager.applyUrl || extractApplyUrl(html),
+        title: fromVoyager.title || extractTitleFromHtml(html),
+        company: fromVoyager.company || extractCompanyFromHtml(html),
       };
     } catch (e) {
-      console.warn(`[AutoApply LinkedIn pull] resolveJobMeta failed for ${linkedinJobId}:`, e);
+      console.warn(`[AutoApply LinkedIn pull] resolveJobMeta HTML fallback failed:`, e);
+      return { ...empty, ...fromVoyager };
+    }
+  }
+
+  /** LinkedIn voyager API — internal endpoint their React app uses.
+   *  Returns structured job data including companyApplyUrl when the
+   *  listing is an external (non-Easy-Apply) one.
+   *
+   *  Auth: voyager requires a CSRF token derived from JSESSIONID.
+   *  The cookie value looks like `JSESSIONID="ajax:1234567890123456789"`;
+   *  we strip the quotes and pass it verbatim as `csrf-token` header.
+   *  The fetch sends cookies via credentials:include.
+   *
+   *  Failure modes (any → return empty):
+   *    - User isn't logged into LinkedIn → no JSESSIONID
+   *    - LinkedIn rate-limits voyager → 429
+   *    - LinkedIn changes the API decoration → field missing in response
+   *  In each case we fall through to the HTML scrape. */
+  async function resolveViaVoyager(jobId) {
+    const empty = { applyUrl: null, title: null, company: null };
+    try {
+      // JSESSIONID cookie carries the CSRF token. The cookie may be quoted.
+      const m = document.cookie.match(/JSESSIONID=("?)(ajax:[^";]+)\1/);
+      if (!m) {
+        console.warn("[AutoApply LinkedIn pull] no JSESSIONID — voyager unavailable");
+        return empty;
+      }
+      const csrf = m[2];
+      const url = `https://www.linkedin.com/voyager/api/jobs/jobPostings/${jobId}?decorationId=com.linkedin.voyager.deco.jobs.web.shared.WebFullJobPosting-65`;
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: {
+          "csrf-token": csrf,
+          "Accept": "application/vnd.linkedin.normalized+json+2.1",
+          "x-restli-protocol-version": "2.0.0",
+        },
+      });
+      if (!res.ok) {
+        console.warn(`[AutoApply LinkedIn pull] voyager → ${res.status}`);
+        return empty;
+      }
+      const data = await res.json();
+      // The applyMethod field has a $type discriminator. For external
+      // listings it's "com.linkedin.voyager.jobs.OffsiteApply" and the
+      // URL is in companyApplyUrl. For Easy Apply it'd be a different
+      // type with no external URL.
+      const applyMethod = data?.data?.applyMethod || data?.applyMethod;
+      const applyUrl =
+        applyMethod?.companyApplyUrl ||
+        applyMethod?.["com.linkedin.voyager.jobs.OffsiteApply"]?.companyApplyUrl ||
+        null;
+      const title = data?.data?.title || null;
+      // Company name lives in data.data.companyDetails — but it can be a
+      // URN reference that needs resolving via the included array. Try
+      // direct first, then fall through to HTML scrape later.
+      const companyDetails = data?.data?.companyDetails || data?.companyDetails;
+      const company =
+        companyDetails?.["com.linkedin.voyager.jobs.JobPostingCompany"]?.companyResolutionResult?.name ||
+        companyDetails?.companyResolutionResult?.name ||
+        null;
+      console.log(`[AutoApply LinkedIn pull] voyager ${jobId}: applyUrl=${applyUrl ? "yes" : "no"} title=${title ? "yes" : "no"}`);
+      return { applyUrl, title, company };
+    } catch (e) {
+      console.warn(`[AutoApply LinkedIn pull] voyager threw:`, e);
       return empty;
     }
   }

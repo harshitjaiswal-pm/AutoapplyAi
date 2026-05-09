@@ -49,6 +49,9 @@ interface CreateBody {
   source?: ConsoleJobSource;
   matchScore?: number;
   notes?: string;
+  /** Forwarded by the LinkedIn-pull extension when the capture URL is a
+   *  LinkedIn /jobs/view/ URL we couldn't resolve to a real ATS URL. */
+  manualOnly?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -150,6 +153,7 @@ export async function POST(req: NextRequest) {
     matchScore: body.matchScore,
     notes: body.notes,
     retryCount: 0,
+    manualOnly: !!body.manualOnly,
   };
   await saveConsoleJob(email, job);
 

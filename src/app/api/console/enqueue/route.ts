@@ -66,6 +66,14 @@ export async function POST(req: NextRequest) {
       skipped.push({ id, reason: `state is ${job.state}, must be captured` });
       continue;
     }
+    if (job.manualOnly) {
+      // LinkedIn-URL captures the worker can't drive. User has to open
+      // these in LinkedIn and let the existing extension flow redirect
+      // them to the real ATS. Rejecting here prevents the all-fail
+      // pattern we saw on 2026-05-08 supervised batch.
+      skipped.push({ id, reason: "manual-only — open in LinkedIn to apply" });
+      continue;
+    }
     job.state = "queued";
     job.queueLane = "primary";
     job.queuedAt = now;
