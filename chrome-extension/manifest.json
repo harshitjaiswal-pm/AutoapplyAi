@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.linkedin.com/jobs/*"],
-      "js": ["logger.js", "cowork-bridge.js", "content.js", "linkedin-pull.js"],
+      "js": ["logger.js","content.js", "linkedin-pull.js"],
       "css": ["content.css"]
     },
     {
@@ -29,7 +29,7 @@
     },
     {
       "matches": ["https://boards.greenhouse.io/*", "https://job-boards.greenhouse.io/*"],
-      "js": ["logger.js", "cowork-bridge.js", "review-submit.js", "ats/greenhouse.js"],
+      "js": ["logger.js","review-submit.js", "ats/greenhouse.js"],
       "run_at": "document_idle",
       "all_frames": true
     },
@@ -49,7 +49,7 @@
         "https://*.wd10.myworkdayjobs.com/*",
         "https://*.wd12.myworkdayjobs.com/*"
       ],
-      "js": ["logger.js", "cowork-bridge.js", "review-submit.js", "ats/workday.js"],
+      "js": ["logger.js","review-submit.js", "ats/workday.js"],
       "run_at": "document_idle"
     },
     {
