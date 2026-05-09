@@ -201,54 +201,125 @@
       .replace(/&#39;/g, "'");
   }
 
-  /** Scrape visible job cards. Mirrors content.js's Strategy A — but kept
-   *  intentionally simple and self-contained so we don't share state. */
+  /** Scrape visible job cards. Mirrors the proven scrapeStrategyA +
+   *  parseCardText logic from content.js — that scraper has been
+   *  field-tested over months and handles edge cases like the
+   *  "with verification" suffix, noise lines (Promoted, Easy Apply,
+   *  "X days ago"), and emoji prefixes on locations. We duplicate it
+   *  here rather than sharing the file so this script stays self
+   *  contained and the LinkedIn search-page entrypoint isn't coupled
+   *  to content.js's IIFE state. */
   function scrapeCards() {
     const cards = document.querySelectorAll("li[data-occludable-job-id]");
+    console.log(`[AutoApply LinkedIn pull] found ${cards.length} cards in DOM`);
     const out = [];
-    cards.forEach((card) => {
+    let failures = 0;
+    cards.forEach((card, idx) => {
       try {
         const jobId = card.getAttribute("data-occludable-job-id") || "";
         const titleLink =
           card.querySelector("a.job-card-container__link") ||
           card.querySelector('a[href*="/jobs/view/"]') ||
           card.querySelector("a");
-        if (!titleLink) return;
-        let title =
-          titleLink.querySelector("strong")?.textContent?.trim() ||
-          titleLink.querySelector('[class*="title"]')?.textContent?.trim() ||
-          titleLink.getAttribute("aria-label") ||
-          titleLink.textContent?.trim() ||
-          "";
+        let title = "";
+        if (titleLink) {
+          // <strong> > class*=title > aria-label > textContent
+          // aria-label last because LinkedIn appends " with verification"
+          title =
+            titleLink.querySelector("strong")?.textContent?.trim() ||
+            titleLink.querySelector('[class*="title"]')?.textContent?.trim() ||
+            titleLink.getAttribute("aria-label") ||
+            titleLink.textContent?.trim() ||
+            "";
+        }
         title = title.replace(/\s+with verification$/i, "").replace(/\s*\(Verified job\)/gi, "").trim();
-        if (!title || title.length < 3) return;
+        if (!title || title.length < 3) {
+          failures++;
+          console.log(`[AutoApply LinkedIn pull] card ${idx}: no usable title (link=${!!titleLink})`);
+          return;
+        }
 
-        const text = card.innerText || "";
-        const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
-        const titleIdx = lines.findIndex((l) => l.toLowerCase() === title.toLowerCase());
-        const company = (lines[titleIdx + 1] || "").slice(0, 80);
-        const locationStr = (lines[titleIdx + 2] || "").slice(0, 120);
-        const easyApply = /easy apply/i.test(text);
-
+        const { company, location: locationStr, easyApply } = parseCardText(card.innerText, title);
         out.push({ linkedinJobId: jobId, title, company, location: locationStr, easyApply });
       } catch (e) {
-        console.warn("[AutoApply LinkedIn pull] card parse failed:", e);
+        failures++;
+        console.warn(`[AutoApply LinkedIn pull] card ${idx} parse failed:`, e);
       }
     });
+    console.log(`[AutoApply LinkedIn pull] scraped ${out.length} of ${cards.length} cards (${failures} failed)`);
     return out;
   }
 
-  /** Scroll down once to trigger LinkedIn's lazy-load, then back up. */
-  function autoScroll() {
-    return new Promise((resolve) => {
-      const list = document.querySelector(".jobs-search-results-list, .scaffold-layout__list");
-      if (!list) { resolve(); return; }
-      list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
-      setTimeout(() => {
-        list.scrollTo({ top: 0, behavior: "auto" });
-        setTimeout(resolve, 600);
-      }, 800);
-    });
+  /** Mirrors content.js's parseCardText — robust company/location/easyApply
+   *  extraction from the card's innerText. Skips noise lines, handles
+   *  "with verification" suffix, normalizes location emoji prefixes. */
+  function parseCardText(text, title) {
+    text = (text || "").trim();
+    if (!text || text.length < 10) return { company: "", location: "", easyApply: false };
+
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const titleLower = title.toLowerCase();
+    const noiseWords = [
+      "easy apply", "promoted", "verified", "actively recruiting",
+      "actively reviewing", "viewed", "applied", "new", "dismiss",
+      "be an early applicant", "people also viewed",
+    ];
+
+    let company = "";
+    let location = "";
+    let foundTitle = false;
+    let companySet = false;
+
+    for (const line of lines) {
+      const lineLower = line.toLowerCase().replace(/\(verified job\)/i, "").trim();
+      if (!foundTitle && (lineLower === titleLower || lineLower.includes(titleLower) || titleLower.includes(lineLower))) {
+        foundTitle = true;
+        continue;
+      }
+      if (foundTitle && lineLower === titleLower) continue;
+      if (noiseWords.some((n) => lineLower === n || lineLower.startsWith(n))) continue;
+      if (line.length < 2) continue;
+      if (/^\d+\s+(day|hour|minute|week|month)s?\s+ago$/i.test(line)) continue;
+      if (/^just now$/i.test(line)) continue;
+
+      if (!companySet) {
+        company = line.replace(/\s*\(Verified job\)/i, "").trim();
+        companySet = true;
+        continue;
+      }
+      if (!location) {
+        const cleanLoc = line.replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}️‍]+\s*/u, "").trim();
+        if (cleanLoc.toLowerCase() === company.toLowerCase()) continue;
+        location = cleanLoc;
+        break;
+      }
+    }
+
+    if (!company && lines.length >= 2) company = lines[1]?.replace(/\s*\(Verified job\)/i, "") || "";
+    if (!location && lines.length >= 3) location = lines[2] || "";
+    const easyApply = text.toLowerCase().includes("easy apply");
+
+    return { company, location, easyApply };
+  }
+
+  /** Scroll the results list in chunks to fully lazy-load all 25 cards.
+   *  LinkedIn renders cards as you scroll past them — a single jump to
+   *  scrollHeight only loads the cards near the visible area, leaving
+   *  cards in the middle un-rendered with empty innerText. Scrolling
+   *  in 6-8 increments forces every chunk into the viewport at least
+   *  once so the full card content is present when we scrape. */
+  async function autoScroll() {
+    const list = document.querySelector(".jobs-search-results-list, .scaffold-layout__list");
+    if (!list) return;
+    const steps = 8;
+    const totalHeight = list.scrollHeight;
+    for (let i = 1; i <= steps; i++) {
+      list.scrollTo({ top: (totalHeight * i) / steps, behavior: "auto" });
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    // Scroll back to the top so the first card is in view, then settle.
+    list.scrollTo({ top: 0, behavior: "auto" });
+    await new Promise((r) => setTimeout(r, 600));
   }
 
   /** Top-banner status overlay so the user sees what's happening on
