@@ -119,9 +119,14 @@ export default function ConsolePage() {
     load();
   }, [load]);
 
-  // Pipeline tab polls every 5s for live worker status updates.
+  // Pipeline AND Captured tabs poll every 5s. Pipeline gets live worker
+  // status; Captured picks up newly-scraped LinkedIn rows that
+  // pipeline-bridge.js POSTs after the user's tab redirects back from
+  // a LinkedIn pull. Without this, the user has to hard-refresh the
+  // page to see fresh captures — race between the page mount fetch
+  // and the bridge's POSTs.
   useEffect(() => {
-    if (tab !== "pipeline") return;
+    if (tab !== "captured" && tab !== "pipeline") return;
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [tab, load]);
