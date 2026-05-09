@@ -33,45 +33,61 @@
   // write completes, we'd bail. So we poll a few times before giving up.
   pollForTrigger(0);
 
+  // Hard cap on pagination depth. 25 jobs/page × 4 pages = 100 max, which
+  // matches the per-day capture cap and keeps runtime bounded if every
+  // page is mostly Easy Apply.
+  const MAX_PAGES = 4;
+  // Target jobs per pull. cfg.count overrides at trigger time.
+  const DEFAULT_TARGET = 25;
+
   function pollForTrigger(attempt) {
-    chrome.storage.local.get(["_aa_pull_linkedin"], (data) => {
-      const cfg = data._aa_pull_linkedin;
-      if (cfg) {
-        // Clear it so a refresh / back-button doesn't re-fire.
-        chrome.storage.local.remove(["_aa_pull_linkedin"], () => {
-          // Wait for LinkedIn to render result cards (~2s after document_idle).
-          setTimeout(() => start(cfg), 2000);
+    chrome.storage.local.get(["_aa_pull_linkedin", "_aa_pull_linkedin_progress"], (data) => {
+      // Continuation: a previous page kicked us into this one to keep
+      // collecting jobs. The progress object carries cfg + accumulated
+      // jobs + page index, so we can pick up where we left off.
+      if (data._aa_pull_linkedin_progress) {
+        const prog = data._aa_pull_linkedin_progress;
+        chrome.storage.local.remove(["_aa_pull_linkedin_progress"], () => {
+          setTimeout(() => start(prog.cfg, prog.accumulated || [], prog.page || 1), 2000);
         });
         return;
       }
-      // No trigger yet. Try a few more times — bridge's write may not
-      // have landed when the new tab loaded. After 4 attempts (~3s) bail.
+      // Fresh trigger: first page of a new pull.
+      const cfg = data._aa_pull_linkedin;
+      if (cfg) {
+        chrome.storage.local.remove(["_aa_pull_linkedin"], () => {
+          setTimeout(() => start(cfg, [], 0), 2000);
+        });
+        return;
+      }
+      // Neither flag is present yet. Bridge write may still be in flight;
+      // poll up to ~3s before giving up so a normal LinkedIn search session
+      // is unaffected.
       if (attempt >= 4) return;
       setTimeout(() => pollForTrigger(attempt + 1), 600);
     });
   }
 
-  function start(cfg) {
-    console.log("[AutoApply LinkedIn pull] trigger detected, scraping…", cfg);
-    showOverlay("Scanning LinkedIn for jobs…");
+  function start(cfg, accumulated, page) {
+    console.log(`[AutoApply LinkedIn pull] page ${page + 1}/${MAX_PAGES} — accumulated=${accumulated.length} target=${cfg.count || DEFAULT_TARGET}`);
+    showOverlay(`Page ${page + 1}: scanning LinkedIn for jobs…`);
 
-    // Two passes: scroll once to lazy-load more cards, then scrape.
     autoScroll().then(scrapeAndForward).catch((e) => {
       console.error("[AutoApply LinkedIn pull] scrape failed:", e);
       showOverlay(`Scrape failed: ${e.message || e}`, "error");
     });
 
     async function scrapeAndForward() {
+      const target = cfg.count || DEFAULT_TARGET;
       const jobs = scrapeCards();
-      if (!jobs.length) {
+      if (!jobs.length && accumulated.length === 0) {
         showOverlay("No jobs found on this page. Try a different filter.", "error");
         return;
       }
-      const targetCount = Math.min(jobs.length, cfg.count || 25);
-      // Skip Easy Apply (worker can't drive LinkedIn's internal flow).
-      // Take the top N external listings; if there aren't enough, take
-      // what we've got rather than failing the whole pull.
-      const external = jobs.filter((j) => !j.easyApply).slice(0, targetCount);
+      const remaining = target - accumulated.length;
+      // Easy Apply is filtered out — worker can't drive LinkedIn's internal
+      // modal. Slice to remaining so we don't over-resolve URLs we'll throw away.
+      const external = jobs.filter((j) => !j.easyApply).slice(0, remaining);
       const skippedEasyApply = jobs.length - jobs.filter((j) => !j.easyApply).length;
 
       // Try to resolve each job's external ATS URL. Modern LinkedIn doesn't
@@ -114,17 +130,52 @@
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      if (resolved.length === 0) {
+      // Merge this page's resolved jobs into the running accumulator,
+      // deduping by jobUrl so a re-paginate doesn't double-up.
+      const seenUrls = new Set(accumulated.map((j) => j.jobUrl));
+      for (const r of resolved) {
+        if (!seenUrls.has(r.jobUrl)) {
+          accumulated.push(r);
+          seenUrls.add(r.jobUrl);
+        }
+      }
+
+      // Decide: keep going or wrap up?
+      const haveEnough = accumulated.length >= target;
+      const nextPage = page + 1;
+      const exhaustedPages = nextPage >= MAX_PAGES;
+
+      if (!haveEnough && !exhaustedPages) {
+        // Persist progress and navigate to the next LinkedIn results page.
+        // LinkedIn pagination is `&start=N` (0-indexed, 25 per page).
+        showOverlay(`Page ${page + 1}: ${accumulated.length}/${target} so far. Loading next page…`);
+        chrome.storage.local.set(
+          { _aa_pull_linkedin_progress: { cfg, accumulated, page: nextPage } },
+          () => {
+            const url = new URL(location.href);
+            url.searchParams.set("start", String(nextPage * 25));
+            // Pause briefly so the user reads the overlay, then navigate.
+            // location.assign forces a real navigation (vs. SPA route),
+            // ensuring linkedin-pull.js re-runs on the next page.
+            setTimeout(() => {
+              location.assign(url.toString());
+            }, 1200);
+          }
+        );
+        return;
+      }
+
+      // Done — finalize and hand off to /console.
+      if (accumulated.length === 0) {
         showOverlay(`No jobs to capture — ${skippedEasyApply} Easy Apply skipped.`, "error");
         return;
       }
-      const linkedinFallbackCount = resolved.length - resolvedCount;
 
-      chrome.storage.local.set({ pendingJobs: resolved }, () => {
-        const parts = [`Captured ${resolved.length} jobs`];
-        if (resolvedCount > 0) parts.push(`${resolvedCount} resolved to ATS`);
-        if (linkedinFallbackCount > 0) parts.push(`${linkedinFallbackCount} via LinkedIn URL`);
-        if (skippedEasyApply) parts.push(`${skippedEasyApply} Easy Apply skipped`);
+      chrome.storage.local.set({ pendingJobs: accumulated }, () => {
+        const parts = [`Captured ${accumulated.length} jobs`];
+        if (exhaustedPages && accumulated.length < target) {
+          parts.push(`stopped after ${MAX_PAGES} pages`);
+        }
         showOverlay(`${parts.join(", ")}. Returning to Console…`, "ok");
         // Hand off to the Console — pipeline-bridge.js will POST each
         // pending job to /api/console/jobs as the page loads.
