@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.linkedin.com/jobs/*"],
-      "js": ["logger.js", "cowork-bridge.js", "content.js"],
+      "js": ["logger.js", "cowork-bridge.js", "content.js", "linkedin-pull.js"],
       "css": ["content.css"]
     },
     {

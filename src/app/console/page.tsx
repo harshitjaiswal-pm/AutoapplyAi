@@ -41,6 +41,74 @@ export default function ConsolePage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmApply, setConfirmApply] = useState<{ ids: string[] } | null>(null);
 
+  // LinkedIn pull state
+  const [pullOpen, setPullOpen] = useState(false);
+  const [pullKeywords, setPullKeywords] = useState("Senior Product Manager");
+  const [pullLocation, setPullLocation] = useState("Canada");
+  const [pullRemote, setPullRemote] = useState(true);
+  const [dailyQuota, setDailyQuota] = useState<{ used: number; remaining: number; capCount: number } | null>(null);
+
+  // Refresh quota periodically and after captures land. Cheap GET — fine to
+  // poll while the captured tab is open since it's the surface that shows it.
+  const loadQuota = useCallback(async () => {
+    try {
+      const res = await fetch("/api/console/daily-quota");
+      if (res.ok) {
+        const data = await res.json();
+        setDailyQuota({ used: data.used, remaining: data.remaining, capCount: data.capCount });
+      }
+    } catch { /* tolerate */ }
+  }, []);
+
+  useEffect(() => {
+    loadQuota();
+    const t = setInterval(loadQuota, 15000);
+    return () => clearInterval(t);
+  }, [loadQuota]);
+
+  const triggerLinkedInPull = () => {
+    const keywords = pullKeywords.trim();
+    const loc = pullLocation.trim();
+    if (!keywords || !loc) {
+      setError("Title and location are required for LinkedIn pull.");
+      return;
+    }
+    // Build LinkedIn search URL — f_WT=2 = Remote, f_WT=1 = On-site. Omit
+    // when the user wants both. f_TPR=r604800 = past week (recent listings only).
+    const params = new URLSearchParams();
+    params.set("keywords", keywords);
+    params.set("location", loc);
+    params.set("f_TPR", "r604800");
+    if (pullRemote) params.set("f_WT", "2");
+    const linkedinUrl = `https://www.linkedin.com/jobs/search/?${params.toString()}`;
+    const consoleUrl = window.location.origin + "/console";
+
+    // Hand the trigger to the extension via chrome.storage.local. The
+    // linkedin-pull.js content script reads this on the search page, scrapes,
+    // stuffs results into pendingJobs, and redirects back here.
+    if (typeof window === "undefined" || !(window as unknown as { chrome?: { storage?: unknown } }).chrome) {
+      setError("Chrome extension not detected — install the AutoApply extension first.");
+      return;
+    }
+    type ChromeWindow = Window & {
+      chrome?: { storage?: { local?: { set: (data: Record<string, unknown>, cb?: () => void) => void } } };
+    };
+    const ext = (window as unknown as ChromeWindow).chrome;
+    if (!ext?.storage?.local) {
+      setError("Extension storage not accessible — reload this page after installing the extension.");
+      return;
+    }
+    ext.storage.local.set(
+      { _aa_pull_linkedin: { keywords, location: loc, remote: pullRemote, count: 25, consoleUrl } },
+      () => {
+        setPullOpen(false);
+        // Open in same window's new tab. The extension's content script
+        // will redirect this tab back to /console once the pull finishes.
+        window.open(linkedinUrl, "_blank");
+      }
+    );
+  };
+
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/console/jobs");
@@ -243,7 +311,7 @@ export default function ConsolePage() {
 
       {/* Add-by-URL bar (Captured tab only) */}
       {tab === "captured" && (
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-3">
           <input
             type="url"
             value={pasteUrl}
@@ -259,6 +327,74 @@ export default function ConsolePage() {
           >
             Add
           </button>
+        </div>
+      )}
+
+      {/* LinkedIn bulk-pull bar (Captured tab only) */}
+      {tab === "captured" && (
+        <div className="mb-4 px-4 py-3 bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100 rounded-lg">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-indigo-900">Pull jobs from LinkedIn</p>
+              <p className="text-xs text-indigo-700 mt-0.5">
+                Scrape up to 25 fresh listings from a LinkedIn search. Easy Apply jobs are skipped — only external ATS listings get queued.
+                {dailyQuota && (
+                  <span className="ml-2 font-medium">
+                    {dailyQuota.remaining} of {dailyQuota.capCount} captures left today.
+                  </span>
+                )}
+              </p>
+            </div>
+            <button
+              onClick={() => setPullOpen(!pullOpen)}
+              className="shrink-0 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            >
+              {pullOpen ? "Cancel" : "Pull from LinkedIn"}
+            </button>
+          </div>
+
+          {pullOpen && (
+            <div className="mt-3 pt-3 border-t border-indigo-200 grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div>
+                <label className="block text-[10px] font-semibold text-indigo-700 uppercase tracking-wider mb-1">Title</label>
+                <input
+                  type="text"
+                  value={pullKeywords}
+                  onChange={(e) => setPullKeywords(e.target.value)}
+                  className="w-full px-2 py-1.5 text-sm border border-indigo-200 rounded-md focus:outline-none focus:border-indigo-500 bg-white"
+                  placeholder="Senior Product Manager"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-indigo-700 uppercase tracking-wider mb-1">Location</label>
+                <input
+                  type="text"
+                  value={pullLocation}
+                  onChange={(e) => setPullLocation(e.target.value)}
+                  className="w-full px-2 py-1.5 text-sm border border-indigo-200 rounded-md focus:outline-none focus:border-indigo-500 bg-white"
+                  placeholder="Canada"
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <label className="flex items-center gap-2 text-sm text-indigo-900 cursor-pointer flex-1">
+                  <input
+                    type="checkbox"
+                    checked={pullRemote}
+                    onChange={(e) => setPullRemote(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  Remote only
+                </label>
+                <button
+                  onClick={triggerLinkedInPull}
+                  disabled={!pullKeywords.trim() || !pullLocation.trim() || (dailyQuota?.remaining ?? 100) <= 0}
+                  className="px-4 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Open LinkedIn
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -15,6 +15,7 @@ const OUTCOME_STYLES: Record<SubmissionOutcome, string> = {
   running: "bg-blue-100 text-blue-700",
   awaiting_review: "bg-amber-100 text-amber-800",
   submitted: "bg-emerald-100 text-emerald-700",
+  already_applied: "bg-teal-100 text-teal-700",
   partial: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-700",
 };
@@ -23,6 +24,7 @@ const OUTCOME_LABEL: Record<SubmissionOutcome, string> = {
   running: "Running",
   awaiting_review: "Awaiting Review",
   submitted: "Submitted",
+  already_applied: "Already Applied",
   partial: "Partial",
   failed: "Failed",
 };

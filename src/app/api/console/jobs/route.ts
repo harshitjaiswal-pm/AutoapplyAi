@@ -16,6 +16,19 @@ import {
   saveConsoleJob,
 } from "@/lib/console";
 import { validateAndScrapeUrl } from "@/lib/jdValidator";
+import { redis } from "@/lib/redis";
+
+/** Hard cap on Console captures per user per UTC day. Protects against
+ *  a runaway scraper or an over-eager LinkedIn pull turning into a
+ *  LinkedIn ToS issue. Server-side enforced — the extension cap is
+ *  advisory only. */
+const DAILY_CAPTURE_CAP = 100;
+const DAILY_CAPTURE_TTL_SECONDS = 60 * 60 * 26; // 26h — slack for clock skew
+
+function dailyCounterKey(email: string): string {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+  return `console:daily_capture:${email}:${today}`;
+}
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -80,6 +93,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ job: merged, merged: true });
   }
 
+  // Daily cap check — only enforce on NEW captures (merges don't count;
+  // a re-capture of an already-saved URL shouldn't burn quota).
+  const dailyKey = dailyCounterKey(email);
+  const currentCount = (await redis.get<number>(dailyKey)) ?? 0;
+  if (currentCount >= DAILY_CAPTURE_CAP) {
+    return NextResponse.json(
+      {
+        error: `Daily capture cap reached (${DAILY_CAPTURE_CAP} per UTC day). Try again tomorrow or archive some captured jobs to free room.`,
+        capCount: DAILY_CAPTURE_CAP,
+        currentCount,
+      },
+      { status: 429 }
+    );
+  }
+
   // Capture-time validation. Server-side fetch the URL to detect dead
   // listings before they pollute the queue (24% of historical failures
   // were `job_posting_dead`). Bonus: scrape title + company from the
@@ -124,5 +152,17 @@ export async function POST(req: NextRequest) {
     retryCount: 0,
   };
   await saveConsoleJob(email, job);
-  return NextResponse.json({ job, merged: false }, { status: 201 });
+
+  // Increment the daily counter AFTER a successful save so a save
+  // failure doesn't burn quota. INCR is atomic; first call sets to 1
+  // and we expire immediately after to bound the key's lifetime.
+  const next = await redis.incr(dailyKey);
+  if (next === 1) {
+    await redis.expire(dailyKey, DAILY_CAPTURE_TTL_SECONDS);
+  }
+
+  return NextResponse.json(
+    { job, merged: false, dailyRemaining: Math.max(0, DAILY_CAPTURE_CAP - next) },
+    { status: 201 }
+  );
 }
