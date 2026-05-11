@@ -73,17 +73,28 @@
           }
           console.log(`AutoApply Bridge: ${subs.length} submissions loaded for dedup`);
         }
-        // 2. Console rows (any state, including failed — don't re-add them;
-        //    the user can requeue from the Console UI instead of re-importing).
+        // 2. Console rows in active states only. Failed and archived
+        //    rows are NOT in the dedup set — that lets a stale LinkedIn
+        //    posting that's still live come back into the pipeline if
+        //    the user re-pulls (e.g. after a code fix that should now
+        //    let it succeed). The dedup against /api/applications above
+        //    still skips genuinely-submitted jobs, so we won't re-submit
+        //    the same role twice.
         const conRes = await fetch("/api/console/jobs", { credentials: "include" });
         if (conRes.ok) {
           const conData = await conRes.json();
           const conJobs = conData.jobs || [];
+          let activeCount = 0;
           for (const j of conJobs) {
+            // Only dedup against jobs still in-flight or awaiting action.
+            // failed + archived intentionally excluded.
+            const active = j.state === "captured" || j.state === "queued" || j.state === "running" || j.state === "submitted";
+            if (!active) continue;
+            activeCount++;
             if (j.url) alreadySeenUrls.add(canonicalize(j.url));
             if (j.rawUrls) for (const u of j.rawUrls) alreadySeenUrls.add(canonicalize(u));
           }
-          console.log(`AutoApply Bridge: ${conJobs.length} console rows loaded for dedup`);
+          console.log(`AutoApply Bridge: ${activeCount} active console rows loaded for dedup (of ${conJobs.length} total)`);
         }
       } catch (e) {
         console.warn("AutoApply Bridge: dedup pre-fetch failed (continuing without filter):", e);
