@@ -111,7 +111,7 @@ export default function ApplicationsPage() {
         <div className="max-w-[1600px] mx-auto">
           <h1 className="text-2xl font-bold">Submissions</h1>
           <p className="text-indigo-300 text-sm mt-1">
-            Every Workday application the worker has run for you, with the
+            Every application the worker has run for you, with the
             tailored resume, cover letter, and step-by-step evidence.
             Auto-refreshes every 10s.
           </p>
