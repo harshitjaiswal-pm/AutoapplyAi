@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Providers } from "./providers";
 import { NavAuth } from "@/components/NavAuth";
 import { NavLinks } from "@/components/NavLinks";
+import { ProfileCompletenessBadge } from "@/components/ProfileCompletenessBadge";
 
 export const metadata: Metadata = {
   title: "AutoApply — Apply to more jobs, in less time",
@@ -34,7 +35,10 @@ export default function RootLayout({
 
               <NavLinks />
 
-              <NavAuth />
+              <div className="flex items-center gap-3">
+                <ProfileCompletenessBadge />
+                <NavAuth />
+              </div>
             </div>
           </nav>
 
