@@ -55,13 +55,6 @@ Return VALID JSON matching this exact structure:
       "gpa": "GPA if listed, otherwise empty string"
     }
   ],
-  "projects": [
-    {
-      "name": "Project Name",
-      "description": "What it does",
-      "technologies": ["tech1", "tech2"]
-    }
-  ],
   "certifications": ["cert1", "cert2"]
 }
 
@@ -165,12 +158,13 @@ The candidate's total years of experience is calculated from employment dates. A
 17. PAGE LAYOUT — DEFAULT 1 PAGE; IF OVERFLOWING, MAKE A FULL 1.5 PAGES (NOT 1.05):
     - The default goal is a single dense, high-impact page. Most 8-10-year candidates fit comfortably with the rules above (3-5 bullets/role, 3-sentence summary, 10-15 strengths, single-line certs).
     - NEVER let the resume bleed only 1-3 lines onto a second page. A page-2 with just "Certifications" or just one stranded bullet looks worse than no page-2 at all.
-    - If the candidate's content is too rich to fit on 1 page, intentionally GENERATE ADDITIONAL CONTENT to fill page 2 to ~50-80% (a substantive 1.5 pages). Use the "projects" field for this — populate it with 2-4 entries that increase callback likelihood and survive the authenticity test:
-      - Selected significant work from the candidate's roles that warrants its own callout (a system they built, a launch they led, an experiment that drove material outcomes). Each entry: { name: "Short evocative title", description: "1-2 sentence description with concrete outcome", technologies: ["named", "tools"] }.
-      - Side projects, hackathons, open source, or notable side-of-desk work IF mentioned in the source resume.
-      - Do NOT invent project names, employers, or quantified outcomes — only surface real work in a more visible format.
-    - Page 2 content must be JD-aligned and specific. Generic "leadership skills" / "team player" entries don't belong here. Each project entry should be the kind of thing a hiring manager could ask about in detail and the candidate could answer.
-    - Never go beyond 1.5 pages. If the projects section would push to a 3rd page, cut bullets in older roles or trim the strengths list — never sacrifice the most-recent role's 5 bullets.
+    - If the candidate's content is too rich to fit on 1 page, fill page 2 to ~50-80% (a substantive 1.5 pages) by EXPANDING the experience bullets — add 1-2 additional bullets per role drawing from plausible work for that title and company, JD-aligned. Stay truthful (no invented metrics, no named projects that didn't happen).
+    - Never go beyond 1.5 pages. If content would push to a 3rd page, cut bullets in older roles or trim the strengths list — never sacrifice the most-recent role's 5 bullets.
+
+18. NEVER OUTPUT A PROJECTS SECTION:
+    - Do NOT return a "projects" field in the JSON output. Do NOT describe project entries inline anywhere else.
+    - Rationale: a separate Projects section reads as filler to reviewers when the candidate already has 8+ years of relevant role experience. The work belongs as bullets under the role where it happened, not as a standalone callout. Keep the resume focused on roles, impact, and skills.
+    - If you would normally have added a Projects section to fill page 2, instead add 1-2 deeper bullets to the most relevant roles per rule 17.
 
 WHAT YOU CAN ADD:
 - Standard PM/BA responsibilities plausible for the role and company (1-2 per role max)
