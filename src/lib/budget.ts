@@ -160,7 +160,11 @@ export type CostStage =
   | "parse_resume"
   | "analyze_job"
   | "answer_question"
-  | "chat";
+  | "chat"
+  // form_agent: per-wizard-step LLM planning in autoapply-worker's
+  // walkWizard. Added 2026-05-11 — previously these calls were untracked
+  // and accounted for ~50% of the per-application Anthropic spend.
+  | "form_agent";
 
 export interface CostEvent {
   stage: CostStage;
