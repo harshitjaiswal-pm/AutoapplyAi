@@ -153,7 +153,17 @@ export async function POST(req: NextRequest) {
     matchScore: body.matchScore,
     notes: body.notes,
     retryCount: 0,
-    manualOnly: !!body.manualOnly,
+    // Auto-flag unsupported-ATS captures as manualOnly so they don't auto-
+    // queue and immediately fail with "Unsupported ATS family" exit code.
+    // The worker drives Workday, Greenhouse, Ashby, Lever. Anything else
+    // (Eightfold, iCIMS, SmartRecruiters, Taleo, company-hosted SPAs like
+    // Brex/Fortis Games) is on the user to apply manually. Setting
+    // manualOnly=true at capture time means the row renders as "Open in
+    // LinkedIn" instead of "Re-queue" — clear expectation, no wasted
+    // 1-second worker exits. Caught 2026-05-11: LinkedIn pull captured
+    // Eaton (eightfold.ai) + Fortis Games (company SPA), both auto-queued
+    // and failed in <1s.
+    manualOnly: !!body.manualOnly || detectAts(canonical) === "other",
   };
   await saveConsoleJob(email, job);
 
