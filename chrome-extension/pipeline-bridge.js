@@ -51,9 +51,59 @@
       // existing GET /api/console/jobs poll will pick them up on its next
       // refresh tick, so no React event bus needed. Log per-job so the
       // user can debug failures from devtools.
+
+      // ── Dedup pre-filter ────────────────────────────────────────────────────
+      // Build a set of URLs we've already seen so we don't re-capture jobs
+      // that are already in the console OR already submitted via the batch
+      // runner scripts (which write to submissions:* but not console:*).
+      // Both endpoints use the user's existing session cookie.
+      const alreadySeenUrls = new Set();
+      function canonicalize(u) {
+        try { return new URL(u.split("?")[0]).toString().replace(/\/$/, "").toLowerCase(); }
+        catch { return u.split("?")[0].toLowerCase(); }
+      }
+      try {
+        // 1. Submitted jobs (written by the worker's batch scripts)
+        const subRes = await fetch("/api/applications", { credentials: "include" });
+        if (subRes.ok) {
+          const subData = await subRes.json();
+          const subs = subData.submissions || [];
+          for (const s of subs) {
+            if (s.jobUrl) alreadySeenUrls.add(canonicalize(s.jobUrl));
+          }
+          console.log(`AutoApply Bridge: ${subs.length} submissions loaded for dedup`);
+        }
+        // 2. Console rows (any state, including failed — don't re-add them;
+        //    the user can requeue from the Console UI instead of re-importing).
+        const conRes = await fetch("/api/console/jobs", { credentials: "include" });
+        if (conRes.ok) {
+          const conData = await conRes.json();
+          const conJobs = conData.jobs || [];
+          for (const j of conJobs) {
+            if (j.url) alreadySeenUrls.add(canonicalize(j.url));
+            if (j.rawUrls) for (const u of j.rawUrls) alreadySeenUrls.add(canonicalize(u));
+          }
+          console.log(`AutoApply Bridge: ${conJobs.length} console rows loaded for dedup`);
+        }
+      } catch (e) {
+        console.warn("AutoApply Bridge: dedup pre-fetch failed (continuing without filter):", e);
+      }
+
+      const filteredJobs = jobs.filter((job) => {
+        const url = job.jobUrl || job.url;
+        if (!url) return false;
+        if (alreadySeenUrls.has(canonicalize(url))) {
+          console.log(`AutoApply Bridge: skipping already-seen URL: ${url}`);
+          return false;
+        }
+        return true;
+      });
+      console.log(`AutoApply Bridge: ${jobs.length - filteredJobs.length} jobs skipped (already in pipeline/submitted), ${filteredJobs.length} new to import`);
+      // ────────────────────────────────────────────────────────────────────────
+
       let posted = 0;
       let failed = 0;
-      for (const job of jobs) {
+      for (const job of filteredJobs) {
         const url = job.jobUrl || job.url;
         if (!url) {
           console.warn("AutoApply Bridge: skipping job with no URL", job);
@@ -84,7 +134,7 @@
           console.warn(`AutoApply Bridge: POST /api/console/jobs errored for ${url}:`, e);
         }
       }
-      console.log(`AutoApply Bridge: imported ${posted}/${jobs.length} jobs to /api/console/jobs (${failed} failed)`);
+      console.log(`AutoApply Bridge: imported ${posted}/${filteredJobs.length} jobs to /api/console/jobs (${failed} failed)`);
     } else {
       // Legacy path: dispatch the event bus the /pipeline + /dashboard
       // pages still listen for. Kept until those pages are retired.
