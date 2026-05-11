@@ -17,6 +17,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getConsoleJob, saveConsoleJob } from "@/lib/console";
 import { getBudgetStatus } from "@/lib/budget";
+import { computeProfileCompleteness } from "@/app/api/user/profile/completeness/route";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -36,8 +37,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "jobIds (non-empty array of strings) is required" }, { status: 400 });
   }
 
-  // Refuse to enqueue if user is at/over their monthly cap. Better to
-  // catch here than to spawn a worker that burns createAccount + OTP
+  // Gate 1: profile completeness. Incomplete profiles cause the worker
+  // to bail at the first wizard step with cryptic "errors=N" messages.
+  // Fail fast at the source. 90% threshold (see computeProfileCompleteness
+  // for the rationale). HTTP 412 (Precondition Failed) is the right status
+  // — a precondition for queueing (the user's profile state) isn't met.
+  const completeness = await computeProfileCompleteness(email);
+  if (!completeness.meetsGate) {
+    return NextResponse.json(
+      {
+        error: `Profile only ${completeness.percent}% complete — reach 90% to queue applications. Missing: ${completeness.missing.map((m) => m.label).join(", ")}.`,
+        cause: "incomplete_profile",
+        completeness,
+      },
+      { status: 412 }
+    );
+  }
+
+  // Gate 2: refuse to enqueue if user is at/over their monthly cap. Better
+  // to catch here than to spawn a worker that burns createAccount + OTP
   // cycles only to bounce off the budget check at tailor-time.
   const budget = await getBudgetStatus(email);
   if (budget.isOver) {
