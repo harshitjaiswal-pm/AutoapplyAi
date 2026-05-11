@@ -352,42 +352,12 @@ async function generateDocx(resume: any) {
               ]
             : []),
 
-          // Core Strengths — flatten the categorized skills object into a
-          // single pipe-separated line (matches reference resume formatting).
-          // The LLM still outputs categorized skills; we just render them flat
-          // so the visual emphasis stays on the strengths themselves rather
-          // than the category labels (which often feel like AI scaffolding).
-          ...((() => {
-            const skillEntries = normalizeSkills(resume.skills);
-            if (skillEntries.length === 0) return [];
-            const allSkills = skillEntries
-              .flatMap((entry) => entry.items)
-              .map((s) => String(s).trim())
-              .filter((s) => s.length > 0);
-            // Dedupe (case-insensitive) while preserving first-appearance order.
-            const seen = new Set<string>();
-            const flat = allSkills.filter((s) => {
-              const k = s.toLowerCase();
-              if (seen.has(k)) return false;
-              seen.add(k);
-              return true;
-            });
-            if (flat.length === 0) return [];
-            return [
-              sectionHeading("Core Strengths"),
-              new Paragraph({
-                spacing: { after: 40 },
-                alignment: AlignmentType.JUSTIFIED,
-                children: [
-                  new TextRun({
-                    text: flat.join("  |  "),
-                    font: "Arial",
-                    size: 20,
-                  }),
-                ],
-              }),
-            ];
-          })()),
+          // Core Strengths was previously rendered between Summary and
+          // Experience. Moved to the BOTTOM of the resume (after
+          // Certifications) per user feedback 2026-05-11. The keyword line
+          // is for ATS matching and recruiter quick-scan, not for the
+          // hiring manager's first-page eye path — Experience deserves
+          // that real estate. See the actual render block below.
 
           // Experience
           ...(experienceChildren.length
@@ -448,6 +418,42 @@ async function generateDocx(resume: any) {
                 }),
               ]
             : []),
+
+          // Core Strengths — pipe-separated keyword line. Lives at the
+          // BOTTOM of the resume (after Certifications) per user feedback
+          // 2026-05-11. ATS keyword density + recruiter glance fodder;
+          // doesn't compete with Experience for the hiring manager's
+          // first-page attention.
+          ...((() => {
+            const skillEntries = normalizeSkills(resume.skills);
+            if (skillEntries.length === 0) return [];
+            const allSkills = skillEntries
+              .flatMap((entry) => entry.items)
+              .map((s) => String(s).trim())
+              .filter((s) => s.length > 0);
+            const seen = new Set<string>();
+            const flat = allSkills.filter((s) => {
+              const k = s.toLowerCase();
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            if (flat.length === 0) return [];
+            return [
+              sectionHeading("Core Strengths"),
+              new Paragraph({
+                spacing: { after: 40 },
+                alignment: AlignmentType.JUSTIFIED,
+                children: [
+                  new TextRun({
+                    text: flat.join("  |  "),
+                    font: "Arial",
+                    size: 20,
+                  }),
+                ],
+              }),
+            ];
+          })()),
         ],
       },
     ],
@@ -572,15 +578,10 @@ async function generatePdf(resume: any) {
     y += 4;
   }
 
-  // Skills — normalize all AI output shapes, then render
+  // Skills used to render here (between Summary and Experience).
+  // Moved to the bottom of the PDF (after Education) per user feedback
+  // 2026-05-11 — see the render block below the Education section.
   const pdfSkillEntries = normalizeSkills(resume.skills);
-  if (pdfSkillEntries.length > 0) {
-    heading("Skills");
-    for (const entry of pdfSkillEntries) {
-      wrappedText(sanitizeForPdf(`${entry.category}: ${entry.items.join(", ")}`), 10);
-    }
-    y += 4;
-  }
 
   // Experience
   if (resume.experience?.length) {
@@ -681,6 +682,27 @@ async function generatePdf(resume: any) {
         doc.text(`Tech: ${proj.technologies.filter(Boolean).join(", ")}`, margin, y);
         y += 12;
       }
+      y += 4;
+    }
+  }
+
+  // Core Strengths — pipe-separated keyword line at the BOTTOM of the
+  // PDF (after Education / Projects-omitted) per user feedback 2026-05-11.
+  if (pdfSkillEntries.length > 0) {
+    const allSkills = pdfSkillEntries
+      .flatMap((entry) => entry.items)
+      .map((s) => String(s).trim())
+      .filter((s) => s.length > 0);
+    const seen = new Set<string>();
+    const flat = allSkills.filter((s) => {
+      const k = s.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    if (flat.length > 0) {
+      heading("Core Strengths");
+      wrappedText(sanitizeForPdf(flat.join("  |  ")), 10);
       y += 4;
     }
   }
