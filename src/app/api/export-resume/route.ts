@@ -212,30 +212,14 @@ async function generateDocx(resume: any) {
     );
   }
 
-  // Build projects paragraphs
+  // Projects section intentionally OMITTED. User decision 2026-05-11: the
+  // tailored resume should focus on role-level experience, skills, and
+  // certifications — a separate Projects section reads as filler when the
+  // candidate already has 8+ years in relevant roles. Project-worthy work
+  // is surfaced as bullets under the role where it happened (see RESUME_
+  // TAILOR_SYSTEM rule 18). If older saved resumes still have a projects
+  // array, we silently skip rendering it rather than breaking on bad data.
   const projectChildren: Paragraph[] = [];
-  for (const proj of resume.projects || []) {
-    projectChildren.push(
-      new Paragraph({
-        spacing: { before: 80, after: 40 },
-        children: [
-          new TextRun({ text: proj.name, bold: true, font: "Arial", size: 20 }),
-          new TextRun({ text: ` — ${proj.description}`, font: "Arial", size: 20 }),
-        ],
-      })
-    );
-    if (proj.technologies?.length) {
-      projectChildren.push(
-        new Paragraph({
-          spacing: { after: 40 },
-          children: [
-            new TextRun({ text: "Technologies: ", bold: true, font: "Arial", size: 18, color: GRAY }),
-            new TextRun({ text: proj.technologies.join(", "), font: "Arial", size: 18, color: GRAY }),
-          ],
-        })
-      );
-    }
-  }
 
   function sectionHeading(text: string) {
     return new Paragraph({
@@ -415,7 +399,9 @@ async function generateDocx(resume: any) {
             ? [sectionHeading("Education"), ...educationChildren]
             : []),
 
-          // Projects
+          // Projects section omitted by design (2026-05-11). Keeping
+          // the placeholder spread so the section ordering stays stable
+          // and a future re-enable is a one-line change.
           ...(projectChildren.length
             ? [sectionHeading("Projects"), ...projectChildren]
             : []),
@@ -671,8 +657,10 @@ async function generatePdf(resume: any) {
     }
   }
 
-  // Projects
-  if (resume.projects?.length) {
+  // Projects section omitted by design (2026-05-11) — see comment in the
+  // docx path above. Tailoring prompt no longer emits a projects array;
+  // legacy resumes that still have one render nothing.
+  if (false && resume.projects?.length) {
     heading("Projects");
     for (const proj of resume.projects) {
       if (!proj) continue;
