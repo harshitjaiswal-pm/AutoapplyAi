@@ -139,9 +139,13 @@ export default function ConsolePage() {
           .filter((j) => j.state === "captured")
           .sort((a, b) => (b.matchScore ?? -1) - (a.matchScore ?? -1));
       case "pipeline":
-        return jobs.filter((j) =>
-          j.state === "queued" || j.state === "running" || j.state === "failed" || j.state === "submitted"
-        );
+        // Pipeline = ACTIVE work only. Finished jobs (failed or submitted)
+        // belong on the Submissions page where the user can dive into the
+        // detail page, see the tailored resume + credentials, and either
+        // manually drive them or retry. Showing them here previously
+        // turned Pipeline into a graveyard of failed rows the user
+        // couldn't act on usefully. Changed 2026-05-11.
+        return jobs.filter((j) => j.state === "queued" || j.state === "running");
       case "archived":
         return jobs.filter((j) => j.state === "archived");
       default:
@@ -155,7 +159,9 @@ export default function ConsolePage() {
     for (const j of jobs) {
       if (j.state === "captured") c.captured++;
       else if (j.state === "archived") c.archived++;
-      else c.pipeline++;
+      else if (j.state === "queued" || j.state === "running") c.pipeline++;
+      // failed + submitted no longer count toward Pipeline — they live
+      // on /applications (Submissions page) post 2026-05-11 refactor.
     }
     return c;
   }, [jobs]);
@@ -568,7 +574,19 @@ function EmptyState({ tab }: { tab: Tab }) {
     <div className="border border-dashed border-neutral-200 rounded-lg p-12 text-center">
       <p className="text-sm text-neutral-500">
         {tab === "captured" && "No captured jobs yet. Paste a URL above, or send jobs from the Chrome extension."}
-        {tab === "pipeline" && "Nothing in flight or queued. Apply to a captured job to start."}
+        {tab === "pipeline" && (
+          <>
+            Nothing in flight. Apply to a captured job to start.
+            <br />
+            <span className="text-[12px] text-neutral-400">
+              Finished jobs (submitted + failed) live on the{" "}
+              <a href="/applications" className="text-indigo-600 hover:underline">
+                Submissions page
+              </a>
+              .
+            </span>
+          </>
+        )}
         {tab === "archived" && "No archived jobs."}
       </p>
     </div>
